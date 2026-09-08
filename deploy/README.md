@@ -101,8 +101,10 @@ now made in two repositories with no test spanning them; each side names the
 other in a comment. **Do not change either alone** (archiver#193 R5).
 
 > The cap moved from `redis-server.dropin.conf` to `redis.conf.broker` in
-> Phase 5. Archiver's half of the seam still names the old path until it is
-> updated - the decision is unchanged, only the filename moved.
+> Phase 5. Archiver's half of the seam still names the old path until
+> CannObserv/archiver#196 lands - the decision is unchanged, only the filename
+> moved. A broken pointer is what this mechanism is *for*: there is no test
+> spanning the two repos, so the pair of comments is the whole seam.
 
 **The cap changes the failure mode for every producer, not just archiver's.**
 Once it is reached, `XADD` is refused instance-wide - Watcher's `content.fetch`

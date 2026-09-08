@@ -44,7 +44,8 @@ The split is not clean, and the seam is worth knowing:
 ## The `OOM` seam, in both directions
 
 `deploy/redis.conf.broker` sets `maxmemory-policy noeviction` with an
-explicit cap. That converts memory pressure into bounded, instance-wide
+explicit cap (CannObserv/archiver#196 repoints archiver's half at the new
+filename). That converts memory pressure into bounded, instance-wide
 `OOM command not allowed` errors instead of a kernel OOM-kill of the whole
 broker. It is only safe because archiver's outbox publisher classifies that
 error as **transient** and retries through it, rather than dead-lettering valid

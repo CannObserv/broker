@@ -58,7 +58,7 @@ silently corrupts values.
   archiver's `_TRANSIENT_PUBLISH_ERRORS` are one decision. Each names the other.
   Do not change either alone (archiver#193 R5). The cap moved out of
   `deploy/redis-server.dropin.conf` in Phase 5, so **archiver's half still
-  points at the old path** until it is updated - broker#1 follow-up.
+  points at the old path** until it is updated - CannObserv/archiver#196.
 - **Mirrored constants.** The three retention caps in `src/broker/bus_health.py`
   are copies of numbers owned elsewhere, each with its source named. Group
   names are **derived** via co-core's `group_name()`, never spelled - that is
