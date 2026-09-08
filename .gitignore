@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.pytest_cache/
+.ruff_cache/
+.coverage
+*.egg-info/
+
+# cannobserv package index mirror - populated by scripts/sync_wheelhouse.py.
+# Track an empty .gitkeep so the `[tool.uv] find-links` dir always exists at
+# checkout: uv reads that config on *every* invocation and errors if the dir is
+# missing (before the sync that would create it can run).
+# NB: `.wheelhouse/*`, not `.wheelhouse/` - git cannot re-include a file whose
+# parent directory is excluded, so a directory-level ignore makes the negation
+# below a no-op and leaves .gitkeep untracked (CannObserv/archiver#116).
+.wheelhouse/*
+!.wheelhouse/.gitkeep

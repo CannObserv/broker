@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic broker bus health probe (CannObserv/broker#1)
+
+[Timer]
+# 10-minute cadence: the two-tick XPENDING rule then detects a wedged consumer
+# within 20 minutes. This is the cluster's only always-on broker-side signal -
+# every in-process alternative stops reporting when the process it rides is the
+# thing that is down.
+OnBootSec=2min
+OnUnitActiveSec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,38 @@
+[Unit]
+Description=Broker bus health probe - memory, streams, groups, DLQs, disk; WARN-only (CannObserv/broker#1)
+# Deliberately NOT bound to redis-server.service: the probe exists precisely to
+# report while the broker is down. An unreachable broker is a finding it logs,
+# never a dependency failure.
+After=network.target
+
+[Service]
+Type=oneshot
+User=exedev
+WorkingDirectory=/home/exedev/broker
+
+# BROKER_REDIS_URL and GOOGLE_APPLICATION_CREDENTIALS (for the wheelhouse the
+# ExecStart's `uv run` resolves against).
+EnvironmentFile=/etc/broker/.env
+EnvironmentFile=-/home/exedev/broker/.env
+
+# This probe holds NO database credential. The outbox half of the old combined
+# probe stayed in archiver with the table it queries (archiver#193 D6), and with
+# it the ARCHIVER_ALLOW_PRODUCTION_DB opt-in that unit needs. Nothing here has a
+# reason to reach a service's database, so nothing here can.
+
+# XPENDING is read-only group introspection; this process must never join a
+# consumer group. It has no group-membership code path at all - the probe
+# imports no consumer - but stating it here keeps the rule with the unit.
+
+# Carries the two-tick XPENDING state between oneshot runs
+# (/var/lib/broker-bus-health, owned by User= automatically).
+StateDirectory=broker-bus-health
+
+# Hard backstop under systemd's 90s default. src/broker/bus_health.py bounds
+# each Redis call (5s connect / 10s read), but ~25 calls per tick could in
+# theory accumulate past the default against a uniformly slow broker. A healthy
+# tick takes well under a second; one that cannot finish in 60s has nothing
+# useful left to report, and being visibly killed beats hanging the unit.
+TimeoutStartSec=60
+
+ExecStart=/usr/local/bin/uv run python -m src.broker.bus_health --state-file ${STATE_DIRECTORY}/state.json
