@@ -9,7 +9,8 @@ imported by any service; the services reach the broker over the network, by URL.
 
 | Path | What it is |
 |---|---|
-| [`deploy/redis-server.dropin.conf`](deploy/redis-server.dropin.conf) | The tracked statement of the broker's tuning - AOF persistence, `noeviction`, an explicit `maxmemory` cap. **Not the mechanism on the node today**: those settings live in `/etc/redis/redis.conf` and the drop-in slot holds tailnet ordering. Reconciled in broker#1 Phase 5 - see [`deploy/README.md`](deploy/README.md) |
+| [`deploy/redis.conf.broker`](deploy/redis.conf.broker) | The broker's tuning as deployed - bind, auth, AOF persistence, `noeviction`, an explicit `maxmemory` cap. Appended to `/etc/redis/redis.conf`, with the credential templated |
+| [`deploy/redis-server.service.d/broker.conf`](deploy/redis-server.service.d/broker.conf) + [`deploy/wait-for-tailnet-addr.sh`](deploy/wait-for-tailnet-addr.sh) | Unit ordering only: `After=tailscaled` plus the `/proc/net/fib_trie` wait that R1's boot race exists for |
 | [`deploy/broker-bus-health.service`](deploy/broker-bus-health.service) / [`.timer`](deploy/broker-bus-health.timer) | The periodic WARN-only health probe, every 10 minutes |
 | [`src/broker/bus_health.py`](src/broker/bus_health.py) | The probe: memory headroom, per-stream `XLEN` against retention caps, last-entry age on groupless streams, `XPENDING`, DLQ depth, disk |
 | [`docs/STREAMS.md`](docs/STREAMS.md) | The cluster stream inventory - who produces, who consumes, which health primitive applies, and who drains each DLQ |
@@ -22,7 +23,7 @@ Every file here moved out of **CannObserv/archiver** under
 
 Archiver operated the broker from the same VM it ran on (archiver#109). Once
 the broker moved to a neutral node, two of these artifacts began measuring the
-wrong machine: the drop-in's parity test asserted a path under
+wrong machine: the config parity test asserted a path under
 `/etc/systemd/system/` on *archiver's* host, and the probe's disk check - which
 exists for **AOF headroom** - reported archiver's disk. Splitting the repo is
 what makes them true again.
@@ -42,7 +43,7 @@ The split is not clean, and the seam is worth knowing:
 
 ## The `OOM` seam, in both directions
 
-`deploy/redis-server.dropin.conf` sets `maxmemory-policy noeviction` with an
+`deploy/redis.conf.broker` sets `maxmemory-policy noeviction` with an
 explicit cap. That converts memory pressure into bounded, instance-wide
 `OOM command not allowed` errors instead of a kernel OOM-kill of the whole
 broker. It is only safe because archiver's outbox publisher classifies that

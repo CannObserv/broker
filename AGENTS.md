@@ -54,9 +54,11 @@ silently corrupts values.
   are pinned by `tests/deploy/test_bus_health_units.py`. `XPENDING` is
   read-only introspection; joining a group would silently swallow another
   service's messages.
-- **The `OOM` seam spans two repos.** `deploy/redis-server.dropin.conf`'s cap
-  and archiver's `_TRANSIENT_PUBLISH_ERRORS` are one decision. Each names the
-  other. Do not change either alone (archiver#193 R5).
+- **The `OOM` seam spans two repos.** `deploy/redis.conf.broker`'s cap and
+  archiver's `_TRANSIENT_PUBLISH_ERRORS` are one decision. Each names the other.
+  Do not change either alone (archiver#193 R5). The cap moved out of
+  `deploy/redis-server.dropin.conf` in Phase 5, so **archiver's half still
+  points at the old path** until it is updated - broker#1 follow-up.
 - **Mirrored constants.** The three retention caps in `src/broker/bus_health.py`
   are copies of numbers owned elsewhere, each with its source named. Group
   names are **derived** via co-core's `group_name()`, never spelled - that is
@@ -78,7 +80,8 @@ Types: feat, fix, refactor, docs, test, chore.
 ## Layout
 
 ```
-deploy/          redis-server drop-in + the bus-health units; see deploy/README.md
+deploy/          the three artifacts the node deploys + the bus-health units;
+                 see deploy/README.md
 docs/STREAMS.md  the cluster stream inventory - who produces, consumes, drains
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project)
 src/broker/      bus_health.py (the probe), logging.py (service-local, not a mirror)

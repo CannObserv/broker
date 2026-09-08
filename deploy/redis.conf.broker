@@ -1,0 +1,73 @@
+# The broker's Redis tuning, as deployed (CannObserv/broker#1 D3/D5/D6).
+#
+# INSTALL: appended verbatim to /etc/redis/redis.conf on the broker node, with
+# __REQUIREPASS__ replaced by the value in /etc/redis/broker-password. Redis
+# takes the LAST occurrence of a directive, so this block wins over everything
+# the packaged file sets above it, which keeps the diff against the packaged
+# file to a single appended, clearly delimited section.
+#
+# WHY HERE AND NOT IN A DROP-IN. broker#1 Phase 1 step 1 left the choice open
+# ("keep layering on Debian's package unit or own the whole thing"), this repo
+# arrived from archiver carrying a drop-in that overrode ExecStart, and Phase 2
+# had already answered it the other way on the node. Phase 5 settles it here:
+# requirepass CANNOT move to a drop-in, because a drop-in states its settings as
+# ExecStart arguments and that puts the password in argv, visible in `ps` and in
+# journald. The secret has to live in redis.conf regardless, so splitting the
+# rest of the tuning across two mechanisms buys nothing and costs a second place
+# to look. The drop-in slot is used for the one thing a config file cannot
+# express - unit ordering - and nothing else; see redis-server.service.d/.
+#
+# THE SECRET IS TEMPLATED, and `test_tracked_config_carries_no_secret` keeps it
+# that way. The live-config parity test compares every directive below against
+# `CONFIG GET` on the running broker, skipping this one line.
+#
+# SIZING NOTE for the cap below, carried from the drop-in this file replaced:
+# ~780 bytes/entry on info.changes, so its 100k-entry
+# ARCHIVER_REDIS_STREAM_MAXLEN default is ~78MB. The value below leaves roughly
+# 6x headroom for the other streams while staying far under this node's RAM. It
+# is a ceiling, not a reservation; raise it if the inventory in
+# ../docs/STREAMS.md grows.
+
+################################ CannObserv/broker#1 ##########################
+# Everything above this line is the stock Debian/Ubuntu redis.conf, untouched.
+# Redis takes the LAST occurrence of a directive, so this block wins without
+# needing to edit anything above it - which keeps the diff against the packaged
+# file to a single appended, clearly delimited section.
+
+# Loopback stays in the bind list deliberately. It is not remotely reachable,
+# and it keeps local redis-cli working. notifier#43 lost an afternoon to a
+# tailnet-only bind where both 127.0.0.1 and the short hostname failed; there is
+# no reason to inherit that trap on a box whose entire job is to be administered.
+# The tailnet address is why redis-server.service.d/broker.conf orders after
+# tailscaled and waits for the address (broker#1 R1 / observo#473).
+bind 127.0.0.1 100.97.91.19
+protected-mode yes
+
+# D3. requirepass is the floor, not the destination: per-service ACL users are
+# what actually scope watcher/archiver/replicator to their own streams, and are
+# the only mechanism that can enforce archiver's content.blobs boundary rather
+# than merely documenting it. Tracked as remaining D3 work.
+requirepass __REQUIREPASS__
+
+# D5. AOF so stream entries and consumer-group state survive a restart.
+appendonly yes
+appendfsync everysec
+
+# D6, carried verbatim from archiver#128 because it is easy to lose in a move:
+# noeviction WITHOUT a cap is inert. With the default maxmemory 0 there is no
+# ceiling to refuse writes at, so an untrimmed stream grows until the kernel
+# OOM-killer takes redis-server, costing the broker plus an AOF-replay restart.
+# The cap restores the intended failure mode: bounded, instance-wide
+# "OOM command not allowed" errors that a producer can retry through. Archiver's
+# outbox does - that error is classified TRANSIENT in _TRANSIENT_PUBLISH_ERRORS
+# in archiver's src/core/changes/publisher.py, and THE TWO MUST STAY IN STEP.
+# Watcher's and replicator's behaviour under OOM is unverified (broker#1 R5).
+#
+# D5 says re-derive rather than inherit. 512mb was chosen for a broker sharing a
+# 7.2Gi host with Postgres and four services. This host has 1.9Gi and runs
+# nothing else; live usage on the source broker is 20.68MB. 512mb is ~27% of
+# RAM, leaving room for the fork and copy-on-write of an AOF rewrite, and is
+# still ~25x current usage. Same number, arrived at independently.
+maxmemory 512mb
+maxmemory-policy noeviction
+###############################################################################

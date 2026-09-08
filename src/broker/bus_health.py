@@ -4,7 +4,7 @@ Moved here from CannObserv/archiver (`src/core/bus_health.py`, archiver#130)
 by CannObserv/archiver#193 D6. The reason for the move is the reason this file
 reads the way it does: **every check below measures the broker's host**, and
 archiver stopped being that host. Its disk check is about AOF headroom, its
-memory check about the `noeviction` cap this repo's drop-in sets, and its
+memory check about the `noeviction` cap this repo's redis.conf sets, and its
 `XLEN` thresholds about retention mechanisms that live on this node. Run from
 a client, all three silently measured the wrong machine.
 
