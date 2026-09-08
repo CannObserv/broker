@@ -9,7 +9,7 @@ imported by any service; the services reach the broker over the network, by URL.
 
 | Path | What it is |
 |---|---|
-| [`deploy/redis-server.dropin.conf`](deploy/redis-server.dropin.conf) | Systemd drop-in that tunes the stock `redis-server.service`: AOF persistence, `noeviction`, and an explicit `maxmemory` cap |
+| [`deploy/redis-server.dropin.conf`](deploy/redis-server.dropin.conf) | The tracked statement of the broker's tuning - AOF persistence, `noeviction`, an explicit `maxmemory` cap. **Not the mechanism on the node today**: those settings live in `/etc/redis/redis.conf` and the drop-in slot holds tailnet ordering. Reconciled in broker#1 Phase 5 - see [`deploy/README.md`](deploy/README.md) |
 | [`deploy/broker-bus-health.service`](deploy/broker-bus-health.service) / [`.timer`](deploy/broker-bus-health.timer) | The periodic WARN-only health probe, every 10 minutes |
 | [`src/broker/bus_health.py`](src/broker/bus_health.py) | The probe: memory headroom, per-stream `XLEN` against retention caps, last-entry age on groupless streams, `XPENDING`, DLQ depth, disk |
 | [`docs/STREAMS.md`](docs/STREAMS.md) | The cluster stream inventory - who produces, who consumes, which health primitive applies, and who drains each DLQ |

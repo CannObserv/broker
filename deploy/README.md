@@ -4,7 +4,7 @@ Systemd artifacts for the broker VM.
 
 | Unit / file | Type | Purpose |
 |---|---|---|
-| `redis-server.dropin.conf` | service drop-in | Tuning for the stock `redis-server.service`: AOF `everysec`, `maxmemory-policy noeviction`, and an explicit `--maxmemory` cap. Installs as `broker.conf`; layers on the package unit rather than replacing it |
+| `redis-server.dropin.conf` | service drop-in (**not currently installed**) | The tracked statement of the broker's tuning: AOF `everysec`, `maxmemory-policy noeviction`, explicit `--maxmemory`. Those settings are in force on the node, but from `/etc/redis/redis.conf`, not from here - see *Not reconciled* below |
 | `broker-bus-health.service` | service (oneshot) | One WARN-only health tick: memory, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth, disk. Never blocks anything |
 | `broker-bus-health.timer` | timer | Runs the probe every 10 min. Enable with `systemctl enable --now broker-bus-health.timer` |
 
@@ -12,48 +12,59 @@ Both parity tests (`tests/deploy/`) compare the repo copy against
 `/etc/systemd/system/` and **skip** when the file is absent, so CI and dev
 clones pass and only a host actually running the broker is asserted on.
 
-## Install
+## Not reconciled with the node yet (broker#1 Phase 5)
+
+`redis-server.dropin.conf` arrived from archiver, where a drop-in was the only
+mechanism tuning the broker. **On this node it is not the mechanism.** Phase 2
+appended the four settings straight to `/etc/redis/redis.conf` and gave the
+drop-in slot to something else:
+
+| Concern | Where it actually lives |
+|---|---|
+| `bind`, `requirepass`, `appendonly`, `appendfsync`, `maxmemory`, `maxmemory-policy` | appended to `/etc/redis/redis.conf` |
+| `After=tailscaled.service` + the `/proc/net/fib_trie` wait (R1's boot race) | `/etc/systemd/system/redis-server.service.d/broker.conf` |
+
+So **`broker.conf` is taken, by a different file.** Installing this repo's
+drop-in under that name would delete the tailnet ordering and re-open the race
+observo#473 cost two weeks. Phase 1 step 1 posed the choice - "keep layering on
+Debian's package unit or own the whole thing on a dedicated host" - and Phase 2
+answered it in practice without the repo following. Phase 5 settles it and
+brings the two into line; until then `tests/deploy/` asserts only the invariant
+that survives either answer (the cap is explicit and non-zero) and skips the
+installed-copy comparison.
+
+## Install (the health timer)
 
 ```bash
-sudo mkdir -p /etc/systemd/system/redis-server.service.d
-sudo cp deploy/redis-server.dropin.conf \
-    /etc/systemd/system/redis-server.service.d/broker.conf
 sudo cp deploy/broker-bus-health.service deploy/broker-bus-health.timer \
     /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl restart redis-server
 sudo systemctl enable --now broker-bus-health.timer
 
-# verify the tuning took:
-redis-cli CONFIG GET appendonly        # -> yes
-redis-cli CONFIG GET maxmemory-policy  # -> noeviction
-redis-cli CONFIG GET maxmemory         # -> must NOT be 0
+# verify the tuning is in force, whatever supplies it:
+redis-cli -u "$BROKER_REDIS_URL" CONFIG GET appendonly        # -> yes
+redis-cli -u "$BROKER_REDIS_URL" CONFIG GET maxmemory-policy  # -> noeviction
+redis-cli -u "$BROKER_REDIS_URL" CONFIG GET maxmemory         # -> must NOT be 0
 ```
-
-The install filename is `broker.conf`. Archiver's copy installed as
-`archiver.conf` on the shared VM; a node still carrying that name is a node that
-was never cut over (archiver#193 D6).
 
 ## Changing the cap
 
-Prefer applying it live - no restart, no dropped client connections - and let
-the unit supply it from the next restart onward:
+Prefer applying it live - no restart, no dropped client connections - then
+persist it wherever the node currently keeps it (today: `/etc/redis/redis.conf`;
+see *Not reconciled* above), and keep this repo's tracked statement in step:
 
 ```bash
-# edit ExecStart in deploy/redis-server.dropin.conf, then:
-sudo cp deploy/redis-server.dropin.conf \
-    /etc/systemd/system/redis-server.service.d/broker.conf
-sudo systemctl daemon-reload
-redis-cli CONFIG SET maxmemory <value from ExecStart>   # applies now, no restart
+redis-cli -u "$BROKER_REDIS_URL" CONFIG SET maxmemory <value>   # applies now
+sudo sed -i 's/^maxmemory .*/maxmemory <value>/' /etc/redis/redis.conf
+# then edit ExecStart in deploy/redis-server.dropin.conf to match
 ```
 
-Pass the value **exactly as `ExecStart` spells it** - `CONFIG SET` accepts the
-same unit suffixes, so there is no byte conversion to get wrong and no second
-copy of the number to drift.
+Pass the value **exactly as the config file spells it** - `CONFIG SET` accepts
+the same unit suffixes, so there is no byte conversion to get wrong.
 
 `CONFIG SET` is not persisted (no `CONFIG REWRITE`), which is what keeps the
-unit authoritative. The flip side is that it can drift the *running* broker from
-the tracked file in either direction, and the file-parity test cannot see that.
+tracked file authoritative. The flip side is that it can drift the *running* broker from the tracked file
+in either direction, and no file-parity test can see that.
 Two live-value checks cover the gap from opposite sides: each participant's
 `check_redis_floor.sh` reads `maxmemory` at its own service start (warn-only),
 and this repo's bus-health probe reports `maxmemory 0` as a finding every tick.
