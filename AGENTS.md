@@ -38,9 +38,18 @@ silently corrupts values.
 
 ## Rules
 
-- **Never `content.blobs` beyond its DLQ.** The role boundary archiver carries
-  came across with the inventory: no length or age row for that stream. The
-  `*.dlq` sweep is keyed on the suffix and covers it, which is intended.
+- **No retention opinion on `content.blobs`.** No length or age row for that
+  stream: this repo owns no cap for it, and a threshold with no owner cries
+  wolf. Its group *is* probed - the old unqualified "never `content.blobs`" was
+  archiver's role boundary, and broker#1 Phase 5 retired it on the grounds that
+  a neutral node has no role to be out of bounds of.
+- **DLQs: the broker detects, captures and escalates; the consumer triages.**
+  Splitting the old single "drainer" role is broker#1 Phase 5. Anything
+  mechanical and suffix-keyed belongs here; reading a payload to tell residue
+  from a real failure, and the `XTRIM` after it, belongs to the stream's own
+  consumer (`DLQ_DRAINERS`). Do not add payload semantics to this repo to close
+  that gap - that is the boundary, not an omission. An unclaimed `*.dlq` is
+  reported as unassigned, never skipped.
 - **The probe joins no consumer group and holds no database credential.** Both
   are pinned by `tests/deploy/test_bus_health_units.py`. `XPENDING` is
   read-only introspection; joining a group would silently swallow another

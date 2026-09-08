@@ -29,6 +29,7 @@ from co_core.pure.adapters.bus.streams import (
     INFO_CHANGES,
     INFO_REGISTRY,
     StreamKind,
+    dlq_name,
     stream_kind,
 )
 from fakeredis import aioredis as fakeredis_aio
@@ -173,22 +174,43 @@ def test_pending_message_names_no_specific_stream() -> None:
 # --- inventory ---
 
 
-def test_inventory_never_touches_content_blobs() -> None:
-    """The content.blobs role boundary is unqualified - no read-only exception.
-    The probe list must never grow a length or age row for it; its DLQ is still
-    swept by the `*.dlq` scan, which is keyed on the suffix, not the topic."""
-    assert not any(c.topic == "content.blobs" for c in STREAM_CHECKS)
+def test_content_blobs_carries_no_retention_opinion() -> None:
+    """The surviving half of the content.blobs boundary (CannObserv/broker#1
+    Phase 5).
+
+    The unqualified "never content.blobs" rule was Archiver's *role* boundary
+    and came here verbatim; a neutral node has no role to be out of bounds of,
+    so the group is now probed. What still holds is the part that was never
+    about roles: this repo owns no cap for this stream, so it states no
+    retention opinion on it - no length row, no age row. A regression here
+    would be someone adding one from the LWW or fact cap, neither of which
+    governs this stream.
+    """
+    check = _check_for("content.blobs")
+    assert check.warn_length is None
+    assert check.warn_last_entry_age_seconds is None
+    assert check.pending_group == "watcher.blobs"
 
 
-def test_inventory_covers_the_groups_carried_over_from_archiver() -> None:
-    """Faithful to the pre-move behaviour, deliberately.
+def test_inventory_covers_every_consumer_group_on_the_node() -> None:
+    """Widened from Archiver's two to all five (CannObserv/broker#1 Phase 5).
 
-    Widening the probe to Watcher's and Replicator's groups is a real question
-    on a now-neutral node, and it is CannObserv/broker#1 Phase 5's. Changing
-    the probed set during the move would have made the move unverifiable.
+    The exclusion was inherited from a probe that ran on Archiver's own host,
+    where a downstream service's group lag was plausibly its own alerting
+    problem. On a neutral node it is not: nobody else watches these, and this
+    is the one place that can. Cost is three more XPENDING calls per tick.
+
+    Pinned as an exact set rather than a subset, so a group silently dropped
+    from the inventory fails here instead of going quiet in production.
     """
     groups = {c.pending_group for c in STREAM_CHECKS if c.pending_group}
-    assert groups == {"archiver.revisions", "archiver.artifacts"}
+    assert groups == {
+        "archiver.revisions",
+        "archiver.artifacts",
+        "watcher.blobs",
+        "replicator.fetch",
+        "replicator.replicate",
+    }
 
 
 def test_group_names_are_derived_not_spelled() -> None:
@@ -196,7 +218,17 @@ def test_group_names_are_derived_not_spelled() -> None:
     co-core rather than hardcode strings: a group name is computable from its
     stream name, so the broker needs no agreement with archiver about the
     literal. A regression here would be someone replacing ``group_name`` with a
-    literal, which reads identically until archiver's convention moves."""
+    literal, which reads identically until archiver's convention moves.
+
+    Checked for every probed group, not just Archiver's: the three added in
+    Phase 5 name services this repo has no other contract with, which is
+    exactly where a hand-typed literal would be tempting.
+    """
+    for check in STREAM_CHECKS:
+        if check.pending_group is None:
+            continue
+        service, _, _ = check.pending_group.partition(".")
+        assert check.pending_group == f"{service}.{check.topic.split('.', 1)[1]}"
     assert bus_health.REVISIONS_GROUP == f"archiver.{CONTENT_REVISIONS.split('.', 1)[1]}"
 
 
@@ -310,6 +342,148 @@ async def test_collect_tolerates_a_non_stream_dlq_key(fake_redis) -> None:
 
     assert not any(f.check == "broker" for f in findings)
     assert [f.subject for f in findings if f.check == "dlq"] == ["content.fetch.dlq"]
+
+
+# --- DLQ triage: who owns it, and the evidence that must outlive the entries ---
+#
+# CannObserv/broker#1 Phase 5 split the old single "drainer" role. Detection,
+# evidence capture and escalation are the broker's, because they are mechanical
+# and suffix-keyed; triage and the XTRIM belong to whoever can read the payload,
+# which is the stream's own consumer. These tests pin both halves.
+
+
+def _dlq_finding(findings, subject: str):
+    return next(f for f in findings if f.check == "dlq" and f.subject == subject)
+
+
+def test_every_dlq_drainer_is_derived_from_its_topic() -> None:
+    """The assignment is per-stream data; the *key* is still computed.
+
+    ``dlq_name`` is co-core's, the same helper the writers use, so the mapping
+    cannot drift into naming a queue no service actually writes.
+    """
+    for key in bus_health.DLQ_DRAINERS:
+        topic = key.removesuffix(".dlq")
+        assert dlq_name(topic) == key
+
+
+async def test_dlq_finding_names_its_drainer(fake_redis) -> None:
+    """A finding with no addressee is how content.fetch.dlq reached 110
+    (CannObserv/archiver#162). The journald line is the only artifact anyone
+    sees, so the owner has to be in it."""
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    assert "replicator" in _dlq_finding(findings, "content.fetch.dlq").message
+
+
+async def test_dlq_with_no_named_drainer_falls_to_the_broker(fake_redis) -> None:
+    """The backstop, and the reason the mapping is allowed to be incomplete.
+
+    A ``*.dlq`` key nobody claims is exactly the "DLQ with nobody named"
+    failure, and the broker is the only party that can see one - the per-service
+    ACL users cannot SCAN the instance. So an unknown queue is reported as
+    unassigned rather than skipped.
+    """
+    await fake_redis.xadd("unknown.topic.dlq", {"k": "v"})
+    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    message = _dlq_finding(findings, "unknown.topic.dlq").message
+    assert "no drainer assigned" in message
+    assert "backstop" in message
+
+
+async def test_dlq_evidence_is_captured_before_anyone_can_trim(fake_redis, tmp_path) -> None:
+    """Audit, back up, trim, verify - in that order, because reversing it
+    destroys the evidence the trim needed justifying with. That first step is
+    the one an operator has to remember; here it happens on the tick that first
+    sees the depth."""
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"}, id="5-0")
+    findings, _ = await collect_broker_findings(
+        fake_redis, previous_pending={}, evidence_dir=tmp_path
+    )
+
+    captured = sorted((tmp_path / "content.fetch.dlq").iterdir())
+    assert [p.name for p in captured] == ["5-0.json"]
+    assert json.loads(captured[0].read_text()) == [{"id": "5-0", "fields": {"k": "v"}}]
+    assert str(captured[0]) in _dlq_finding(findings, "content.fetch.dlq").message
+
+
+async def test_dlq_evidence_is_not_recaptured_while_the_queue_is_unchanged(
+    fake_redis, tmp_path
+) -> None:
+    """A DLQ rests non-empty for as long as triage takes. Re-dumping the same
+    entries every ten minutes would bury the one dump that matters."""
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"}, id="5-0")
+    for _ in range(3):
+        findings, _ = await collect_broker_findings(
+            fake_redis, previous_pending={}, evidence_dir=tmp_path
+        )
+
+    assert [p.name for p in (tmp_path / "content.fetch.dlq").iterdir()] == ["5-0.json"]
+    assert "already captured" in _dlq_finding(findings, "content.fetch.dlq").message
+
+
+async def test_dlq_evidence_capture_is_incremental(fake_redis, tmp_path) -> None:
+    """Growth after a capture is new evidence, and only the new entries are
+    new. Capturing the whole queue again on every growth turns a queue that
+    fills one entry at a time into a quadratic pile of dumps."""
+    await fake_redis.xadd("content.fetch.dlq", {"n": "1"}, id="5-0")
+    await collect_broker_findings(fake_redis, previous_pending={}, evidence_dir=tmp_path)
+    await fake_redis.xadd("content.fetch.dlq", {"n": "2"}, id="6-0")
+    await collect_broker_findings(fake_redis, previous_pending={}, evidence_dir=tmp_path)
+
+    topic_dir = tmp_path / "content.fetch.dlq"
+    assert sorted(p.name for p in topic_dir.iterdir()) == ["5-0.json", "6-0.json"]
+    assert json.loads((topic_dir / "6-0.json").read_text()) == [{"id": "6-0", "fields": {"n": "2"}}]
+
+
+async def test_dlq_evidence_high_water_compares_ids_numerically(fake_redis, tmp_path) -> None:
+    """``"9-0" > "10-0"`` lexicographically while ``9 < 10``.
+
+    Recorded in CannObserv/broker#1 against the watcher#285 rename and it
+    applies here for the same reason: a string comparison would read the
+    9-0 capture as ahead of the queue and silently never capture 10-0 - wrong
+    in exactly the direction that loses evidence.
+    """
+    await fake_redis.xadd("content.fetch.dlq", {"n": "9"}, id="9-0")
+    await collect_broker_findings(fake_redis, previous_pending={}, evidence_dir=tmp_path)
+    await fake_redis.xadd("content.fetch.dlq", {"n": "10"}, id="10-0")
+    await collect_broker_findings(fake_redis, previous_pending={}, evidence_dir=tmp_path)
+
+    assert (tmp_path / "content.fetch.dlq" / "10-0.json").exists()
+
+
+async def test_dlq_evidence_failure_still_reports_the_depth(fake_redis, tmp_path) -> None:
+    """Capture is best-effort; the finding is not. A full disk or a bad
+    StateDirectory must not swallow the one signal that says a DLQ is not at
+    rest, and the operator has to be told the backup did not happen before they
+    reach for XTRIM."""
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory")
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+
+    findings, _ = await collect_broker_findings(
+        fake_redis, previous_pending={}, evidence_dir=blocked
+    )
+
+    message = _dlq_finding(findings, "content.fetch.dlq").message
+    assert "capture FAILED" in message
+    assert not any(f.check == "broker" for f in findings)
+
+
+async def test_run_once_captures_evidence_beside_its_state_file(
+    fake_redis, tmp_path, monkeypatch
+) -> None:
+    """The timer passes only --state-file, so the evidence directory is derived
+    from it and lands inside systemd's StateDirectory rather than somewhere the
+    unit's User= may not own."""
+    monkeypatch.setattr(bus_health.logger, "warning", MagicMock())
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"}, id="5-0")
+
+    await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    assert (tmp_path / bus_health.DLQ_EVIDENCE_DIRNAME / "content.fetch.dlq" / "5-0.json").exists()
 
 
 # --- state file ---

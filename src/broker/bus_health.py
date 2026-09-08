@@ -28,11 +28,13 @@ The checks, per tick:
   that traffic grew. Three different caps apply here - see the constants below.
 - last-entry age via ``XINFO STREAM`` for the permanently-groupless streams,
   which are invisible to any ``XPENDING``-based check.
-- ``XPENDING`` on the consumer groups named in ``STREAM_CHECKS``, warning only
-  on two consecutive non-zero ticks - a healthy steady state is pending 0, and
-  one tick of in-flight delivery is normal.
+- ``XPENDING`` on every consumer group on this node, warning only on two
+  consecutive non-zero ticks - a healthy steady state is pending 0, and one
+  tick of in-flight delivery is normal.
 - ``XLEN > 0`` on every ``*.dlq`` key - resting state is depth 0, and every
-  entry is operator-actionable.
+  entry is operator-actionable. The entries are dumped to local storage on
+  first sight and the finding names the service that owes it triage; see
+  "The DLQ split" below.
 - disk usage on ``/`` - the AOF self-bounds, but the headroom is thinner than
   the memory headroom and nothing else alerts on it.
 
@@ -43,6 +45,20 @@ holds no database credential at all.
 
 Outbox monitoring is therefore archiver's; see `docs/STREAMS.md` for the
 per-stream division of who watches what.
+
+**The DLQ split (CannObserv/broker#1 Phase 5).** "Drainer" used to name one
+role and it was two jobs. Detecting a non-resting queue, preserving its entries
+and naming an addressee is mechanical, keyed on the ``*.dlq`` suffix, and needs
+no idea what a payload means - so it is the broker's, and it is here. Reading
+the payloads to tell residue from a real permanent failure, and the ``XTRIM``
+that follows, needs a model of the messages this repo deliberately does not
+have; that half belongs to the stream's own consumer, per ``DLQ_DRAINERS``.
+
+Evidence capture is the load-bearing half. ``docs/STREAMS.md`` orders the drain
+audit, back up, trim, verify - reversing it destroys what the trim needed
+justifying with - and the back-up is the step an operator under time pressure
+skips. Doing it on the tick that first sees the depth means the evidence exists
+before anyone can reach for ``XTRIM``.
 """
 
 from __future__ import annotations
@@ -60,6 +76,7 @@ from pathlib import Path
 
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
+    CONTENT_BLOBS,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
     CONTENT_REPLICATE,
@@ -67,6 +84,7 @@ from co_core.pure.adapters.bus.streams import (
     INFO_CHANGES,
     INFO_REGISTRY,
     INFO_WATCH_STATUS,
+    dlq_name,
     group_name,
     stream_kind,
 )
@@ -154,6 +172,47 @@ LWW_WARN_LENGTH = with_margin(LWW_PRODUCER_MAXLEN)
 # so this repo needs no agreement with archiver about the literal string.
 REVISIONS_GROUP = group_name(CONTENT_REVISIONS, "archiver")
 ARTIFACTS_GROUP = group_name(CONTENT_ARTIFACTS, "archiver")
+BLOBS_GROUP = group_name(CONTENT_BLOBS, "watcher")
+FETCH_GROUP = group_name(CONTENT_FETCH, "replicator")
+REPLICATE_GROUP = group_name(CONTENT_REPLICATE, "replicator")
+
+
+# --- who owes each DLQ its triage (CannObserv/broker#1 Phase 5) ---
+#
+# The *key* is derived through co-core's ``dlq_name``, the same helper the
+# writers use, so this cannot name a queue nothing writes. The *value* is an
+# assignment and cannot be derived from anything - it is recorded in
+# docs/STREAMS.md, "Who drains a DLQ", and mirrored here so the finding an
+# operator actually reads carries the addressee.
+#
+# The rule behind the values: the drainer is the stream's consumer, because it
+# is the service whose ``dead_letter()`` put the entry there and therefore the
+# only one that can read it. That also costs nothing under D3 - each service
+# already holds ``~<its own topic>.dlq`` in the draft ACL, where Archiver's old
+# cluster-wide role would have needed instance-wide SCAN plus a grant on every
+# other service's queues.
+DLQ_DRAINERS: dict[str, str] = {
+    dlq_name(CONTENT_REVISIONS): "archiver",
+    dlq_name(CONTENT_ARTIFACTS): "archiver",
+    dlq_name(CONTENT_FETCH): "replicator",
+    dlq_name(CONTENT_REPLICATE): "replicator",
+    dlq_name(CONTENT_BLOBS): "watcher",
+    # Prospective: info.changes has no consumer group yet (CannObserv/archiver#155),
+    # so nothing writes this queue. Recorded now because the day it appears is
+    # the day nobody remembers who owns it.
+    dlq_name(INFO_CHANGES): "replicator",
+}
+
+# Deliberately not a KeyError. A `*.dlq` key nobody claims is the "DLQ with
+# nobody named" failure itself, and the broker is the only party that can even
+# see one - the per-service ACL users cannot SCAN the instance. So it is
+# reported as unassigned rather than skipped or fatal.
+DLQ_UNASSIGNED = "no drainer assigned, broker is backstop"
+
+# Lives inside systemd's StateDirectory, derived from --state-file rather than
+# taking a second flag, so it cannot be pointed somewhere the unit's User= does
+# not own.
+DLQ_EVIDENCE_DIRNAME = "dlq-evidence"
 
 
 @dataclass(frozen=True)
@@ -228,7 +287,7 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         warn_length=REGISTRY_WARN_LENGTH,
         warn_last_entry_age_seconds=REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS,
     ),
-    StreamCheck(CONTENT_FETCH, warn_length=FACT_WARN_LENGTH),
+    StreamCheck(CONTENT_FETCH, warn_length=FACT_WARN_LENGTH, pending_group=FETCH_GROUP),
     StreamCheck(
         CONTENT_REVISIONS,
         warn_length=FACT_WARN_LENGTH,
@@ -239,7 +298,12 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         warn_length=FACT_WARN_LENGTH,
         pending_group=ARTIFACTS_GROUP,
     ),
-    StreamCheck(CONTENT_REPLICATE, warn_length=FACT_WARN_LENGTH, never_trimmed=True),
+    StreamCheck(
+        CONTENT_REPLICATE,
+        warn_length=FACT_WARN_LENGTH,
+        never_trimmed=True,
+        pending_group=REPLICATE_GROUP,
+    ),
     StreamCheck(
         CONTENT_FETCH_POLICY,
         warn_length=LWW_WARN_LENGTH,
@@ -250,14 +314,15 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         warn_length=LWW_WARN_LENGTH,
         warn_last_entry_age_seconds=LWW_WARN_LAST_ENTRY_AGE_SECONDS,
     ),
-    # content.blobs carries no length or age row here for the same reason it
-    # carried none in archiver: that role boundary is unqualified. Its DLQ is
-    # still scanned - the DLQ sweep covers every `*.dlq` key on the node.
+    # content.blobs: a group row, and deliberately nothing else.
     #
-    # The two groups above are archiver's. Watcher's and Replicator's groups
-    # are deliberately still absent, unchanged from the pre-move behaviour:
-    # widening the probe to every group on a now-neutral node is a real
-    # question, and it is CannObserv/broker#1 Phase 5's, not this move's.
+    # The old "never content.blobs" rule was Archiver's *role* boundary, and a
+    # neutral node has no role to be out of bounds of - so the group is probed
+    # like every other. What survives the move is the part that was never about
+    # roles: this repo owns no retention cap for this stream, so it states no
+    # opinion on its length or its age. Neither the fact cap nor the LWW cap
+    # governs it, and inventing one here would be a threshold with no owner.
+    StreamCheck(CONTENT_BLOBS, pending_group=BLOBS_GROUP),
 )
 
 
@@ -359,9 +424,79 @@ def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int)
 # --- collectors ---
 
 
+def _decode(value: str | bytes) -> str:
+    return value.decode(errors="replace") if isinstance(value, bytes) else str(value)
+
+
 def _entry_ms(entry_id: str | bytes) -> int:
-    raw = entry_id.decode() if isinstance(entry_id, bytes) else entry_id
-    return int(raw.split("-", 1)[0])
+    return int(_decode(entry_id).split("-", 1)[0])
+
+
+def _id_sort_key(entry_id: str | bytes) -> tuple[int, int]:
+    """Order a stream id the way Redis does, as ``(ms, seq)``.
+
+    Never compare these as strings: ``"9-0" > "10-0"`` lexicographically while
+    ``9 < 10``. CannObserv/broker#1 recorded that against the watcher#285 group
+    rename and it bites the same way here - a string comparison reads a 9-0
+    capture as ahead of the queue and then never captures 10-0, which is wrong
+    in exactly the direction that loses evidence.
+    """
+    ms, _, seq = _decode(entry_id).partition("-")
+    return int(ms), int(seq or 0)
+
+
+def _evidence_high_water(topic_dir: Path) -> tuple[int, int] | None:
+    """The newest id already captured for this queue, read back from the dump
+    filenames rather than from the state file.
+
+    Keeping the high-water mark in the same directory as the evidence means the
+    two cannot disagree: deleting a dump after triage correctly re-arms capture
+    for those ids, and a state file restored without its dumps cannot claim a
+    backup that is not there.
+    """
+    ids = []
+    for path in topic_dir.glob("*.json"):
+        try:
+            ids.append(_id_sort_key(path.stem))
+        except ValueError:
+            continue  # not one of ours; a stray file must not disarm capture
+    return max(ids, default=None)
+
+
+async def _capture_dlq_evidence(client: Redis, topic: str, evidence_dir: Path) -> str:
+    """Dump the not-yet-captured entries of a non-resting DLQ, and describe what
+    happened in a clause the finding can carry.
+
+    Incremental by id: a queue that fills one entry at a time would otherwise
+    re-dump its whole contents on every tick that saw growth. Best-effort by
+    design - the Redis read is left outside the guard so a genuinely unreachable
+    broker still reports as one, while a filesystem failure degrades to a loud
+    clause instead of taking the tick's only depth signal with it.
+    """
+    entries = await client.xrange(topic)
+    topic_dir = evidence_dir / topic
+    try:
+        topic_dir.mkdir(parents=True, exist_ok=True)
+        high_water = _evidence_high_water(topic_dir)
+        fresh = [e for e in entries if high_water is None or _id_sort_key(e[0]) > high_water]
+        if not fresh:
+            return f"evidence already captured under {topic_dir}"
+        path = topic_dir / f"{_decode(fresh[-1][0])}.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": _decode(entry_id),
+                        "fields": {_decode(k): _decode(v) for k, v in fields.items()},
+                    }
+                    for entry_id, fields in fresh
+                ],
+                indent=2,
+            )
+        )
+        return f"{len(fresh)} entries captured at {path}"
+    except OSError as e:
+        return f"evidence capture FAILED ({e!r}) - audit before any XTRIM"
 
 
 async def _collect_stream(
@@ -426,32 +561,36 @@ async def _collect_memory(client: Redis) -> list[Finding]:
     )
 
 
-async def _collect_dlqs(client: Redis) -> list[Finding]:
+async def _collect_dlqs(client: Redis, *, evidence_dir: Path | None = None) -> list[Finding]:
     """Scan is filtered to stream keys, and each XLEN is guarded anyway: a stray
     non-stream ``*.dlq`` key must not raise WRONGTYPE out of this function,
     where it would be reported as "broker unreachable" and discard every other
-    finding on the tick."""
+    finding on the tick.
+
+    ``evidence_dir`` of ``None`` reports without capturing, which is what a
+    caller holding no writable state directory wants.
+    """
     findings: list[Finding] = []
     async for key in client.scan_iter(match="*.dlq", _type="stream"):
-        topic = key.decode() if isinstance(key, bytes) else key
+        topic = _decode(key)
         try:
             depth = await client.xlen(topic)
         except ResponseError:
             continue
-        if depth > 0:
-            findings.append(
-                Finding(
-                    check="dlq",
-                    subject=topic,
-                    message=f"depth {depth} - resting state is 0; every entry "
-                    "is operator-actionable (see docs/STREAMS.md)",
-                )
-            )
+        if depth == 0:
+            continue
+        drainer = DLQ_DRAINERS.get(topic)
+        owner = f"{drainer}'s to triage" if drainer else DLQ_UNASSIGNED
+        parts = [f"depth {depth} - {owner}"]
+        if evidence_dir is not None:
+            parts.append(await _capture_dlq_evidence(client, topic, evidence_dir))
+        parts.append('resting state is 0; see docs/STREAMS.md, "Who drains a DLQ"')
+        findings.append(Finding(check="dlq", subject=topic, message="; ".join(parts)))
     return findings
 
 
 async def collect_broker_findings(
-    client: Redis, *, previous_pending: dict[str, int]
+    client: Redis, *, previous_pending: dict[str, int], evidence_dir: Path | None = None
 ) -> tuple[list[Finding], dict[str, int]]:
     """All Redis-side probes. An unreachable broker is itself the finding, and
     ``previous_pending`` passes through untouched so an outage does not reset
@@ -463,7 +602,7 @@ async def collect_broker_findings(
             stream_findings, stream_pending = await _collect_stream(client, check, previous_pending)
             findings.extend(stream_findings)
             pending.update(stream_pending)
-        findings.extend(await _collect_dlqs(client))
+        findings.extend(await _collect_dlqs(client, evidence_dir=evidence_dir))
     except (RedisError, OSError) as e:  # ConnectionError is an OSError subclass
         return (
             [
@@ -503,14 +642,20 @@ async def run_once(
     *,
     state_path: Path,
     disk_usage: Callable[[str], tuple[int, int, int]] = shutil.disk_usage,
+    evidence_dir: Path | None = None,
 ) -> list[Finding]:
     """One probe tick: collect everything, WARN per finding, one summary line.
 
     ``disk_usage`` is injectable so tests do not inherit the host's real
-    headroom.
+    headroom. ``evidence_dir`` defaults beside the state file, so the timer
+    needs only ``--state-file`` and both land inside systemd's StateDirectory.
     """
     previous_pending = load_state(state_path)
-    findings, pending = await collect_broker_findings(client, previous_pending=previous_pending)
+    findings, pending = await collect_broker_findings(
+        client,
+        previous_pending=previous_pending,
+        evidence_dir=evidence_dir or state_path.parent / DLQ_EVIDENCE_DIRNAME,
+    )
 
     total, _used, free = disk_usage(DISK_PATH)
     findings.extend(evaluate_disk(total=total, free=free))

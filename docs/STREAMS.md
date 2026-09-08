@@ -18,16 +18,16 @@ Cells marked *(target)* describe an arrangement not yet running. The `DLQ`
 column names who **writes** each one; who **drains** it is a separate question,
 answered under *Who drains a DLQ* below.
 
-| Stream | Producer → consumer | Kind | Consumer group | Health primitive | DLQ | Producer durability under OOM |
+| Stream | Producer → consumer | Kind | Consumer group | Health primitive | DLQ (writer / **drainer**) | Producer durability under OOM |
 |---|---|---|---|---|---|---|
-| `info.changes` | Archiver → Replicator *(target)* | event | none *yet* - Replicator adds one | producer-side outbox stats (depth / oldest-unpublished age / dead-lettered count, CannObserv/archiver#112): dashboard badge + the drain loop's periodic journald line, plus archiver's own reduced bus-health timer re-running the same query from outside the publisher process - the surface that keeps reporting when the publisher is down. Group lag once consumed | `info.changes.dlq` *(target)* | **retries indefinitely** - transactional outbox, OOM classified transient |
-| `content.fetch` | Watcher → Replicator | command | `replicator.fetch` (exactly one - competing consumers) | `XPENDING` / group lag | `content.fetch.dlq` | **unasserted** - CannObserv/watcher#245 |
-| `content.blobs` | Replicator → Watcher | fact | one per consuming service | group lag per group | `content.blobs.dlq` | **unasserted** - CannObserv/replicator#19 |
-| `content.revisions` | Watcher → **Archiver** *(producer target: CannObserv/watcher#253)* | fact | `archiver.revisions` (one per consuming service) | `XPENDING` / group lag - **the first group Archiver owns**; probed by this repo's bus-health probe: non-zero pending across two consecutive ticks WARNs (healthy steady state is 0 - a state to name, not a number to guess) | `content.revisions.dlq` - written by the ingest consumer's quarantine path | **unasserted** - CannObserv/watcher#253 |
-| `content.artifacts` | Replicator → **Archiver** *(consumer live - CannObserv/archiver#170)* | fact, broadcast (both replicate outcomes share it, so an issuer sees success and failure in one group) | `archiver.artifacts` (one per consuming service) | `XPENDING` / group lag; issuer-side, `information.replication_commands` rows still `state='requested'` past the reap horizon - the reaper logs each abandonment at WARNING | `content.artifacts.dlq` - written by this consumer's quarantine path | **n/a (consumer)** - producer durability is CannObserv/replicator#34's |
+| `info.changes` | Archiver → Replicator *(target)* | event | none *yet* - Replicator adds one | producer-side outbox stats (depth / oldest-unpublished age / dead-lettered count, CannObserv/archiver#112): dashboard badge + the drain loop's periodic journald line, plus archiver's own reduced bus-health timer re-running the same query from outside the publisher process - the surface that keeps reporting when the publisher is down. Group lag once consumed | `info.changes.dlq` *(target)* / **Replicator** *(prospective - nothing writes it until Replicator adds a group)* | **retries indefinitely** - transactional outbox, OOM classified transient |
+| `content.fetch` | Watcher → Replicator | command | `replicator.fetch` (exactly one - competing consumers) | `XPENDING` / group lag | `content.fetch.dlq` / **Replicator** | **unasserted** - CannObserv/watcher#245 |
+| `content.blobs` | Replicator → Watcher | fact | one per consuming service | group lag per group | `content.blobs.dlq` / **Watcher** | **unasserted** - CannObserv/replicator#19 |
+| `content.revisions` | Watcher → **Archiver** *(producer target: CannObserv/watcher#253)* | fact | `archiver.revisions` (one per consuming service) | `XPENDING` / group lag - **the first group Archiver owns**; probed by this repo's bus-health probe: non-zero pending across two consecutive ticks WARNs (healthy steady state is 0 - a state to name, not a number to guess) | `content.revisions.dlq` - written by the ingest consumer's quarantine path / **Archiver** | **unasserted** - CannObserv/watcher#253 |
+| `content.artifacts` | Replicator → **Archiver** *(consumer live - CannObserv/archiver#170)* | fact, broadcast (both replicate outcomes share it, so an issuer sees success and failure in one group) | `archiver.artifacts` (one per consuming service) | `XPENDING` / group lag; issuer-side, `information.replication_commands` rows still `state='requested'` past the reap horizon - the reaper logs each abandonment at WARNING | `content.artifacts.dlq` - written by this consumer's quarantine path / **Archiver** | **n/a (consumer)** - producer durability is CannObserv/replicator#34's |
 | `content.fetch-policy` | Watcher → Replicator workers *(producer live - full set republished on `*/5 * * * *`, capped by producer-side `BusPublish.maxlen` 50k, CannObserv/watcher#265)* | config/state, broadcast, last-write-wins per host key | **none, permanently - by design** | **last-entry age via `XINFO STREAM`** - probed by this repo's bus-health probe, WARN over 15 min (3× the republish period) | **none applies** | **self-correcting** - full set is republished on a timer |
 | `info.registry` | **Archiver** → Watcher *(consumer live - CannObserv/watcher#254)* | config/state, broadcast, last-write-wins per `info_item_id`, `generation`-ordered | **none, permanently - by design** (every consumer needs every message; a group accumulates a PEL nothing drains) | **last-entry age via `XINFO STREAM`** - on a non-empty corpus the snapshot guarantees ≥1 entry/hour, so an age over ~2× the snapshot interval means the producer is down; an empty or never-announced registry publishes nothing, so the alarm needs a corpus-size guard. See CannObserv/archiver#147 | **none applies** - a state message has nothing to close; quarantine is terminal and the next full set supersedes | **split by path**: deltas ride the transactional outbox and retry indefinitely (OOM transient); snapshots have **no retry** - one lost to an outage is corrected by the next period, not a re-attempt |
-| `content.replicate` | **Archiver** → Replicator *(producer live - CannObserv/archiver#169; consumer shipped for `gcs`, CannObserv/replicator#34)* | command | `replicator.replicate` (exactly one - competing consumers, `content.fetch`'s posture) | `XPENDING` / group lag, plus the issuer-side view `information.replication_commands` gives: rows still `state='requested'` past the reaper horizon, which the reaper (CannObserv/archiver#170) closes as `abandoned` and logs at WARNING | `content.replicate.dlq` - Replicator's to write; Archiver provisions nothing here | **retries indefinitely** - transactional outbox, OOM classified transient. **Never XTRIMmed by Archiver**: capping a command stream deletes commands the consumer group has not delivered and orphans the PEL entries naming them, so the topic is carved out of the drain loop's trim set (`no_trim_topics`) |
+| `content.replicate` | **Archiver** → Replicator *(producer live - CannObserv/archiver#169; consumer shipped for `gcs`, CannObserv/replicator#34)* | command | `replicator.replicate` (exactly one - competing consumers, `content.fetch`'s posture) | `XPENDING` / group lag, plus the issuer-side view `information.replication_commands` gives: rows still `state='requested'` past the reaper horizon, which the reaper (CannObserv/archiver#170) closes as `abandoned` and logs at WARNING | `content.replicate.dlq` - Replicator's to write; Archiver provisions nothing here / **Replicator** | **retries indefinitely** - transactional outbox, OOM classified transient. **Never XTRIMmed by Archiver**: capping a command stream deletes commands the consumer group has not delivered and orphans the PEL entries naming them, so the topic is carved out of the drain loop's trim set (`no_trim_topics`) |
 | `info.watch-status` | Watcher → **Archiver** *(consumer live - CannObserv/archiver#151; producer live - CannObserv/watcher#264, republish `*/5 * * * *`, producer-side `maxlen` 50k)* | config/state, broadcast, last-write-wins per `info_item_id` | **none, permanently - by design** - Archiver tails groupless (`AsyncBusTailReader`), resuming from its own `bus_tail_cursors` row rather than a full `0-0` replay | consumer-side: staleness of the `watch_status` cache vs the producer's republish period; broker-side last-entry age probed by this repo's bus-health probe, WARN over 15 min | **none, matching `content.fetch-policy`** - **two** skip paths, both durable (the skip advances the persisted cursor) and both logged at ERROR: a frame that will not *decode*, and a decoded message the registry can never *write* (a value outside a column's domain, a constraint violation). With no DLQ and a cursor that only advances on success, retrying either forever would stall the stream silently; the periodic republish is what supersedes a skip. Everything else (broker or DB down) rewinds and retries rather than skipping | **self-correcting** - coalesced level signals, full republish on a timer (CannObserv/watcher#264) |
 
 ⚠️ **`content.replicate` is the one stream where a test message is not free.**
@@ -65,16 +65,35 @@ Three roles, and no two of them are reliably the same service:
   `content.revisions.dlq` and `content.artifacts.dlq`, Replicator writes
   `content.fetch.dlq` and `content.replicate.dlq`, and the groupless config/state
   streams can write none at all.
-- **Drainer - Archiver, for every DLQ on this broker.** The claim was
-  originally a corollary of operating the instance (CannObserv/archiver#109,
-  CannObserv/archiver#162): whoever runs the broker empties the queues on it, including the ones
-  another service writes. **That premise is gone** - CannObserv/archiver#193 D6 moved the
-  broker to a neutral node - but the assignment is deliberately unchanged here,
-  because reassigning an operator role in passing during a file move is how a
-  DLQ ends up with nobody against it. A DLQ with nobody named is a DLQ nobody
-  empties, which is exactly how `content.fetch.dlq` reached 110. Revisiting the
-  assignment on its merits is CannObserv/broker#1 Phase 5's.
-- **Polluter** - whoever put junk in it, which is automatically neither of the
+- **Drainer - the stream's own consumer, per stream.** Named in the `DLQ`
+  column above, so an unowned queue reads as a blank cell rather than something
+  to infer. **Settled by CannObserv/broker#1 Phase 5**, replacing "Archiver, for
+  every DLQ on this broker" - a claim that was a corollary of operating the
+  instance (CannObserv/archiver#109, CannObserv/archiver#162) and lost its
+  premise when CannObserv/archiver#193 D6 moved the broker to a neutral node.
+
+  Two things forced it rather than tidiness. **D3's per-service ACL users make
+  the old assignment unimplementable**: draining `content.fetch.dlq` would need
+  Archiver granted `~content.fetch.dlq` plus `+xrange +xtrim`, and finding a
+  queue nobody told it about would need instance-wide `SCAN` - a cluster-wide
+  hole through the one model whose payoff is that Archiver cannot name
+  `content.blobs`. The consumer-drains rule needs **no** extra grant: every
+  service already holds `~<its own topic>.dlq`. And **triage is not mechanical**
+  - "residue, or a real permanent failure?" is a question about the payload, and
+  the consumer is the party that can read it. The #162 drain settles that: those
+  110 were Replicator's writes, of Watcher's commands, caused by Archiver's test
+  suite, and nothing about operating the instance would have told you so.
+
+- **Broker - detection, evidence, escalation, and the backstop.** The mechanical
+  half of the old drainer role stays cluster-wide, because it is suffix-keyed
+  and needs no payload semantics, and because the broker is the only party that
+  can `SCAN` for a queue nobody claims. `src/broker/bus_health.py` warns on any
+  non-zero `*.dlq` depth, names the drainer from `DLQ_DRAINERS` (a mirror of the
+  column above), and **dumps the entries to `dlq-evidence/` under the unit's
+  `StateDirectory` on first sight**. A `*.dlq` key with no named drainer is
+  reported as unassigned rather than skipped - a DLQ with nobody named is a DLQ
+  nobody empties, which is exactly how `content.fetch.dlq` reached 110.
+- **Polluter** - whoever put junk in it, which is automatically none of the
   above. The 110 were Replicator's writes, of Watcher's commands, caused by
   Archiver's test suite (CannObserv/archiver#157).
 
@@ -87,7 +106,16 @@ non-zero depth; a dashboard rendering of the same numbers is archiver's
 lag.
 
 Draining is never in-band cleanup. Audit, back up, trim, verify - in that order,
-because reversing it destroys the evidence you needed to justify the trim:
+because reversing it destroys the evidence you needed to justify the trim.
+
+**The back-up step is already done.** It is the one an operator under time
+pressure skips, so the probe does it on the tick that first sees the depth: the
+entries are at
+`/var/lib/broker-bus-health/dlq-evidence/<topic>/<last-id>.json` on the broker
+node, and the finding names the exact path. Capture is incremental by stream id,
+so a queue that keeps growing accumulates one dump per growth rather than
+re-dumping itself every ten minutes. Read those before the `XRANGE` below;
+re-dump only if you want the entries in `redis-cli`'s own framing.
 
 ```bash
 redis-cli XLEN content.fetch.dlq                    # what you are about to delete
@@ -248,19 +276,26 @@ Per tick it probes:
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
   is empty - the corpus-size guard);
-- `XPENDING` on `archiver.revisions` and `archiver.artifacts` - WARN on
-  non-zero across two consecutive ticks, with the count carried in
-  `StateDirectory=broker-bus-health`. Watcher's and Replicator's groups are
-  **not** probed; that was true before the move and is left unchanged by it,
-  as a question for CannObserv/broker#1 Phase 5 rather than a side effect of a
-  file move;
-- every `*.dlq` key via `SCAN` - WARN on any non-zero depth;
+- `XPENDING` on **all five** consumer groups on the node - `archiver.revisions`,
+  `archiver.artifacts`, `watcher.blobs`, `replicator.fetch`,
+  `replicator.replicate` - WARN on non-zero across two consecutive ticks, with
+  the count carried in `StateDirectory=broker-bus-health`. Widened from
+  Archiver's two by CannObserv/broker#1 Phase 5: the exclusion was inherited
+  from a probe running on Archiver's own host, where a downstream service's
+  group lag was plausibly its own alerting problem. On a neutral node it is not
+  - nobody else watches these, and this is the one place that can;
+- every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
+  named and the entries captured; see *Who drains a DLQ* above;
 - `/` disk headroom (WARN at 90% used or under 2 GiB free) - which on this node
   is the AOF's headroom, and is the check whose meaning the move restored.
 
-`content.blobs` carries no length or age row - that role boundary is
-unqualified for archiver, and the probe list came across unchanged; its DLQ is
-still scanned, because the `*.dlq` sweep is keyed on the suffix.
+`content.blobs` carries a group row and nothing else. The unqualified "never
+`content.blobs`" rule was Archiver's *role* boundary and a neutral node has no
+role to be out of bounds of, so `watcher.blobs` is probed like any other group.
+What survives is the half that was never about roles: this repo owns no
+retention cap for that stream, so it states no opinion on its length or its age
+- neither the fact cap nor the LWW cap governs it, and inventing a threshold
+with no owner is how a probe starts crying wolf.
 
 The unit holds **no** database credential: the `changes_outbox` half of the
 old combined probe stayed in archiver with the table it queries.
@@ -279,6 +314,7 @@ they cannot be, so all three are mirrored here with their owner named:
 | `FACT_PRODUCER_MAXLEN` (100k) | `DEFAULT_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/publisher.py` |
 | `REGISTRY_PRODUCER_MAXLEN` (50k) | `DEFAULT_REGISTRY_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/registry_snapshot.py` |
 | `LWW_PRODUCER_MAXLEN` (50k) | Watcher's producer-side `BusPublish.maxlen` (CannObserv/watcher#265) |
+| `DLQ_DRAINERS` (who triages each `*.dlq`) | *Who drains a DLQ* above, in this file - an assignment, so it has no computable source; the keys are still derived through co-core's `dlq_name()` |
 
 The third was already a mirror before the split - there was never an import to
 lose - which is why the pattern was tolerable enough to extend to the other two.
