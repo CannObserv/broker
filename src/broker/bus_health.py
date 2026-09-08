@@ -494,7 +494,8 @@ async def _capture_dlq_evidence(client: Redis, topic: str, evidence_dir: Path) -
                 indent=2,
             )
         )
-        return f"{len(fresh)} entries captured at {path}"
+        noun = "entry" if len(fresh) == 1 else "entries"
+        return f"{len(fresh)} {noun} captured at {path}"
     except OSError as e:
         return f"evidence capture FAILED ({e!r}) - audit before any XTRIM"
 

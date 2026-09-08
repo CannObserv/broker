@@ -403,6 +403,8 @@ async def test_dlq_evidence_is_captured_before_anyone_can_trim(fake_redis, tmp_p
 
     captured = sorted((tmp_path / "content.fetch.dlq").iterdir())
     assert [p.name for p in captured] == ["5-0.json"]
+    # An operator-facing line; "1 entries" reads as a bug in the probe.
+    assert "1 entry captured" in _dlq_finding(findings, "content.fetch.dlq").message
     assert json.loads(captured[0].read_text()) == [{"id": "5-0", "fields": {"k": "v"}}]
     assert str(captured[0]) in _dlq_finding(findings, "content.fetch.dlq").message
 
