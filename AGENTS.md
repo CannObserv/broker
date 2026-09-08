@@ -90,5 +90,9 @@ tests/           mirrors src/; tests/deploy/ asserts installed artifacts match d
 
 ## Related
 
-- CannObserv/broker#1 - the relocation epic and this repo's bootstrap
+- CannObserv/broker#1 - the relocation epic. Phases 1-4 done; remaining work is
+  its sub-issues: #2 ACL users, #3 alerting, #4 backup, #5 restart window,
+  #6 OOM contract, #7 exercise two streams, #8 latency matrix.
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
+- CannObserv/archiver#196 - archiver's half of the OOM seam, stale since the
+  cap moved to `deploy/redis.conf.broker`
