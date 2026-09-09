@@ -10,11 +10,59 @@ the health probe's.
 | `wait-for-tailnet-addr.sh` | `/usr/local/sbin/` | R1's boot-race insurance. Probes `/proc/net/fib_trie`, never `ip addr` |
 | `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth + evidence capture, disk. Never blocks anything |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
+| `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). **Not yet installed** - it needs `aclfile` in redis.conf, which is immutable, so it rides the restart window in broker#5 |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
 (skipping when absent, so CI and dev clones pass), and
 `test_live_broker_matches_tracked_config.py` reads the running config back
 through `CONFIG GET` so a `CONFIG SET` that no file records still gets caught.
+
+## The ACL users need a restart, and that was not obvious
+
+`aclfile` is an **immutable** config. `CONFIG SET aclfile` fails with "can't set
+immutable config", so turning it on costs one restart of an instance three
+services depend on. Everything *after* that is live - `ACL SETUSER` applies
+immediately and `ACL SAVE` persists - which is why a separate file still beats
+`user` lines in `redis.conf`: an ACL that can only be changed by a cohort-wide
+restart is an ACL nobody will dare tighten.
+
+The alternative is `ACL SETUSER` plus `CONFIG REWRITE`, which needs no restart
+and does **not** destroy this repo's delimited block (checked, rather than
+assumed - the comments survive and the users land in a generated section below
+them). It is still the worse option: it splits the ACL's source of truth across
+a file this repo only partly tracks, and `CONFIG REWRITE` normalises unrelated
+directives (`dir` and `logfile` get rewritten), which the live-config test would
+then see as drift.
+
+So the ACL cutover rides broker#5's window alongside `databases 1`.
+
+Two things the tracked file cannot be written without knowing, both found by
+`tests/deploy/test_redis_acl.py` loading it into a throwaway server rather than
+by reading it:
+
+- **An aclfile permits no comments and no blank lines.** Redis aborts startup
+  on one - and refuses the *whole file*, not the offending line. `render-acl.sh`
+  strips them, so the reasoning can live with the rules where it belongs.
+- **`CLIENT SETINFO` does not exist before Redis 7.2.** This broker is 7.0.15,
+  so granting `+client|setinfo` pre-emptively is rejected and takes every user
+  down with it. It becomes a required step of any upgrade to >= 7.2 instead.
+
+## Installing the ACL users
+
+```bash
+# passwords file: __ARCHIVER_PW__=... one per line, 0400 root:root
+sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
+    | sudo install -m 0640 -o root -g redis /dev/stdin /etc/redis/users.acl
+# then, in the restart window, add `aclfile /etc/redis/users.acl` to redis.conf
+```
+
+Order matters at the cutover: bring each service up on its own credential
+**before** `user default off`, and change the probe's `BROKER_REDIS_URL` in
+`/etc/broker/.env` off `default:` in the same step. All three participants
+classify `NOPERM` as transient, so a missing grant degrades to a backing-off
+publisher rather than dead-lettering valid events - that property was bought
+deliberately (archiver#193 Phase 1, replicator#82) and it is what makes the
+cutover survivable.
 
 ## Why the tuning is in `redis.conf` and not in the drop-in
 
