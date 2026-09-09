@@ -56,13 +56,35 @@ sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
 # then, in the restart window, add `aclfile /etc/redis/users.acl` to redis.conf
 ```
 
-Order matters at the cutover: bring each service up on its own credential
-**before** `user default off`, and change the probe's `BROKER_REDIS_URL` in
-`/etc/broker/.env` off `default:` in the same step. All three participants
-classify `NOPERM` as transient, so a missing grant degrades to a backing-off
-publisher rather than dead-lettering valid events - that property was bought
-deliberately (archiver#193 Phase 1, replicator#82) and it is what makes the
-cutover survivable.
+### The cutover order, and why only step 1 needs the window
+
+**`default` is the sharp edge, in both directions.** Omitting it from an aclfile
+silently makes it `nopass` - an anonymous client is served while
+`CONFIG GET requirepass` still returns the password, which is R2 arriving as a
+side effect of turning on the mechanism meant to prevent it. And setting it
+`off` at first load locks out all three services, because the restart lands
+before any of them has moved onto its own credential. So the tracked file
+declares `default` **enabled, with today's password**, and retiring it is the
+last step rather than the first.
+
+1. **In the window** - install `/etc/redis/users.acl`, add `aclfile` and
+   `databases 1` to `redis.conf`, restart. Nothing changes for any service:
+   every URL still says `default:` and `default` still has the same password.
+   Confirm the tailnet wait fired, `NRestarts=0`, and that an anonymous
+   `redis-cli` is refused.
+2. **Rolling, no window** - flip each service's URL to its own credential, one
+   at a time, verifying each before the next.
+3. **Rolling** - flip the probe's `BROKER_REDIS_URL` to `brokeradmin`.
+4. **Live** - `ACL SETUSER default off` then `ACL SAVE`, run as `default`
+   (`brokeradmin` deliberately has no `+acl`). Reversing it is
+   `ACL SETUSER default on >...` plus `ACL SAVE`; both directions are pinned by
+   `test_disabling_default_is_live_and_reversible`.
+
+Steps 2 to 4 are reversible and need no restart, which is the point of putting
+the irreversible-feeling step last. And all three participants classify `NOPERM`
+as transient, so a grant that is too narrow degrades to a backing-off publisher
+rather than dead-lettering valid events - bought deliberately (archiver#193
+Phase 1, replicator#82) and the reason a wrong rule here is recoverable.
 
 ## Why the tuning is in `redis.conf` and not in the drop-in
 

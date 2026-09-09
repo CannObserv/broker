@@ -160,10 +160,29 @@ def test_a_dlq_writer_can_also_drain_it(users, user) -> None:
         assert command in users[user], f"{user} cannot drain its own DLQ: missing {command}"
 
 
-def test_default_is_disabled(users) -> None:
-    """What actually retires the shared password as an identity. `requirepass`
-    sets the password for exactly this user."""
-    assert users["default"] == ["off"]
+def test_default_is_declared_and_enabled_at_first_load(users) -> None:
+    """The two-sided trap that makes this the sharpest line in the file.
+
+    **Omitting `default` from an aclfile silently makes it `nopass`** - verified
+    on a scratch instance: `requirepass` set, aclfile without a `default` line,
+    and an anonymous client gets `PONG` while `CONFIG GET requirepass` still
+    returns the password. The ACL subsystem takes ownership of `default` the
+    moment an aclfile exists and defaults it to `nopass ~* &* +@all`. That is R2
+    arriving as a side effect of turning on the mechanism meant to prevent it,
+    and every check anyone would think to run still reports auth as on.
+
+    **And `off` here locks out all three services**, because the restart that
+    enables `aclfile` lands before any service has moved onto its own
+    credential - every URL still says `default:` at that instant.
+
+    So the file must declare `default`, and must declare it enabled with a
+    password. Disabling it is a live `ACL SETUSER` at the end of the cutover.
+    """
+    assert "default" in users, "omitting default from an aclfile makes it nopass"
+    rules = users["default"]
+    assert rules[0] == "on", f"default must stay enabled at first load, got {rules}"
+    assert any(r.startswith(">") for r in rules), "default must carry a password, not nopass"
+    assert "nopass" not in rules
 
 
 def test_the_probe_cannot_write_to_a_stream(users) -> None:
@@ -268,20 +287,44 @@ def live_acl_broker(tmp_path_factory):
     proc.wait(timeout=10)
 
 
-def test_the_file_loads_and_default_is_really_off(live_acl_broker) -> None:
-    """Startup alone proves the file parsed - redis aborts on an ACL error, and
-    refuses the whole file rather than one line. The anonymous probe proves
-    `user default off` took effect, which is the line that actually retires the
-    shared password as an identity: until it lands, every per-service credential
-    is an addition rather than a boundary.
+def test_anonymous_access_is_refused_at_first_load(live_acl_broker) -> None:
+    """Startup alone proves the file parsed - redis aborts on an ACL error and
+    refuses the whole file rather than one line. This adds the assertion that
+    matters more: **the restart that enables `aclfile` must not open the broker.**
 
-    The refusal arrives as an `AuthenticationError` on the handshake, not as a
-    `NOAUTH` reply to the command - redis-py sends `HELLO` on connect, so the
-    connection never opens. Worth pinning in that shape, because it is what a
-    service will report at the cutover if its own credential is wrong.
+    An aclfile that omits `default` makes it `nopass`, so an anonymous client is
+    served while `CONFIG GET requirepass` still reports a password. This test is
+    what stands between that and a tailnet-bound broker with no door on it.
+
+    The refusal arrives as an `AuthenticationError` on the handshake rather than
+    a `NOAUTH` reply, because redis-py sends `HELLO` on connect. Pinned in that
+    shape because it is what a service reports at the cutover if its credential
+    is wrong.
     """
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
         live_acl_broker().ping()
+
+
+def test_disabling_default_is_live_and_reversible(live_acl_broker) -> None:
+    """The last step of the cutover, exercised rather than trusted.
+
+    Retiring the shared password is the one genuinely irreversible-feeling step,
+    so it is deliberately the one that needs no window: `ACL SETUSER` applies
+    immediately and `ACL SETUSER default on >...` puts it back. Proving both
+    directions here is what makes it safe to do live at the end, after every
+    service is confirmed on its own credential.
+    """
+    admin = live_acl_broker("default")
+    assert admin.ping()
+
+    admin.execute_command("ACL", "SETUSER", "default", "off")
+    with pytest.raises(redis_pkg.exceptions.AuthenticationError):
+        live_acl_broker("default").ping()
+    # The per-service users are untouched by it - that is the whole point.
+    assert live_acl_broker("archiver").ping()
+
+    admin.execute_command("ACL", "SETUSER", "default", "on", f">{PASSWORD}", "~*", "&*", "+@all")
+    assert live_acl_broker("default").ping()
 
 
 def test_archiver_is_refused_content_blobs_but_served_its_own_streams(live_acl_broker) -> None:
