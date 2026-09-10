@@ -49,4 +49,9 @@ StateDirectory=broker-bus-health
 # useful left to report, and being visibly killed beats hanging the unit.
 TimeoutStartSec=60
 
-ExecStart=/usr/local/bin/uv run python -m src.broker.bus_health --state-file ${STATE_DIRECTORY}/state.json
+# --backup-state-file: the record broker-backup.service writes after each run
+# (CannObserv/broker#4). Read-only here by construction - it is under that
+# unit's StateDirectory, which this unit's User= cannot write - and its absence
+# where the directory itself is absent means "no backup unit on this node",
+# which is a deploy checklist item rather than a finding every ten minutes.
+ExecStart=/usr/local/bin/uv run python -m src.broker.bus_health --state-file ${STATE_DIRECTORY}/state.json --backup-state-file /var/lib/broker-backup/state.json

@@ -75,6 +75,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from co_core.pure.adapters.bus.streams import (
@@ -518,6 +519,135 @@ def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int)
     return []
 
 
+# --- the backup's freshness, and the persistence that feeds it (broker#4) ---
+#
+# src/broker/backup.py ships dump.rdb hourly and records each run in a state
+# file under its own StateDirectory. The probe reads it - read-only, as another
+# user - because a backup that fails is a unit nobody is watching, and a backup
+# that "succeeds" while shipping the same stale file is not even that. The
+# notifier check-in made the probe's own silence detectable; this does the same
+# for the backup's.
+#
+# Three hours: two missed hourly ticks plus the timer's jitter, so one slow run
+# does not flap.
+BACKUP_WARN_MAX_AGE_SECONDS = 3 * 3600.0
+# The snapshot's own age, independent of the job's. Redis rewrites dump.rdb at
+# its `save` points (this broker's: `3600 1`, `300 100`, `60 10000`), so a
+# snapshot older than this means the saves stopped - a failing BGSAVE, a full
+# disk - and every backup since has been of the same file. Watcher republishes
+# to this broker every five minutes, so there is no idle hour to confuse it with.
+SNAPSHOT_WARN_MAX_AGE_SECONDS = 3 * 3600.0
+
+
+def _parse_iso(value: object) -> datetime | None:
+    """A timestamp out of the state file, or ``None`` for anything that is not one."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _hours(seconds: float) -> str:
+    return f"{seconds / 3600:.1f}h"
+
+
+def evaluate_backup(state: dict | None, *, now: datetime, installed: bool = True) -> list[Finding]:
+    """Findings about the last RDB backup, from the job's state file.
+
+    ``installed`` is whether the backup unit's state *directory* exists -
+    systemd creates it on the unit's first start, so its absence means no
+    backup unit on this node, which is a deploy checklist item and not a
+    finding every ten minutes. A directory with no readable state in it is
+    the finding: installed, and never completed a run.
+
+    One finding per situation, by precedence: never succeeded; a failure newer
+    than the last success (the failure names the cause); a success too old
+    (the timer is not completing); and only then, for a job that is running
+    fine, a snapshot too old - the case where the job cannot tell anything is
+    wrong because the file it ships is the same every hour.
+    """
+    if state is None and not installed:
+        return []
+    state = state or {}
+    success_at = _parse_iso(state.get("last_success_at"))
+    if success_at is None:
+        return [
+            Finding(
+                check="backup",
+                subject="rdb",
+                message="no successful backup on record - the backup unit has never "
+                "completed a run on this node (deploy/README.md, broker#4)",
+            )
+        ]
+    failure_at = _parse_iso(state.get("last_failure_at"))
+    if failure_at is not None and failure_at > success_at:
+        return [
+            Finding(
+                check="backup",
+                subject="rdb",
+                message=f"last backup attempt failed: {state.get('last_error')} "
+                f"(last success {_hours((now - success_at).total_seconds())} ago)",
+            )
+        ]
+    success_age = (now - success_at).total_seconds()
+    if success_age > BACKUP_WARN_MAX_AGE_SECONDS:
+        return [
+            Finding(
+                check="backup",
+                subject="rdb",
+                message=f"last successful backup is {_hours(success_age)} old (warn over "
+                f"{_hours(BACKUP_WARN_MAX_AGE_SECONDS)}) - the hourly timer is not "
+                "completing; check `systemctl status broker-backup.timer` and the journal",
+            )
+        ]
+    snapshot_at = _parse_iso(state.get("snapshot_at"))
+    if snapshot_at is not None:
+        snapshot_age = (now - snapshot_at).total_seconds()
+        if snapshot_age > SNAPSHOT_WARN_MAX_AGE_SECONDS:
+            return [
+                Finding(
+                    check="backup",
+                    subject="rdb",
+                    message=f"newest snapshot is {_hours(snapshot_age)} old (warn over "
+                    f"{_hours(SNAPSHOT_WARN_MAX_AGE_SECONDS)}) while the job succeeds - "
+                    "dump.rdb is not being rewritten, so Redis's save points have "
+                    "stopped and every backup since is of the same file",
+                )
+            ]
+    return []
+
+
+_PERSISTENCE_STATUS_FIELDS = (
+    "rdb_last_bgsave_status",
+    "aof_last_write_status",
+    "aof_last_bgrewrite_status",
+)
+
+
+def evaluate_persistence(info: dict) -> list[Finding]:
+    """Warn when the server reports its own persistence failing.
+
+    ``rdb_last_bgsave_status`` is the backup's blind spot seen from the other
+    side: while it is ``err`` the file the job ships stops changing.
+    ``aof_last_write_status`` is worse - an AOF the server cannot write is a
+    broker that will start refusing writes. Missing fields are a server without
+    the section (fakeredis), a probe limitation rather than a fault.
+    """
+    return [
+        Finding(
+            check="persistence",
+            subject="redis",
+            message=f"{field} is {info[field]!r} - see `INFO persistence` and the redis-server "
+            "journal; while it stays that way the on-disk copy is not being refreshed",
+        )
+        for field in _PERSISTENCE_STATUS_FIELDS
+        if field in info and str(info[field]) != "ok"
+    ]
+
+
 # --- collectors ---
 
 
@@ -674,6 +804,14 @@ async def _collect_memory(client: Redis) -> list[Finding]:
     )
 
 
+async def _collect_persistence(client: Redis) -> list[Finding]:
+    try:
+        info = await client.info("persistence")
+    except ResponseError:
+        return []  # same limitation as _collect_memory: a server without INFO
+    return evaluate_persistence(info)
+
+
 async def _collect_dlqs(client: Redis, *, evidence_dir: Path | None = None) -> list[Finding]:
     """Scan is filtered to stream keys, and each XLEN is guarded anyway: a stray
     non-stream ``*.dlq`` key must not raise WRONGTYPE out of this function,
@@ -782,6 +920,7 @@ async def collect_broker_findings(
     the two-tick grace window."""
     try:
         findings = await _collect_memory(client)
+        findings.extend(await _collect_persistence(client))
         pending: dict[str, int] = {}
         for check in STREAM_CHECKS:
             stream_findings, stream_pending = await _collect_stream(client, check, previous_pending)
@@ -819,6 +958,17 @@ def save_state(path: Path, pending: dict[str, int]) -> None:
     path.write_text(json.dumps(pending))
 
 
+def read_backup_state(path: Path) -> dict | None:
+    """The backup job's record, or ``None`` for missing or unreadable. Read
+    here rather than through ``src.broker.backup`` so the probe's import graph
+    stays free of the storage SDK it has no use for."""
+    try:
+        raw = json.loads(path.read_text())
+    except (FileNotFoundError, PermissionError, ValueError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
 # --- orchestration ---
 
 
@@ -828,12 +978,15 @@ async def run_once(
     state_path: Path,
     disk_usage: Callable[[str], tuple[int, int, int]] = shutil.disk_usage,
     evidence_dir: Path | None = None,
+    backup_state_path: Path | None = None,
 ) -> list[Finding]:
     """One probe tick: collect everything, WARN per finding, one summary line.
 
     ``disk_usage`` is injectable so tests do not inherit the host's real
     headroom. ``evidence_dir`` defaults beside the state file, so the timer
     needs only ``--state-file`` and both land inside systemd's StateDirectory.
+    ``backup_state_path`` is the backup job's record; ``None`` skips the check,
+    which is what dev and CI want and what only the deployed unit overrides.
     """
     previous_pending = load_state(state_path)
     findings, pending = await collect_broker_findings(
@@ -844,6 +997,15 @@ async def run_once(
 
     total, _used, free = disk_usage(DISK_PATH)
     findings.extend(evaluate_disk(total=total, free=free))
+
+    if backup_state_path is not None:
+        findings.extend(
+            evaluate_backup(
+                read_backup_state(backup_state_path),
+                now=datetime.now(UTC),
+                installed=backup_state_path.parent.exists(),
+            )
+        )
 
     save_state(state_path, pending)
 
@@ -867,6 +1029,12 @@ def main(argv: list[str] | None = None) -> int:
     here, not a broker state) surfaces as a non-zero exit."""
     parser = argparse.ArgumentParser(description="broker bus health probe")
     parser.add_argument("--state-file", type=Path, required=True)
+    parser.add_argument(
+        "--backup-state-file",
+        type=Path,
+        default=None,
+        help="the record broker-backup.service writes; omitted, the backup check is skipped",
+    )
     args = parser.parse_args(argv)
 
     configure_logging()
@@ -894,7 +1062,11 @@ def main(argv: list[str] | None = None) -> int:
             socket_timeout=SOCKET_TIMEOUT_SECONDS,
         )
         try:
-            await run_once(client, state_path=args.state_file)
+            await run_once(
+                client,
+                state_path=args.state_file,
+                backup_state_path=args.backup_state_file,
+            )
         finally:
             await client.aclose()
 

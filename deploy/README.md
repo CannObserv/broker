@@ -1,7 +1,7 @@
 # deploy/
 
 Everything the broker node runs, tracked. Three of these are Redis's, two are
-the health probe's.
+the health probe's, two are the backup's.
 
 | File | Installs as | Purpose |
 |---|---|---|
@@ -11,6 +11,8 @@ the health probe's.
 | `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth + evidence capture, disk. Never blocks anything |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
 | `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day. Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
+| `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
+| `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
 (skipping when absent, so CI and dev clones pass), and
@@ -128,6 +130,16 @@ sudo install -m 0644 deploy/broker-bus-health.service \
     deploy/broker-bus-health.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now broker-bus-health.timer
+
+# The backup (broker#4): its env names the bucket and the writer key's path.
+# The timer is enabled only once the key is at that path - see docs/RECOVERY.md,
+# "Provisioning the bucket and the writer".
+sudo install -m 0644 deploy/broker-backup.service deploy/broker-backup.timer /etc/systemd/system/
+sudo install -m 0400 -o root -g root /dev/null /etc/broker/backup.env
+printf 'BROKER_BACKUP_BUCKET=co-gcs-broker-backup\nGOOGLE_APPLICATION_CREDENTIALS=/etc/broker/co-broker-backup.json\n' \
+    | sudo tee /etc/broker/backup.env >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now broker-backup.timer      # after the key exists
 ```
 
 Then verify against the running broker rather than against the files:
@@ -223,6 +235,14 @@ Both are asserted by `tests/deploy/test_bus_health_units.py`.
 `/etc/broker/notifier.env` (`0400 root:root`, **optional**) carries the check-in
 credential - see *The notifier check-in* below.
 
+`/etc/broker/backup.env` (`0400 root:root`, **required by the backup unit**,
+which loads nothing else) carries `BROKER_BACKUP_BUCKET` and the
+`GOOGLE_APPLICATION_CREDENTIALS` path of the **writer** key. Not in
+`/etc/broker/.env`, and the reason cuts both ways: that file is readable by
+`exedev`, which must not hold a credential that can write to the backup
+bucket; and the backup unit must not inherit a Redis URL it has no use for.
+`BROKER_BACKUP_PREFIX` is optional and defaults to the hostname.
+
 ## The notifier check-in (broker#3)
 
 Every tick, the probe posts to notifier whether or not it found anything:
@@ -307,6 +327,29 @@ check-ins and reports state while alarming on nothing when they stop. Its
 check-in route does *not* gate on the flag, so `status: alert` still dispatches
 - which makes the failure asymmetric and easy to miss: findings reach a person,
 silence does not. Silence is the half this probe exists for.
+
+## The backup (broker#4)
+
+`broker-backup.service` copies `dump.rdb`, verifies the copy with
+`redis-check-rdb`, gzips it, and creates
+`gs://co-gcs-broker-backup/co-broker/<snapshot time>.rdb.gz` with
+`if_generation_match=0` - never an overwrite, and the identity holds no
+`delete`, so the bucket's 30-day lifecycle rule is the only thing that removes
+a snapshot. It holds **no Redis credential**: the server rewrites `dump.rdb`
+atomically at its `save` points, so the file is the interface.
+
+The probe reads the job's state file (`/var/lib/broker-backup/state.json`)
+every tick and reports, in order of precedence: never completed a run; the last
+attempt failed (with the error); the last success older than three hours; the
+snapshot itself older than three hours while the job succeeds - which is Redis's
+`save` points having stopped, and is also reported directly as a `persistence`
+finding from `rdb_last_bgsave_status`. A missing state *directory* means the
+unit is not installed on this node and is not a finding.
+
+**A restored snapshot is ignored under `appendonly yes` unless it is staged as
+the AOF base** - `python -m src.broker.restore` does that, and
+[`../docs/RECOVERY.md`](../docs/RECOVERY.md) is the runbook around it, the
+rehearsal record, and the provisioning commands for the bucket and its writer.
 
 ## DLQ evidence
 

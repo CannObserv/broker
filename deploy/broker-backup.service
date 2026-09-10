@@ -1,0 +1,55 @@
+[Unit]
+Description=Broker RDB snapshot to GCS - hourly, create-only, holds no Redis credential (CannObserv/broker#4)
+# Deliberately NOT ordered after or bound to redis-server.service. The artifact
+# is a file: a stopped broker still has a dump.rdb worth shipping, and binding
+# to its unit would skip exactly that backup.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# root, for one reason: /var/lib/redis is 0750 redis:redis and dump.rdb is 0660
+# redis:redis, so the reader is root or a member of the redis group - and the
+# group holds WRITE on the live snapshot. Root confined by the sandbox below is
+# the safer of the two: it can read Redis's files and cannot write them.
+User=root
+WorkingDirectory=/home/exedev/broker
+
+# BROKER_BACKUP_BUCKET and GOOGLE_APPLICATION_CREDENTIALS (the writer key, 0400
+# root:root). NOT /etc/broker/.env: that file is 0640 root:exedev and carries
+# the probe's read-only wheelhouse key and a Redis URL, neither of which this
+# unit needs and the second of which it must not have. No leading '-': a backup
+# unit without its configuration must fail loudly, not run quietly with none.
+EnvironmentFile=/etc/broker/backup.env
+
+# /var/lib/broker-backup/state.json - one record per run, written 0644 because
+# the probe reads it as exedev for the freshness finding.
+StateDirectory=broker-backup
+
+# The sandbox. Read-only filesystem except the state directory (systemd adds it
+# to the writable set) and a private /tmp for the copy and its gzip; no new
+# privileges; and one capability, the one that reads past DAC, which is what
+# lets root traverse /var/lib/redis and the venv under /home/exedev.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# The tree is read-only to this unit anyway; say so rather than let Python try.
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# A snapshot is under a megabyte today and the maxmemory cap bounds it at a few
+# hundred. Ten minutes is generous for the transfer and short enough that a
+# wedged upload is a failed unit the probe reports, not a silent hang.
+TimeoutStartSec=600
+
+# The venv's interpreter directly rather than `uv run`: uv wants a writable
+# cache and may sync the environment, both refused by the sandbox. Dependency
+# sync is a deploy step, not a service-start side effect.
+ExecStart=/home/exedev/broker/.venv/bin/python -m src.broker.backup --rdb /var/lib/redis/dump.rdb --state-file ${STATE_DIRECTORY}/state.json

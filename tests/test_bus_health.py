@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
@@ -37,6 +38,7 @@ from fakeredis import aioredis as fakeredis_aio
 
 from src.broker import bus_health
 from src.broker.bus_health import (
+    BACKUP_WARN_MAX_AGE_SECONDS,
     DISK_WARN_MIN_FREE_BYTES,
     FACT_PRODUCER_MAXLEN,
     FACT_WARN_LENGTH,
@@ -44,9 +46,11 @@ from src.broker.bus_health import (
     STREAM_CHECKS,
     StreamCheck,
     collect_broker_findings,
+    evaluate_backup,
     evaluate_disk,
     evaluate_memory,
     evaluate_pending,
+    evaluate_persistence,
     evaluate_stream,
     load_state,
     save_state,
@@ -1073,3 +1077,161 @@ async def test_continuity_state_survives_a_broker_outage(fake_redis, tmp_path) -
 
     _, after_outage = await collect_broker_findings(DownRedis(), previous_pending=state)
     assert after_outage == state
+
+
+# --- the backup, and the persistence that feeds it (CannObserv/broker#4) ---
+#
+# src/broker/backup.py writes a state file; the probe reads it and turns
+# silence into a finding, the same way the notifier check-in turned the probe's
+# own silence into one. Three states matter: no success on record, a success
+# too old, and a failure newer than the last success. A fourth is the
+# snapshot's own age - the job can succeed hourly while shipping the same file.
+
+_T0 = datetime(2026, 9, 10, 16, 0, tzinfo=UTC)
+
+
+def _backup_state(**overrides) -> dict:
+    state = {
+        "last_success_at": "2026-09-10T15:00:03Z",
+        "snapshot_at": "2026-09-10T14:55:11Z",
+        "object": "gs://b/co-broker/20260910T145511Z.rdb.gz",
+        "outcome": "uploaded",
+    }
+    state.update(overrides)
+    return state
+
+
+def test_backup_fresh_is_healthy() -> None:
+    assert evaluate_backup(_backup_state(), now=_T0) == []
+
+
+def test_backup_never_run_on_an_installed_unit_is_a_finding() -> None:
+    """The state directory exists (systemd made it on first start) but no state
+    was ever written: the unit is installed and has never completed a run."""
+    (finding,) = evaluate_backup(None, now=_T0, installed=True)
+    assert finding.check == "backup"
+    assert "never" in finding.message
+
+
+def test_backup_absent_where_the_unit_is_not_installed_is_not_a_finding() -> None:
+    """Dev clones, CI, and a node whose backup is not wired yet. No state
+    directory means no unit; that is a deploy checklist item, not a probe
+    finding every ten minutes."""
+    assert evaluate_backup(None, now=_T0, installed=False) == []
+
+
+def test_backup_stale_success_is_a_finding() -> None:
+    late = _T0 + timedelta(seconds=BACKUP_WARN_MAX_AGE_SECONDS + 1)
+    (finding,) = evaluate_backup(_backup_state(), now=late)
+    assert finding.check == "backup"
+    assert "last successful backup" in finding.message
+
+
+def test_backup_failure_newer_than_success_is_a_finding() -> None:
+    state = _backup_state(last_failure_at="2026-09-10T15:30:00Z", last_error="NotFound: bucket")
+    (finding,) = evaluate_backup(state, now=_T0)
+    assert finding.check == "backup"
+    assert "NotFound: bucket" in finding.message
+
+
+def test_backup_old_failure_before_a_newer_success_is_not_a_finding() -> None:
+    state = _backup_state(last_failure_at="2026-09-10T14:30:00Z", last_error="transient")
+    assert evaluate_backup(state, now=_T0) == []
+
+
+def test_backup_snapshot_itself_going_stale_is_a_finding() -> None:
+    """Redis rewrites dump.rdb only at a `save` point. If those stop - a failing
+    BGSAVE, a full disk - every hourly backup is of the same stale snapshot and
+    the job reports success each time. The snapshot's own age is the signal."""
+    state = _backup_state(
+        last_success_at="2026-09-10T15:59:00Z", snapshot_at="2026-09-10T12:00:00Z"
+    )
+    (finding,) = evaluate_backup(state, now=_T0)
+    assert finding.check == "backup"
+    assert "snapshot" in finding.message
+
+
+def test_backup_corrupt_state_reads_as_never_run() -> None:
+    (finding,) = evaluate_backup({"last_success_at": "not a time"}, now=_T0)
+    assert finding.check == "backup"
+
+
+def test_persistence_healthy() -> None:
+    info = {
+        "rdb_last_bgsave_status": "ok",
+        "aof_last_write_status": "ok",
+        "aof_last_bgrewrite_status": "ok",
+    }
+    assert evaluate_persistence(info) == []
+
+
+@pytest.mark.parametrize(
+    "field", ["rdb_last_bgsave_status", "aof_last_write_status", "aof_last_bgrewrite_status"]
+)
+def test_persistence_error_is_a_finding(field: str) -> None:
+    """A failed BGSAVE is the backup's blind spot seen from the other side: the
+    file the job ships stops changing. A failed AOF write is worse. Both are one
+    INFO section the probe already pays for."""
+    info = {
+        "rdb_last_bgsave_status": "ok",
+        "aof_last_write_status": "ok",
+        "aof_last_bgrewrite_status": "ok",
+        field: "err",
+    }
+    (finding,) = evaluate_persistence(info)
+    assert finding.check == "persistence"
+    assert field in finding.message
+
+
+def test_persistence_missing_fields_are_not_findings() -> None:
+    """fakeredis and a server without the section: a probe limitation, not a fault."""
+    assert evaluate_persistence({}) == []
+
+
+async def test_run_once_reports_the_backup_when_told_where_its_state_is(
+    fake_redis, tmp_path
+) -> None:
+    state_path = tmp_path / "backup" / "state.json"
+    state_path.parent.mkdir()
+    state_path.write_text(json.dumps(_backup_state(last_success_at="2026-01-01T00:00:00Z")))
+    findings = await bus_health.run_once(
+        fake_redis,
+        state_path=tmp_path / "state.json",
+        disk_usage=_healthy_disk,
+        backup_state_path=state_path,
+    )
+    assert any(f.check == "backup" for f in findings)
+
+
+async def test_run_once_treats_a_missing_state_directory_as_not_installed(
+    fake_redis, tmp_path
+) -> None:
+    findings = await bus_health.run_once(
+        fake_redis,
+        state_path=tmp_path / "state.json",
+        disk_usage=_healthy_disk,
+        backup_state_path=tmp_path / "absent" / "state.json",
+    )
+    assert not any(f.check == "backup" for f in findings)
+
+
+async def test_run_once_skips_the_backup_check_when_not_told(fake_redis, tmp_path) -> None:
+    """Dev and CI run the probe with no backup unit beside it; only the deployed
+    unit passes the path."""
+    findings = await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+    assert not any(f.check == "backup" for f in findings)
+
+
+def test_main_passes_the_backup_state_path_through(stub_main_deps, monkeypatch) -> None:
+    seen: dict = {}
+
+    async def _spy_run_once(client, **kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(bus_health, "run_once", _spy_run_once)
+    argv = ["--state-file", str(stub_main_deps.state_file), "--backup-state-file", "/x/state.json"]
+    assert bus_health.main(argv) == 0
+    assert seen["backup_state_path"] == Path("/x/state.json")

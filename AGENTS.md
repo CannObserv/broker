@@ -54,6 +54,14 @@ silently corrupts values.
   are pinned by `tests/deploy/test_bus_health_units.py`. `XPENDING` is
   read-only introspection; joining a group would silently swallow another
   service's messages.
+- **The backup holds no Redis credential, and its identity cannot delete.**
+  `broker-backup.service` reads `dump.rdb` - the server's own atomic snapshot -
+  and creates objects under `objectCreator` + `objectViewer`; retention is the
+  bucket's lifecycle rule. Do not add a Redis URL to that unit or `delete` to
+  that grant for convenience; `tests/deploy/test_backup_units.py` and
+  `tests/test_backup.py` pin both. A restored snapshot is **ignored** under
+  `appendonly yes` unless staged as the AOF base: `src/broker/restore.py`,
+  `docs/RECOVERY.md`.
 - **The `OOM` seam spans two repos.** `deploy/redis.conf.broker`'s cap and
   archiver's `_TRANSIENT_PUBLISH_ERRORS` are one decision. Each names the other.
   Do not change either alone (archiver#193 R5). The cap moved out of
@@ -80,12 +88,17 @@ Types: feat, fix, refactor, docs, test, chore.
 ## Layout
 
 ```
-deploy/          the three artifacts the node deploys + the bus-health units;
+deploy/          the artifacts the node deploys + the bus-health and backup units;
                  see deploy/README.md
 docs/STREAMS.md  the cluster stream inventory - who produces, consumes, drains
+docs/RECOVERY.md node loss: the backup, the restore, the rehearsal record
+docs/RESTART-WINDOW.md
+                 the cohort restart window, its identities, the 2026-09-10 incident
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project)
-src/broker/      bus_health.py (the probe), logging.py (service-local, not a mirror)
+src/broker/      bus_health.py (the probe), backup.py, restore.py,
+                 logging.py (service-local, not a mirror)
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/
+                 and rehearses the restore against a real redis-server
 ```
 
 ## Related

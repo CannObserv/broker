@@ -12,8 +12,12 @@ imported by any service; the services reach the broker over the network, by URL.
 | [`deploy/redis.conf.broker`](deploy/redis.conf.broker) | The broker's tuning as deployed - bind, auth, AOF persistence, `noeviction`, an explicit `maxmemory` cap. Appended to `/etc/redis/redis.conf`, with the credential templated |
 | [`deploy/redis-server.service.d/broker.conf`](deploy/redis-server.service.d/broker.conf) + [`deploy/wait-for-tailnet-addr.sh`](deploy/wait-for-tailnet-addr.sh) | Unit ordering only: `After=tailscaled` plus the `/proc/net/fib_trie` wait that R1's boot race exists for |
 | [`deploy/broker-bus-health.service`](deploy/broker-bus-health.service) / [`.timer`](deploy/broker-bus-health.timer) | The periodic WARN-only health probe, every 10 minutes |
-| [`src/broker/bus_health.py`](src/broker/bus_health.py) | The probe: memory headroom, per-stream `XLEN` against retention caps, last-entry age on groupless streams, `XPENDING`, DLQ depth, disk |
+| [`src/broker/bus_health.py`](src/broker/bus_health.py) | The probe: memory headroom, per-stream `XLEN` against retention caps, last-entry age on groupless streams, `XPENDING`, DLQ depth, disk, persistence status, and the backup's freshness |
+| [`deploy/broker-backup.service`](deploy/broker-backup.service) / [`.timer`](deploy/broker-backup.timer) | The hourly RDB backup - root confined to read-only everything but its own state directory, holding no Redis credential (broker#4) |
+| [`src/broker/backup.py`](src/broker/backup.py) / [`restore.py`](src/broker/restore.py) | The job: verify `dump.rdb`, gzip, create-only upload named by the snapshot's time. And the restore: stage a snapshot as the AOF base, which is the only way Redis 7 will load it under `appendonly yes` |
 | [`docs/STREAMS.md`](docs/STREAMS.md) | The cluster stream inventory - who produces, who consumes, which health primitive applies, and who drains each DLQ |
+| [`docs/RECOVERY.md`](docs/RECOVERY.md) | Losing the node: what is exposed, the backup's design and its grant, the rebuild runbook, the rehearsal record |
+| [`docs/RESTART-WINDOW.md`](docs/RESTART-WINDOW.md) | The cohort restart window: the identities, the steps as run, and the 2026-09-10 `databases 1` incident |
 
 ## Provenance
 

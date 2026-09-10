@@ -1,0 +1,16 @@
+[Unit]
+Description=Hourly broker RDB snapshot to GCS (CannObserv/broker#4)
+
+[Timer]
+# Calendar-based rather than OnUnitActiveSec: the object is named by the
+# snapshot's time, so what an operator wants is "one per hour of the day", not
+# "one per hour of uptime". Persistent=true runs the tick a reboot skipped, so
+# a node that was down at :00 still ships. The jitter keeps this off the exact
+# minute the probe and the other timers on the node share.
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
