@@ -106,8 +106,23 @@ def parse_size(value: str) -> int:
 
 def test_tracked_config_sets_an_explicit_nonzero_maxmemory() -> None:
     """noeviction WITHOUT a cap is inert (CannObserv/archiver#128). This is the
-    invariant that survives any future decision about *where* the tuning
-    lives."""
+    invariant that survives any future decision about *where* the tuning lives.
+
+    **And the policy is load-bearing beyond refusing writes** (broker#9).
+    Replicator's ``replicator:cmd:*`` de-duplication keys are the only volatile
+    keys on db0 - every other tenant writes streams, which never carry a TTL -
+    so under any ``volatile-*`` policy that namespace is the *only* eviction
+    candidate on the instance. Memory pressure would evict precisely it and
+    nothing else, leaving every stream, group and PEL intact and every issuer
+    none the wiser. The two failure modes are not comparable: evicting those
+    keys is silent, and the first symptom is a window of duplicate fetches at
+    live origins; refusing the write is loud, bounded, and every producer
+    retries through it (broker#1 R5). So the change that looks safest under
+    memory pressure - evict something rather than refuse writes - picks the
+    silent failure, and picks the one namespace nobody would choose. The
+    keyspace half of that claim is asserted live by
+    ``test_live_broker_matches_tracked_config.py``.
+    """
     directives = parse_directives(REPO_REDIS_CONF.read_text())
     assert directives.get("maxmemory-policy") == "noeviction"
     assert parse_size(directives["maxmemory"]) > 0

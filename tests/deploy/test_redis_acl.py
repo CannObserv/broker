@@ -19,6 +19,7 @@ the archiver/`content.blobs` assertion is written as an explicit denial rather
 than as a property of the pattern list.
 """
 
+import fnmatch
 import re
 import shutil
 import socket
@@ -39,6 +40,8 @@ from co_core.pure.adapters.bus.streams import (
     INFO_REGISTRY,
     INFO_WATCH_STATUS,
     dlq_name,
+    group_name,
+    stream_kind,
 )
 
 DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
@@ -65,7 +68,40 @@ CANONICAL_STREAMS = frozenset(
 )
 
 # Patterns that are legitimately not a canonical stream or its DLQ.
-NON_STREAM_PATTERNS = frozenset({"*", "replicator:cmd:fetch:*", "probe.*", "replicator.itest.*"})
+NON_STREAM_PATTERNS = frozenset({"*", "replicator:cmd:*", "probe.*", "replicator.itest.*"})
+
+# The command streams, which is what makes the dedupe keyspace plural. Derived
+# from co-core's taxonomy rather than listed, so a third command stream added
+# upstream fails ``test_replicator_can_name_every_dedupe_namespace`` here rather
+# than wedging its loop on the node.
+COMMAND_STREAMS = tuple(s for s in sorted(CANONICAL_STREAMS) if stream_kind(s) == "command")
+
+
+def dedupe_key(topic: str, command_id: str) -> str:
+    """Replicator's de-duplication key for a command on ``topic``.
+
+    ``replicator:cmd:<stream suffix>:<command_id>`` - and the suffix is the same
+    one co-core's ``group_name`` puts after the service, so ``content.fetch``
+    gives both ``replicator.fetch`` and ``replicator:cmd:fetch:<id>``. Derived
+    through that helper rather than spelled, for the reason cannobserv#384
+    exists: a convention change arrives with the wheel and trips a test, instead
+    of being something someone has to notice.
+
+    The keys themselves are Replicator's, documented in its
+    ``docs/CONVENTIONS.md``; the inventory row is in ../docs/STREAMS.md.
+    """
+    _service, _, suffix = group_name(topic, "replicator").partition(".")
+    return f"replicator:cmd:{suffix}:{command_id}"
+
+
+def admits(patterns: set[str], key: str) -> bool:
+    """Whether any granted ``~pattern`` admits ``key``.
+
+    ``fnmatch`` rather than Redis's own matcher, which is only reachable from a
+    running server - so the live test below is what proves this approximation
+    honest. Both patterns in play here use ``*`` and nothing else.
+    """
+    return any(fnmatch.fnmatchcase(key, pattern) for pattern in patterns)
 
 
 def parse_users(text: str) -> dict[str, list[str]]:
@@ -130,6 +166,49 @@ def test_every_key_pattern_names_a_real_stream(users) -> None:
     for name, rules in users.items():
         unknown = key_patterns(rules) - allowed
         assert not unknown, f"{name} names patterns that are not streams: {sorted(unknown)}"
+
+
+def test_replicator_can_name_every_dedupe_namespace(users) -> None:
+    """The dedupe keyspace is **per command stream**, and the draft granted one.
+
+    CannObserv/broker#9 records what these keys are: `replicator:cmd:<stream>:
+    <command_id>`, written after a handler completes and read by an `EXISTS`
+    *before* the next one runs. There is one namespace per command stream, so
+    today there are two - `fetch` and `replicate` - and the tracked grant named
+    only `~replicator:cmd:fetch:*`.
+
+    That is correction eleven in its key-pattern form. The command inventory was
+    read off the wire, the replicate loop has never completed a command (no
+    alias table is provisioned), so its namespace is **empty rather than
+    absent** and nothing could have observed the gap. The moment that loop
+    completes one - which is what broker#7 exists to make happen - the `EXISTS`
+    is denied, replicator#82 classifies NOPERM transient, and the loop backs off
+    and retries forever without ever running a handler. Nothing is lost and
+    nothing progresses.
+
+    Asserted over the taxonomy rather than over the two names, so a third
+    command stream cannot arrive without either a grant or a red test.
+    """
+    patterns = key_patterns(users["replicator"])
+    assert COMMAND_STREAMS, "co-core classified no stream as a command"
+    for topic in COMMAND_STREAMS:
+        key = dedupe_key(topic, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        assert admits(patterns, key), (
+            f"replicator cannot name {key!r} - the dedupe write and the EXISTS "
+            f"before {topic}'s handler are both denied"
+        )
+
+
+def test_no_other_user_can_name_the_dedupe_keyspace(users) -> None:
+    """They are Replicator's private state, and the broker's own sweep does not
+    want them: `brokeradmin` holds `~*` for `INFO` and the DLQ scan, and that is
+    the one exception. A second service naming this pattern would be reaching
+    into another's dedupe window."""
+    key = dedupe_key(COMMAND_STREAMS[0], "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+    for name, rules in users.items():
+        if name in {"replicator", "brokeradmin", "acladmin", "default"}:
+            continue
+        assert not admits(key_patterns(rules), key), f"{name} can name {key!r}"
 
 
 @pytest.mark.parametrize("user", SERVICE_USERS)
@@ -426,6 +505,25 @@ def test_the_probe_can_sweep_but_cannot_publish(live_acl_broker) -> None:
     assert list(client.scan_iter(match="*.dlq")) == []
     with pytest.raises(redis_pkg.exceptions.NoPermissionError):
         client.xadd(CONTENT_REVISIONS, {"k": "v"})
+
+
+@pytest.mark.parametrize("topic", COMMAND_STREAMS)
+def test_replicator_can_dedupe_a_command_on_every_command_stream(live_acl_broker, topic) -> None:
+    """The pure test above matches globs with ``fnmatch``; this one uses Redis's
+    own matcher, on both of the commands these keys ever see.
+
+    ``SET .. NX EX`` is the write after a completed handler and ``EXISTS`` is the
+    read before the next one. Nothing else touches them - no ``GET``, no
+    ``DEL``, no ``TTL`` (CannObserv/broker#9, and Replicator's own CI AST-scans
+    ``src/`` to keep that surface closed), which is why this asserts exactly two.
+    """
+    client = live_acl_broker("replicator")
+    key = dedupe_key(topic, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+
+    assert client.set(key, "some-message-id", nx=True, ex=86400) is True
+    assert client.exists(key) == 1
+    # The window is not extended by a redelivery: the second SET is a no-op.
+    assert client.set(key, "another-message-id", nx=True, ex=86400) is None
 
 
 def test_citest_cannot_name_a_production_topic(live_acl_broker) -> None:

@@ -67,6 +67,14 @@ silently corrupts values.
   Do not change either alone (archiver#193 R5). The cap moved out of
   `deploy/redis-server.dropin.conf` in Phase 5, so **archiver's half still
   points at the old path** until it is updated - CannObserv/archiver#196.
+- **A non-stream key pattern is inventoried before it is written.**
+  `docs/STREAMS.md`, *Non-stream keys on `db0`*. There is exactly one today,
+  Replicator's `replicator:cmd:*` dedupe keys, and they are the **only volatile
+  keys on the instance** - which is what makes `noeviction` load-bearing beyond
+  refusing writes, since any `volatile-*` policy would make that one namespace
+  the whole eviction candidate set. Do not change the policy without reading
+  that section; two tests pin it, one on the config and one on the live
+  keyspace.
 - **Mirrored constants.** The three retention caps in `src/broker/bus_health.py`
   are copies of numbers owned elsewhere, each with its source named. Group
   names are **derived** via co-core's `group_name()`, never spelled - that is

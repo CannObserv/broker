@@ -1,7 +1,8 @@
 # The cluster stream inventory
 
 Every Redis Stream on this broker: who produces it, who consumes it, which
-health primitive applies, who writes its DLQ - and who drains it.
+health primitive applies, who writes its DLQ - and who drains it. Plus the one
+thing on this instance that is not a stream, under *Non-stream keys on `db0`*.
 
 Moved here from `CannObserv/archiver:deploy/README.md` under
 [archiver#193](https://github.com/CannObserv/archiver/issues/193) D6. It was
@@ -55,6 +56,56 @@ silently, while the stream keeps growing), and `content.revisions.dlq` is the
 first DLQ this service writes rather than merely provisions. Group membership is
 gated on `ARCHIVER_BUS_CONSUMER=1`, set only in `deploy/archiver.service` - a
 second process in the group silently takes half the revisions.
+
+## Non-stream keys on `db0` (CannObserv/broker#9, CannObserv/replicator#80)
+
+This file had no row for anything that is not a stream, which is how an audit
+came to find these by scanning the keyspace rather than by reading.
+
+| Pattern | Owner | Kind | Lifetime | Commands used | What it is |
+|---|---|---|---|---|---|
+| `replicator:cmd:<stream suffix>:<command_id>` | Replicator | string, **volatile** | `REPLICATOR_DEDUPE_TTL_SECONDS`, default 86400 | `SET .. NX EX`, `EXISTS` | De-duplication of `content.fetch` / `content.replicate` commands. Written **after** the handler completes; read by an `EXISTS` **before** the next one runs. Reasoning: [`CannObserv/replicator:docs/CONVENTIONS.md#the-replicatorcmd-keys`](https://github.com/CannObserv/replicator/blob/main/docs/CONVENTIONS.md#the-replicatorcmd-keys) |
+
+**This is the only non-stream key pattern any service writes here.** A new one
+belongs in this table before it belongs on the broker.
+
+**One namespace per command stream**, and the suffix is the same one co-core's
+`group_name` puts after the service - so `content.fetch` gives both the group
+`replicator.fetch` and the keys `replicator:cmd:fetch:<id>`. Today that means
+two namespaces, `fetch` and `replicate`.
+
+*Losing them costs re-work, never correctness.* Set-after-success means a key
+can only short-circuit work already known to have finished, so an empty
+namespace costs a re-fetch, a content-addressed re-store that is a no-op, and a
+duplicate fact the issuer contract already requires consumers to tolerate. The
+framing that matters: a `db0` that has lost these has lost the streams and the
+groups' **PELs** with them, and the PEL is Replicator's only durable record of
+intent - it has no database and no outbox. These keys are the cheapest thing in
+that blast radius.
+
+> **The plural is load-bearing, and getting it wrong is silent.** The ACL granted
+> `~replicator:cmd:fetch:*` until broker#9 - one segment of the namespace rather
+> than the namespace. Nothing could have observed the gap: the replicate loop
+> completes no commands while no alias table is provisioned, so its namespace is
+> **empty rather than absent**, and a grant derived from what was seen on the
+> wire cannot see a namespace with no traffic. The moment that loop completes
+> one - which is what broker#7 exists to make happen - the `EXISTS` before the
+> handler is denied, replicator#82 classifies `NOPERM` transient, and the loop
+> backs off and retries forever without ever running a handler. Nothing lost,
+> nothing progressing. Fixed live 2026-09-10 to `~replicator:cmd:*`;
+> `tests/deploy/test_redis_acl.py` now derives the namespaces from co-core's
+> command taxonomy, so a third command stream cannot arrive without a grant or
+> a red test. Same lesson as the `+exists` omission that wedged the fetch loop
+> the same day: **an observed inventory is only as good as its attribution**,
+> and a namespace with no traffic yet is the blind spot.
+
+Measured on this broker 2026-09-10: **37 keys on `db0`, 27 of them dedupe keys
+with TTLs and 10 streams without**, average TTL remaining ~13.5 h; every dedupe
+key under the `fetch` segment, the `replicate` segment empty. Replicator's own
+audit the day before found the same 27 with TTLs spanning 534 s to 84,713 s.
+The counts come from `INFO keyspace` and `SCAN MATCH`, which is all `brokeradmin`
+holds - it has no `+ttl` and no `+type`, deliberately, and the average is the
+one `INFO` reports.
 
 ## Who drains a DLQ (CannObserv/archiver#162)
 
@@ -336,6 +387,42 @@ entry can be refused and free enough on the error reply to put usage back under
 the cap, and a naive fill-then-probe sees `XADD` succeed two commands after it
 was refused. Anyone reproducing this should fill to the first refusal, then
 lower `maxmemory` below the current `used_memory` so the state holds still.
+
+### `noeviction` is load-bearing beyond refusing writes (CannObserv/broker#9)
+
+The policy matters as much as the cap, and for a reason that is not visible from
+`deploy/redis.conf.broker`.
+
+**Replicator's `replicator:cmd:*` keys are the only volatile keys on this
+instance.** Every other tenant writes streams, and a stream never carries a TTL.
+So under any `volatile-*` policy - `volatile-lru`, `volatile-ttl`,
+`volatile-random` - that one namespace is the *entire* eviction candidate set,
+and memory pressure would evict precisely it and nothing else: every stream,
+every consumer group and every PEL left intact, and every issuer none the wiser.
+
+The two failure modes are not comparable, and the worse one is the one that
+looks safer:
+
+| | `noeviction` at the cap | any `volatile-*` at the cap |
+|---|---|---|
+| What happens | the `denyoom` write is refused | replicator's dedupe keys are deleted |
+| How it presents | `OOM command not allowed`, instance-wide | **nothing** - eviction is not an error anyone sees |
+| What it costs | producers retry through it; verified for all three (broker#1 R5) | a TTL window of duplicate fetches against live origins |
+| How you learn | immediately, from every producer's journal | from the origins, or not at all |
+
+So "evict something rather than refuse writes" - the obvious change to reach for
+under memory pressure - buys a silent failure in exchange for a loud one, and
+picks the one namespace on the instance nobody would choose to lose. If a future
+tuning pass moves off `noeviction`, that trade has to be made deliberately, and
+`allkeys-*` is not the escape either: it evicts stream entries, which is the
+loss `## Detecting loss` exists to catch after the fact.
+
+Both halves are asserted rather than trusted:
+`test_tracked_config_sets_an_explicit_nonzero_maxmemory` pins the policy in the
+tracked config, and `test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance`
+pins the keyspace claim against the live broker - because the hazard changes
+shape the moment a second service writes a key with a TTL, and that is the day
+this section stops being true.
 
 ## Detecting loss - the one check that is not an upper bound
 
