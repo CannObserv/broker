@@ -808,3 +808,157 @@ def test_unit_backstop_exceeds_a_single_call_worst_case() -> None:
         f"a single Redis call can take {worst_call}s against a backstop of {backstop}s; "
         "the unit would be killed before the probe could report anything"
     )
+
+
+# --- notifier check-in (CannObserv/broker#3) ---
+#
+# The probe's findings were an audience of zero: a WARN line in journald on a
+# node nobody is logged into. The check-in is what gives them a reader - and,
+# more importantly, what makes SILENCE detectable, since a dead probe, a stopped
+# timer or a dead node all produce zero findings and zero traffic.
+
+
+@pytest.fixture
+def checkin_env(monkeypatch):
+    """Both variables set, plus a spy standing in for the HTTP call."""
+    monkeypatch.setenv("NOTIFIER_MONITOR_ID", "01JMONITOR")
+    monkeypatch.setenv("NOTIFIER_API_KEY", "k3y")
+    calls = []
+
+    def _spy(url, data, headers, timeout):
+        calls.append({"url": url, "data": json.loads(data), "headers": headers})
+        return 200
+
+    monkeypatch.setattr(bus_health, "_http_post", _spy)
+    return calls
+
+
+async def test_checkin_is_inert_when_unconfigured(fake_redis, tmp_path, monkeypatch) -> None:
+    """Unset is the default and must cost nothing. The probe predates the
+    check-in and has to keep working without it - a node that has not been wired
+    to notifier is not misconfigured."""
+    monkeypatch.delenv("NOTIFIER_MONITOR_ID", raising=False)
+    monkeypatch.delenv("NOTIFIER_API_KEY", raising=False)
+    monkeypatch.setattr(
+        bus_health, "_http_post", MagicMock(side_effect=AssertionError("must not post"))
+    )
+    monkeypatch.setattr(bus_health.logger, "info", MagicMock())
+
+    await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+
+async def test_checkin_posts_every_tick_even_with_no_findings(
+    fake_redis, tmp_path, monkeypatch, checkin_env
+) -> None:
+    """The arrival IS the signal. A findings-only push would be silent in every
+    case where the probe itself is the thing that died."""
+    monkeypatch.setattr(bus_health.logger, "info", MagicMock())
+
+    findings = await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    assert findings == []
+    assert len(checkin_env) == 1
+    assert checkin_env[0]["data"]["status"] == "ok"
+    assert checkin_env[0]["headers"]["X-API-Key"] == "k3y"
+
+
+async def test_checkin_reports_alert_and_carries_the_findings(
+    fake_redis, tmp_path, monkeypatch, checkin_env
+) -> None:
+    """`status` is the probe's own judgement - notifier does not learn this
+    repo's taxonomy - and the findings ride in `variables` for the monitor's
+    template to render."""
+    monkeypatch.setattr(bus_health.logger, "warning", MagicMock())
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+
+    await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    sent = checkin_env[0]["data"]
+    assert sent["status"] == "alert"
+    assert sent["variables"]["finding_count"] == 1
+    assert sent["variables"]["source"]
+    finding = sent["variables"]["findings"][0]
+    assert {"check", "subject", "message"} <= finding.keys()
+
+
+def test_the_checkin_url_cannot_be_pointed_at_the_dev_endpoint() -> None:
+    """Structural, and it is the reason the base URL is a constant rather than
+    configuration.
+
+    `notifier:9001` is `notifier_dev`, running against DEV_DATABASE_URL, and its
+    `/health` is **byte-identical** to production's - same status, same build -
+    so a wrong port cannot be caught by the obvious check. Worse, this monitor
+    alarms on the ABSENCE of check-ins, so a one-character typo would not degrade
+    it, it would invert it: the production monitor goes silent and reports the
+    broker dead while the broker is fine.
+
+    The operator therefore supplies a monitor id, never a host or a port. Same
+    move as `databases 1` against the db15 vector - make the wrong destination
+    unnameable rather than merely discouraged.
+    """
+    url = bus_health._checkin_url("01JMONITOR")
+    assert url.startswith("http://notifier:9000/")
+    assert "9001" not in url
+
+
+async def test_a_failed_checkin_is_a_warning_and_never_a_failed_unit(
+    fake_redis, tmp_path, monkeypatch, checkin_env
+) -> None:
+    """WARN-only is the probe's contract and the check-in does not get to break
+    it. A monitoring unit that starts failing on its own transport trains an
+    operator to ignore it - which is the failure this whole issue exists to
+    prevent, arriving through the fix."""
+    monkeypatch.setattr(bus_health, "_http_post", MagicMock(return_value=503))
+    warning_spy = MagicMock()
+    monkeypatch.setattr(bus_health.logger, "warning", warning_spy)
+    monkeypatch.setattr(bus_health.logger, "info", MagicMock())
+
+    findings = await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    assert findings == []  # the tick itself was clean
+    assert any("check-in" in str(c).lower() for c in warning_spy.call_args_list)
+
+
+async def test_a_checkin_that_raises_does_not_take_the_tick_with_it(
+    fake_redis, tmp_path, monkeypatch, checkin_env
+) -> None:
+    """A DNS failure, a DERP outage or a notifier restart must not lose the
+    findings the tick already collected - they are still going to journald,
+    which is the floor this repo never gives up."""
+    monkeypatch.setattr(bus_health, "_http_post", MagicMock(side_effect=OSError("no route")))
+    monkeypatch.setattr(bus_health.logger, "warning", MagicMock())
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+
+    findings = await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    assert [f.check for f in findings] == ["dlq"]
+
+
+async def test_half_configured_is_reported_not_ignored(fake_redis, tmp_path, monkeypatch) -> None:
+    """One variable without the other is a config mistake, and the failure it
+    would otherwise produce is silence - the same shape as the flag-plus-URL
+    startup guards the participants carry."""
+    monkeypatch.setenv("NOTIFIER_MONITOR_ID", "01JMONITOR")
+    monkeypatch.delenv("NOTIFIER_API_KEY", raising=False)
+    monkeypatch.setattr(
+        bus_health, "_http_post", MagicMock(side_effect=AssertionError("must not post"))
+    )
+    error_spy = MagicMock()
+    monkeypatch.setattr(bus_health.logger, "error", error_spy)
+    monkeypatch.setattr(bus_health.logger, "info", MagicMock())
+
+    await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    error_spy.assert_called_once()

@@ -68,8 +68,11 @@ import asyncio
 import json
 import os
 import shutil
+import socket
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,6 +216,29 @@ DLQ_UNASSIGNED = "no drainer assigned, broker is backstop"
 # taking a second flag, so it cannot be pointed somewhere the unit's User= does
 # not own.
 DLQ_EVIDENCE_DIRNAME = "dlq-evidence"
+
+
+# --- the notifier check-in (CannObserv/broker#3) ---
+#
+# Findings were an audience of zero: a WARN line in journald on a node nobody is
+# logged into. The check-in gives them a reader, and - the part that matters more
+# - makes SILENCE detectable. A dead probe, a stopped timer, a wedged `uv run` or
+# a dead node all produce zero findings and zero traffic, which is
+# indistinguishable from a healthy broker. So a report goes every tick regardless
+# of finding_count, and notifier alarms when one fails to arrive.
+#
+# THE BASE URL IS A CONSTANT, NOT CONFIGURATION, and that is deliberate.
+# `notifier:9001` is notifier_dev running against DEV_DATABASE_URL, the tailnet
+# policy currently admits it alongside :9000, and its /health is byte-identical
+# to production's - same status, same build - so a wrong port cannot be caught by
+# the obvious check. Since this monitor alarms on the *absence* of check-ins, a
+# one-character typo would not degrade it but invert it: check-ins land in the
+# dev database, the production monitor receives nothing, and it reports a
+# perfectly healthy broker as dead. The operator therefore supplies a monitor id
+# and never a host or a port. Same move as `databases 1` against the db15 vector
+# - make the wrong destination unnameable rather than merely discouraged.
+NOTIFIER_CHECKIN_BASE = "http://notifier:9000/api/v1/monitors"
+NOTIFIER_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -590,6 +616,78 @@ async def _collect_dlqs(client: Redis, *, evidence_dir: Path | None = None) -> l
     return findings
 
 
+def _checkin_url(monitor_id: str) -> str:
+    return f"{NOTIFIER_CHECKIN_BASE}/{monitor_id}/checkin"
+
+
+def _http_post(url: str, data: bytes, headers: dict[str, str], timeout: float) -> int:
+    """One blocking POST, returning the status code. Seam for the tests, and the
+    only place this module speaks HTTP.
+
+    ``urllib`` rather than a client library: this repo's dependency list is three
+    entries long on purpose, and one POST per ten minutes does not earn a fourth.
+    """
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as e:
+        return int(e.code)
+
+
+async def post_checkin(findings: list[Finding]) -> None:
+    """Report this tick to notifier, if this node has been wired to it.
+
+    Never raises and never changes the unit's exit status. WARN-only is the
+    probe's contract and the check-in does not get to break it: a monitoring unit
+    that starts failing on its own transport trains an operator to ignore it,
+    which is the failure CannObserv/broker#3 exists to prevent, arriving through
+    the fix.
+    """
+    monitor_id = os.environ.get("NOTIFIER_MONITOR_ID")
+    api_key = os.environ.get("NOTIFIER_API_KEY")
+
+    if not monitor_id and not api_key:
+        # Unset is the supported default. The probe predates the check-in and a
+        # node that has not been wired to notifier is not misconfigured.
+        return
+    if not (monitor_id and api_key):
+        logger.error(
+            "notifier check-in half-configured - NOTIFIER_MONITOR_ID and "
+            "NOTIFIER_API_KEY must both be set; not checking in",
+            extra={"has_monitor_id": bool(monitor_id), "has_api_key": bool(api_key)},
+        )
+        return
+
+    payload = {
+        # Our judgement, not notifier's: it does not learn this repo's taxonomy.
+        "status": "alert" if findings else "ok",
+        "variables": {
+            "source": socket.gethostname(),
+            "finding_count": len(findings),
+            "findings": [
+                {"check": f.check, "subject": f.subject, "message": f.message} for f in findings
+            ],
+        },
+    }
+    try:
+        status = await asyncio.to_thread(
+            _http_post,
+            _checkin_url(monitor_id),
+            json.dumps(payload).encode(),
+            {"X-API-Key": api_key, "Content-Type": "application/json"},
+            NOTIFIER_TIMEOUT_SECONDS,
+        )
+    except (OSError, ValueError) as e:
+        logger.warning(f"Bus health: notifier check-in failed: {e!r}", extra={"check": "checkin"})
+        return
+    if not 200 <= status < 300:
+        logger.warning(
+            f"Bus health: notifier check-in rejected with HTTP {status}",
+            extra={"check": "checkin", "status": status},
+        )
+
+
 async def collect_broker_findings(
     client: Redis, *, previous_pending: dict[str, int], evidence_dir: Path | None = None
 ) -> tuple[list[Finding], dict[str, int]]:
@@ -670,6 +768,10 @@ async def run_once(
         )
     summary = logger.warning if findings else logger.info
     summary("Bus health summary", extra={"finding_count": len(findings)})
+
+    # Last, and after the journald lines: journald is the floor this repo never
+    # gives up, so it must not be contingent on a network call succeeding.
+    await post_checkin(findings)
     return findings
 
 

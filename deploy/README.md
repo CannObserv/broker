@@ -209,6 +209,71 @@ rewrite time, which `maxmemory` also caps.
 The probe holds **no** database credential and joins **no** consumer group.
 Both are asserted by `tests/deploy/test_bus_health_units.py`.
 
+`/etc/broker/notifier.env` (`0400 root:root`, **optional**) carries the check-in
+credential - see *The notifier check-in* below.
+
+## The notifier check-in (broker#3)
+
+Every tick, the probe posts to notifier whether or not it found anything:
+
+```
+POST http://notifier:9000/api/v1/monitors/<id>/checkin
+X-API-Key: <key>
+{"status": "ok" | "alert", "variables": {"source", "finding_count", "findings"}}
+```
+
+**The report goes every tick regardless of `finding_count`, and that is the
+design rather than chattiness.** A findings-only push is silent in exactly the
+cases that matter most - a dead probe, a stopped timer, a wedged `uv run` or a
+dead node all produce zero findings and zero traffic, which is indistinguishable
+from a healthy broker. Notifier alarms on the *absence* of a report, so the
+arrival is the signal. `status` is the probe's own judgement (`finding_count > 0`
+maps to `alert`) because the alternative is notifier learning this repo's
+taxonomy.
+
+**Configure it with two variables, and never a host or a port:**
+
+| Variable | Where |
+|---|---|
+| `NOTIFIER_MONITOR_ID` | `/etc/broker/notifier.env` |
+| `NOTIFIER_API_KEY` | `/etc/broker/notifier.env` |
+
+```bash
+sudo install -m 0400 -o root -g root /dev/null /etc/broker/notifier.env
+sudo tee /etc/broker/notifier.env >/dev/null <<'ENV'
+NOTIFIER_MONITOR_ID=<id from POST /api/v1/monitors>
+NOTIFIER_API_KEY=<key>
+ENV
+sudo systemctl start broker-bus-health.service
+journalctl -u broker-bus-health -n 5 -o cat --no-pager
+```
+
+`0400 root:root`, and **not** `/etc/broker/.env`. That file is `0640
+root:exedev`, so the unit's own `User=` can read it at any time, running or not.
+systemd reads an `EnvironmentFile` as root *before* dropping privileges, so a
+root-only file still reaches the process while staying unreadable to the
+account. The process seeing its own environment is unavoidable; a second copy in
+a file `exedev` can `cat` is not.
+
+Both unset is the supported default and costs nothing - the `EnvironmentFile`
+line carries a leading `-`. One set without the other is a config mistake and is
+logged at ERROR, because the failure it would otherwise produce is silence.
+
+**The host and port are not configurable, deliberately.** `notifier:9001` is
+`notifier_dev` running against `DEV_DATABASE_URL`, the tailnet policy currently
+admits it alongside `:9000`, and its `/health` is byte-identical to production's
+- same status, same build - so a wrong port cannot be caught by the obvious
+check. Since this monitor alarms on the absence of check-ins, a one-character
+typo would not degrade it but **invert** it: reports land in the dev database,
+the production monitor receives nothing, and it declares a healthy broker dead.
+So the operator supplies a monitor id and the base URL is a constant in
+`src/broker/bus_health.py`. Same move as `databases 1` against the db15 vector -
+make the wrong destination unnameable rather than merely discouraged.
+
+A failed check-in is a WARN line and never a failed unit. The probe is WARN-only
+by contract, and a monitoring unit that starts failing on its own transport
+trains an operator to ignore it.
+
 ## DLQ evidence
 
 The probe writes captured DLQ entries to

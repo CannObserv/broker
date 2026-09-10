@@ -102,3 +102,21 @@ def test_installed_timer_matches_repo() -> None:
         "Reinstall with:\n"
         f"  sudo cp {REPO_TIMER} {INSTALLED_TIMER} && sudo systemctl daemon-reload"
     )
+
+
+def test_the_notifier_credential_has_a_file_of_its_own() -> None:
+    """CannObserv/broker#3's key must not ride in /etc/broker/.env.
+
+    That file is 0640 root:exedev, so the unit's own `User=` can read it at any
+    time, running or not. systemd reads an EnvironmentFile as root before
+    dropping privileges, so a 0400 root:root file still reaches the process
+    while staying unreadable to the account. The process seeing its own
+    environment is unavoidable and fine; a second copy sitting in a file the
+    account can `cat` is not.
+
+    The leading `-` is part of the contract: absent is the supported state, and
+    a node not yet wired to notifier must still start.
+    """
+    text = REPO_SERVICE.read_text()
+    assert "EnvironmentFile=-/etc/broker/notifier.env" in text
+    assert "Environment=NOTIFIER_API_KEY" not in text, "a credential never belongs in the unit"

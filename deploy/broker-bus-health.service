@@ -15,6 +15,20 @@ WorkingDirectory=/home/exedev/broker
 EnvironmentFile=/etc/broker/.env
 EnvironmentFile=-/home/exedev/broker/.env
 
+# NOTIFIER_MONITOR_ID and NOTIFIER_API_KEY (CannObserv/broker#3), in a file of
+# their own at 0400 root:root - NOT in /etc/broker/.env, which is 0640
+# root:exedev and therefore readable by this unit's own User= at any time,
+# whether or not the probe is running. systemd reads EnvironmentFile as root
+# before dropping privileges, so the process still gets the value while the
+# file stays unreadable to the account. The running process can of course see
+# its own environment; the point is that the credential is not also sitting in a
+# file `exedev` can cat.
+#
+# Leading `-`: absent is the supported state. The probe predates the check-in
+# and must start without it, so a node that has not been wired to notifier is
+# not a node with a broken unit.
+EnvironmentFile=-/etc/broker/notifier.env
+
 # This probe holds NO database credential. The outbox half of the old combined
 # probe stayed in archiver with the table it queries (archiver#193 D6), and with
 # it the ARCHIVER_ALLOW_PRODUCTION_DB opt-in that unit needs. Nothing here has a
