@@ -1139,18 +1139,6 @@ def test_backup_old_failure_before_a_newer_success_is_not_a_finding() -> None:
     assert evaluate_backup(state, now=_T0) == []
 
 
-def test_backup_snapshot_itself_going_stale_is_a_finding() -> None:
-    """Redis rewrites dump.rdb only at a `save` point. If those stop - a failing
-    BGSAVE, a full disk - every hourly backup is of the same stale snapshot and
-    the job reports success each time. The snapshot's own age is the signal."""
-    state = _backup_state(
-        last_success_at="2026-09-10T15:59:00Z", snapshot_at="2026-09-10T12:00:00Z"
-    )
-    (finding,) = evaluate_backup(state, now=_T0)
-    assert finding.check == "backup"
-    assert "snapshot" in finding.message
-
-
 def test_backup_corrupt_state_reads_as_never_run() -> None:
     (finding,) = evaluate_backup({"last_success_at": "not a time"}, now=_T0)
     assert finding.check == "backup"
@@ -1162,7 +1150,7 @@ def test_persistence_healthy() -> None:
         "aof_last_write_status": "ok",
         "aof_last_bgrewrite_status": "ok",
     }
-    assert evaluate_persistence(info) == []
+    assert evaluate_persistence(info, now=_T0) == []
 
 
 @pytest.mark.parametrize(
@@ -1178,14 +1166,58 @@ def test_persistence_error_is_a_finding(field: str) -> None:
         "aof_last_bgrewrite_status": "ok",
         field: "err",
     }
-    (finding,) = evaluate_persistence(info)
+    (finding,) = evaluate_persistence(info, now=_T0)
     assert finding.check == "persistence"
     assert field in finding.message
 
 
 def test_persistence_missing_fields_are_not_findings() -> None:
     """fakeredis and a server without the section: a probe limitation, not a fault."""
-    assert evaluate_persistence({}) == []
+    assert evaluate_persistence({}, now=_T0) == []
+
+
+_OK = {
+    "rdb_last_bgsave_status": "ok",
+    "aof_last_write_status": "ok",
+    "aof_last_bgrewrite_status": "ok",
+}
+
+
+def test_persistence_overdue_save_is_a_finding() -> None:
+    """The backup's blind spot, seen from the server: changes have been waiting
+    longer than any `save` rule should allow, so dump.rdb - and therefore every
+    hourly backup - is the same stale file. Read from INFO rather than from the
+    backup's state file, because only the server can tell "nothing to save"
+    from "not saving"."""
+    info = {
+        **_OK,
+        "rdb_changes_since_last_save": 5,
+        "rdb_last_save_time": int((_T0 - timedelta(hours=4)).timestamp()),
+    }
+    (finding,) = evaluate_persistence(info, now=_T0)
+    assert finding.check == "persistence"
+    assert "5 changes" in finding.message
+    assert "backup" in finding.message
+
+
+def test_persistence_idle_server_is_not_overdue() -> None:
+    """No changes means no save is due, however old the last one is. The
+    state-side rule this replaced would have called an idle broker broken."""
+    info = {
+        **_OK,
+        "rdb_changes_since_last_save": 0,
+        "rdb_last_save_time": int((_T0 - timedelta(hours=10)).timestamp()),
+    }
+    assert evaluate_persistence(info, now=_T0) == []
+
+
+def test_persistence_recent_save_with_pending_changes_is_not_overdue() -> None:
+    info = {
+        **_OK,
+        "rdb_changes_since_last_save": 500,
+        "rdb_last_save_time": int((_T0 - timedelta(minutes=10)).timestamp()),
+    }
+    assert evaluate_persistence(info, now=_T0) == []
 
 
 async def test_run_once_reports_the_backup_when_told_where_its_state_is(

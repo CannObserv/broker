@@ -46,7 +46,7 @@ was recovered by replaying that history; that was margin, not design.
 | **Retained** | 30 days, by the **bucket's lifecycle rule**. The node's identity cannot delete |
 | **RPO** | the backup interval plus the save interval: under two hours worst case, about an hour typically |
 | **Credential** | `/etc/broker/co-broker-backup.json` (0400 root:root), `roles/storage.objectCreator` + `roles/storage.objectViewer` on that one bucket. **No Redis credential** - the job reads a file |
-| **Watched by** | the probe: `backup` findings (never completed, last attempt failed, last success too old, snapshot itself too old) and `persistence` findings (`rdb_last_bgsave_status` and friends), both reaching notifier |
+| **Watched by** | the probe: `backup` findings (never completed, last attempt failed, last success too old) and `persistence` findings (`rdb_last_bgsave_status` and friends, and changes left unsaved for over three hours - the case where every hourly backup is the same stale file, judged from the server because only it can tell idle from broken), both reaching notifier |
 
 It holds no opinion on the AOF (never shipped - point in time is the contract),
 on configuration (this repo is the copy), or on secrets (below).
@@ -105,8 +105,10 @@ So the snapshot has to *become* the base of a multi-part AOF. That is all
 ```
 
 Redis recognises the base by its `REDIS` magic, loads it, opens the incr file,
-and the next write appends there. Every stream, every group's position and PEL,
-and every TTL come back exactly; the rehearsal asserts each one.
+and the next write appends there. Every stream and every group's position and
+PEL come back exactly, and every TTL comes back as its absolute expiry - a key
+whose expiry passed during the outage is gone, correctly. The rehearsal asserts
+each one.
 
 `restore.py` refuses to touch an existing `appendonlydir`. Moving one aside is
 the operator's decision, made by hand, because the directory it would replace
@@ -189,8 +191,7 @@ pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
 B="redis://brokeradmin:$(pw BROKERADMIN)@localhost:6379/0"
 
 journalctl -u redis-server -n 20 -o cat --no-pager | grep -E 'loaded from base file|DB index'
-redis-cli -u "$B" --no-auth-warning DBSIZE          # == the object's `keys` metadata
-redis-cli -u "$B" --no-auth-warning INFO keyspace   # expires > 0: replicator's guards came back with their TTLs
+redis-cli -u "$B" --no-auth-warning INFO keyspace   # db0:keys=N,expires=M - the rule is below
 
 for s in info.changes info.registry info.watch-status content.fetch content.fetch-policy \
          content.blobs content.revisions content.artifacts content.replicate; do
@@ -204,6 +205,16 @@ done
 `DB loaded from base file appendonly.aof.1.base.rdb` in the journal is the
 line that says the snapshot was read. `Creating AOF base file` is the line
 that says it was not - stop, the directory is wrong.
+
+The key count is a bound, not an equality. `keys` is at most the object's
+`keys` metadata (`restore --list` prints it), short by exactly the
+`replicator:cmd:fetch:*` guards whose expiry passed between the snapshot and
+now - and the base loads those before the expiry cycle removes them, so for a
+second after start the count can read higher than it will settle at. After an
+outage longer than a guard's TTL, `expires` is 0, and that is correct:
+replicator refetches those commands unguarded, which is what a guard expiring
+means. The checks that must be exact are the `XLEN` and `XINFO GROUPS` lines.
+(`DBSIZE` is not granted to `brokeradmin`, and is not needed.)
 
 ### 5. What the participants see
 
@@ -219,8 +230,10 @@ Then:
 - **PEL entries are redelivered** through each consumer's `XAUTOCLAIM`, which
   is what the PEL is for.
 - **Watcher's LWW streams** republish their full set within five minutes.
-- **Replicator's `cmd:fetch:*` guards** come back with the TTLs they had at
-  the snapshot.
+- **Replicator's `cmd:fetch:*` guards** come back with their absolute
+  expiries, so any that lapsed during the outage are already gone and
+  replicator refetches those commands unguarded - which is what a guard
+  expiring means.
 
 ### 6. Close out
 
@@ -263,13 +276,24 @@ sudo mv /var/lib/redis/appendonlydir "/var/lib/redis/appendonlydir.$(date -u +%Y
 
 ```bash
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
+  /home/exedev/broker/.venv/bin/python -m src.broker.restore --list'       # newest first, with keys and sha256
+sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
   /home/exedev/broker/.venv/bin/python -m src.broker.restore --latest --into /tmp/rehearsal'
-redis-check-rdb /tmp/rehearsal/appendonlydir/appendonly.aof.1.base.rdb      # \o/ RDB looks OK! \o/
+sudo chown -R "$(id -u)" /tmp/rehearsal       # staged as root; the throwaway server runs as you
+redis-check-rdb /tmp/rehearsal/appendonlydir/appendonly.aof.1.base.rdb   # \o/ RDB looks OK! \o/  N keys read, M expires
+sha256sum /tmp/rehearsal/appendonlydir/appendonly.aof.1.base.rdb         # == the sha256 `--list` printed for it
 redis-server --port 6399 --bind 127.0.0.1 --dir /tmp/rehearsal --appendonly yes --save '' \
     --daemonize yes --pidfile /tmp/rehearsal/pid --logfile /tmp/rehearsal/log
-redis-cli -p 6399 XINFO GROUPS content.fetch
-sudo kill "$(cat /tmp/rehearsal/pid)" && rm -rf /tmp/rehearsal
+sleep 1; grep -E 'loaded from base file|Creating AOF base' /tmp/rehearsal/log   # the first line, never the second
+redis-cli -p 6399 INFO keyspace
+for s in content.fetch content.revisions content.artifacts content.replicate content.blobs; do
+    echo "== $s"; redis-cli -p 6399 XINFO GROUPS "$s"
+done
+redis-cli -p 6399 SHUTDOWN NOSAVE; rm -rf /tmp/rehearsal   # nothing left listening, nothing left on disk
 ```
+
+The throwaway server holds a copy of production data, unauthenticated, on
+loopback; the last line is not optional.
 
 The state file the job writes is `/var/lib/broker-backup/state.json`; the
 probe reads it every ten minutes and its `backup` finding is what turns a
@@ -279,11 +303,14 @@ silent failure into a notifier alert.
 
 ## Provisioning the bucket and the writer
 
-Done 2026-09-10 - the writer is
-`co-broker-backup@co-gcs.iam.gserviceaccount.com` - and kept for the next
-cluster. From a workstation with `roles/storage.admin`; the node's identity
-cannot read the bucket's own metadata, so the lifecycle rule is verifiable only
-from there (the same blindness replicator's writer has).
+**Done 2026-09-10.** The writer is the account the block below creates,
+`co-broker-backup` in project `co-gcs`; the block is kept as it was run, for the
+next cluster. Run it from a workstation with `roles/storage.admin`: the node's
+identity cannot read the bucket's own metadata, so the location and the
+lifecycle rule are verifiable only from there (the same blindness replicator's
+writer has). The one value this record does not carry is the location - it was
+created to match `co-gcs-blobs`, and the node cannot read it back; the
+`describe` at the end of the block is where to confirm both it and the rule.
 
 ```bash
 PROJECT=co-gcs
@@ -294,6 +321,8 @@ gcloud storage buckets create "gs://$BUCKET" --project="$PROJECT" --location=<sa
     --uniform-bucket-level-access --public-access-prevention
 printf '{"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]}\n' > /tmp/lifecycle.json
 gcloud storage buckets update "gs://$BUCKET" --lifecycle-file=/tmp/lifecycle.json
+gcloud storage buckets describe "gs://$BUCKET" --format="yaml(location, lifecycle_config)"
+#   those are `gcloud storage`'s key names; the API's camelCase spellings print nothing rather than erroring
 
 gcloud iam service-accounts create "$SA" --project="$PROJECT" --display-name="co-broker RDB backup writer"
 for role in roles/storage.objectCreator roles/storage.objectViewer; do
@@ -333,21 +362,30 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
   The control case, the same snapshot with no staging, comes up with `DBSIZE 0`.
 - **2026-09-10, by hand** on `co-broker`, throwaway servers, Redis 7.0.15:
   positions intact; the control confirmed the trap.
-- **2026-09-10 16:32 to 16:35 UTC, against the first real object.** The first
-  run created `co-broker/20260910T153511Z.rdb.gz` - 498,485 bytes of RDB,
-  144,810 gzipped, 37 keys, 27 of them with TTLs - and the metadata read back
-  from GCS matched the state file field for field. A second run two minutes
-  later reported `unchanged`: the create's precondition came back as a 412 and
-  not a 403 under an identity holding no `delete`, which is the assumption the
-  create-only design rests on, now observed rather than reasoned.
-  `restore --latest` staged that object on a scratch directory;
-  `redis-check-rdb` passed and the base's sha256 matched the metadata; a
-  throwaway server under `appendonly yes` logged `DB loaded from base file`
-  and came up with 36 of the 37 keys - the 37th a `replicator:cmd:fetch:*`
-  guard whose TTL had elapsed in the hour since the snapshot, which is the
-  correct outcome - and every group at exactly its snapshot position:
-  `replicator.fetch` and `watcher.blobs` at `entries-read 993` against the
-  live broker's 994 an hour on, the other three identical to live.
+- **2026-09-10 16:03 UTC, before the key existed.** The unit was started once
+  to prove the sandbox: it loaded its env, failed at the absent key file, and
+  recorded `last_failure_at` under `ProtectSystem=strict`. The state directory
+  was then removed by hand so the probe would read "not installed" until the
+  timer was enabled - which is why the first success below has no failure
+  beside it.
+- **16:32 UTC, the first run with the key.** Created
+  `co-broker/20260910T153511Z.rdb.gz`: 498,485 bytes of RDB, 144,810 gzipped,
+  37 keys. Every field the object's metadata carries matched the state file.
+  The 27 keys with TTLs are `redis-check-rdb`'s `expires` line, which neither
+  carries.
+- **16:34 UTC, a second run.** `unchanged`: the 412 that *Why create-only*
+  predicts, observed - not a 403 from the missing `delete`.
+- **16:35 UTC, the restore.** `restore --latest` staged that object on a
+  scratch directory; `redis-check-rdb` passed and the base's sha256 matched the
+  metadata. A throwaway server under `appendonly yes` logged `DB loaded from
+  base file` and came up with 36 of the 37 keys (the 37th a
+  `replicator:cmd:fetch:*` guard whose expiry had passed in the hour since the
+  snapshot) and every group at exactly its snapshot position:
+  `replicator.fetch` and `watcher.blobs` at `entries-read 993` against the live
+  broker's 994 an hour on, the other three identical to live. The server was
+  shut down and the directory removed.
+- **Minutes later, the probe.** Its next tick with the state file present
+  raised no `backup` finding: `finding_count: 0`.
 
 ---
 

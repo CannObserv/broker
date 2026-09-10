@@ -37,8 +37,9 @@ directives (`dir` and `logfile` get rewritten), which the live-config test would
 then see as drift.
 
 So the ACL cutover rode broker#5's window on 2026-09-10. `databases 1` was to
-ride the same one and did not - see the incident in `docs/RESTART-WINDOW.md`;
-it waits on a `BGREWRITEAOF` that itself waits on broker#4.
+ride the same one and did not - see the incident in `docs/RESTART-WINDOW.md`.
+It needs a `BGREWRITEAOF` first, which broker#4's backup made acceptable the
+same day; the remaining window is a matter of scheduling.
 
 Two things the tracked file cannot be written without knowing, both found by
 `tests/deploy/test_redis_acl.py` loading it into a throwaway server rather than
@@ -340,11 +341,15 @@ atomically at its `save` points, so the file is the interface.
 
 The probe reads the job's state file (`/var/lib/broker-backup/state.json`)
 every tick and reports, in order of precedence: never completed a run; the last
-attempt failed (with the error); the last success older than three hours; the
-snapshot itself older than three hours while the job succeeds - which is Redis's
-`save` points having stopped, and is also reported directly as a `persistence`
-finding from `rdb_last_bgsave_status`. A missing state *directory* means the
-unit is not installed on this node and is not a finding.
+attempt failed (with the error); the last success older than three hours. The
+case where the job succeeds every hour while shipping the same stale file is
+judged from the server instead - a `persistence` finding when `INFO
+persistence` shows changes left unsaved for over three hours, or any of its
+`*_status` fields not `ok` - because only the server can tell an idle broker
+from one whose save points have stopped. A missing state *directory* means the
+unit is not installed on this node and is not a finding. After a failed run the
+state file's `outcome` is `failed`; the last success stays on record beside it,
+which is what the staleness rule reads.
 
 **A restored snapshot is ignored under `appendonly yes` unless it is staged as
 the AOF base** - `python -m src.broker.restore` does that, and

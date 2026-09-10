@@ -48,6 +48,8 @@ MANIFEST_FILE = "appendonly.aof.manifest"
 # manifest parser is strict about both.
 MANIFEST = f"file {BASE_FILE} seq 1 type b\nfile {INCR_FILE} seq 1 type i\n"
 DEFAULT_REDIS_DIR = Path("/var/lib/redis")
+# What `--list` prints beside each name, in this order.
+_LISTED_METADATA = ("snapshot_at", "keys", "size_bytes", "redis_version", "sha256")
 
 
 class RestoreError(Exception):
@@ -73,10 +75,23 @@ def stage_appendonlydir(rdb: Path, redis_dir: Path) -> Path:
     return target
 
 
+def describe_objects(client: storage.Client, bucket: str, prefix: str) -> list[tuple[str, dict]]:
+    """Snapshots under ``prefix`` as ``(name, metadata)``, newest first.
+
+    A listing returns each object's metadata with it, so this is one request
+    under ``objectViewer`` - which is what lets an operator on the node, which
+    has no gcloud and an identity that cannot read bucket metadata, see a
+    snapshot's ``sha256`` and ``keys`` before staging it and check the staged
+    base against them after.
+    """
+    blobs = client.list_blobs(bucket, prefix=f"{prefix.strip('/')}/", timeout=LIST_TIMEOUT_SECONDS)
+    described = [(b.name, dict(b.metadata or {})) for b in blobs if b.name.endswith(OBJECT_SUFFIX)]
+    return sorted(described, key=lambda pair: pair[0], reverse=True)
+
+
 def list_objects(client: storage.Client, bucket: str, prefix: str) -> list[str]:
     """Snapshot names under ``prefix``, newest first - the names sort by time."""
-    blobs = client.list_blobs(bucket, prefix=f"{prefix.strip('/')}/", timeout=LIST_TIMEOUT_SECONDS)
-    return sorted((b.name for b in blobs if b.name.endswith(OBJECT_SUFFIX)), reverse=True)
+    return [name for name, _meta in describe_objects(client, bucket, prefix)]
 
 
 def newest_object(client: storage.Client, bucket: str, prefix: str) -> str | None:
@@ -148,8 +163,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         client = storage.Client()
         if args.list:
-            for name in list_objects(client, args.bucket, args.prefix):
-                print(f"gs://{args.bucket}/{name}")
+            for name, meta in describe_objects(client, args.bucket, args.prefix):
+                described = "  ".join(f"{k}={meta[k]}" for k in _LISTED_METADATA if meta.get(k))
+                print(f"gs://{args.bucket}/{name}  {described}".rstrip())
             return 0
         name = args.object or newest_object(client, args.bucket, args.prefix)
         if name is None:

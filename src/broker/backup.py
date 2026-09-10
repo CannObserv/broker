@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from google.api_core.exceptions import GoogleAPICallError, NotFound, PreconditionFailed
+from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
 from src.broker.logging import configure_logging, get_logger
@@ -286,10 +286,13 @@ def save_backup_state(path: Path, state: dict) -> None:
 
 
 def record_failure(state_path: Path, error: str, *, at: datetime) -> None:
-    """A failure never erases the last success: the probe's staleness rule
-    needs it to stay visible through a run of failures."""
+    """A failure never erases the last success - the probe's staleness rule
+    needs it to stay visible through a run of failures - but ``outcome`` is
+    the last RUN's, so it must not keep saying ``uploaded`` from the hour
+    before. An operator reading the file after a failed start would otherwise
+    take the previous success for this run's."""
     state = load_backup_state(state_path)
-    state.update({"last_failure_at": iso(at), "last_error": error})
+    state.update({"outcome": "failed", "last_failure_at": iso(at), "last_error": error})
     save_backup_state(state_path, state)
 
 
@@ -322,7 +325,14 @@ def run_backup(
         gzip_bytes = gzip_file(snapshot.path, gz)
         preflight(client, bucket, prefix)
         outcome = upload(client, bucket, key, gz, snapshot, host=host)
-    except (BackupError, GoogleAPICallError, OSError) as exc:
+    except Exception as exc:
+        # Broad on purpose. A revoked key surfaces from google.auth as a
+        # RefreshError and a transport fault as a TransportError - neither a
+        # GoogleAPICallError nor an OSError - and whatever the type, the run
+        # failed and the probe must be able to say so from the state file. A
+        # traceback in the journal with no record is the silent backup again,
+        # by a narrower door. Recorded, then re-raised as the one type main()
+        # maps to a failed unit.
         error = f"{type(exc).__name__}: {exc}"
         record_failure(state_path, error, at=at)
         logger.error(f"Backup failed: {error}", extra={"rdb": str(rdb), "bucket": bucket})

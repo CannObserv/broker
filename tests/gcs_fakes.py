@@ -32,6 +32,7 @@ class FakeBlob:
         self.name = name
         self.metadata: dict[str, str] | None = None
         self.content_type: str | None = None
+        self.size: int | None = None
 
     def upload_from_filename(
         self,
@@ -106,6 +107,12 @@ class FakeClient:
             if max_results is not None:
                 names = names[:max_results]
             for key in names:
-                yield self._bucket.blob(key)
+                # A listing returns full object resources, metadata included -
+                # which is what lets `restore --list` describe snapshots from a
+                # node that has no gcloud and cannot read bucket metadata.
+                blob = self._bucket.blob(key)
+                blob.metadata = dict(self._bucket.metadata.get(key, {})) or None
+                blob.size = len(self._bucket.objects[key])
+                yield blob
 
         return _iter()

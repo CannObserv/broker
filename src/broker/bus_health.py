@@ -531,12 +531,14 @@ def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int)
 # Three hours: two missed hourly ticks plus the timer's jitter, so one slow run
 # does not flap.
 BACKUP_WARN_MAX_AGE_SECONDS = 3 * 3600.0
-# The snapshot's own age, independent of the job's. Redis rewrites dump.rdb at
-# its `save` points (this broker's: `3600 1`, `300 100`, `60 10000`), so a
-# snapshot older than this means the saves stopped - a failing BGSAVE, a full
-# disk - and every backup since has been of the same file. Watcher republishes
-# to this broker every five minutes, so there is no idle hour to confuse it with.
-SNAPSHOT_WARN_MAX_AGE_SECONDS = 3 * 3600.0
+# How long changes may sit unsaved before the `save` points are judged to have
+# stopped. This broker's rules are `3600 1`, `300 100`, `60 10000`, so a single
+# pending change is on disk within the hour; three hours of pending changes
+# means a failing BGSAVE or a full disk, and every backup since has been of
+# the same file. Read from INFO rather than from the backup's state file,
+# because only the server can tell "nothing to save" from "not saving": an
+# idle broker's snapshot is old and correct.
+SAVE_OVERDUE_WARN_SECONDS = 3 * 3600.0
 
 
 def _parse_iso(value: object) -> datetime | None:
@@ -565,9 +567,10 @@ def evaluate_backup(state: dict | None, *, now: datetime, installed: bool = True
 
     One finding per situation, by precedence: never succeeded; a failure newer
     than the last success (the failure names the cause); a success too old
-    (the timer is not completing); and only then, for a job that is running
-    fine, a snapshot too old - the case where the job cannot tell anything is
-    wrong because the file it ships is the same every hour.
+    (the timer is not completing). The case where the job succeeds every hour
+    while shipping the same stale file is not judged from here - it is the
+    server's `save` points having stopped, and ``evaluate_persistence`` reads
+    that from the server, which can tell idle from broken.
     """
     if state is None and not installed:
         return []
@@ -603,20 +606,6 @@ def evaluate_backup(state: dict | None, *, now: datetime, installed: bool = True
                 "completing; check `systemctl status broker-backup.timer` and the journal",
             )
         ]
-    snapshot_at = _parse_iso(state.get("snapshot_at"))
-    if snapshot_at is not None:
-        snapshot_age = (now - snapshot_at).total_seconds()
-        if snapshot_age > SNAPSHOT_WARN_MAX_AGE_SECONDS:
-            return [
-                Finding(
-                    check="backup",
-                    subject="rdb",
-                    message=f"newest snapshot is {_hours(snapshot_age)} old (warn over "
-                    f"{_hours(SNAPSHOT_WARN_MAX_AGE_SECONDS)}) while the job succeeds - "
-                    "dump.rdb is not being rewritten, so Redis's save points have "
-                    "stopped and every backup since is of the same file",
-                )
-            ]
     return []
 
 
@@ -627,16 +616,26 @@ _PERSISTENCE_STATUS_FIELDS = (
 )
 
 
-def evaluate_persistence(info: dict) -> list[Finding]:
-    """Warn when the server reports its own persistence failing.
+def _as_int(value: object) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def evaluate_persistence(info: dict, *, now: datetime) -> list[Finding]:
+    """Warn when the server reports its persistence failing, or quietly not happening.
 
     ``rdb_last_bgsave_status`` is the backup's blind spot seen from the other
     side: while it is ``err`` the file the job ships stops changing.
     ``aof_last_write_status`` is worse - an AOF the server cannot write is a
-    broker that will start refusing writes. Missing fields are a server without
-    the section (fakeredis), a probe limitation rather than a fault.
+    broker that will start refusing writes. And changes that have waited longer
+    than ``SAVE_OVERDUE_WARN_SECONDS`` with no save at all are the same stale
+    file every hour without any status going ``err``. Missing fields are a
+    server without the section (fakeredis), a probe limitation rather than a
+    fault.
     """
-    return [
+    findings = [
         Finding(
             check="persistence",
             subject="redis",
@@ -646,6 +645,21 @@ def evaluate_persistence(info: dict) -> list[Finding]:
         for field in _PERSISTENCE_STATUS_FIELDS
         if field in info and str(info[field]) != "ok"
     ]
+    changes = _as_int(info.get("rdb_changes_since_last_save"))
+    last_save = _as_int(info.get("rdb_last_save_time"))
+    if changes and last_save is not None:
+        unsaved_for = now.timestamp() - last_save
+        if unsaved_for > SAVE_OVERDUE_WARN_SECONDS:
+            findings.append(
+                Finding(
+                    check="persistence",
+                    subject="redis",
+                    message=f"{changes} changes unsaved for {_hours(unsaved_for)} (warn over "
+                    f"{_hours(SAVE_OVERDUE_WARN_SECONDS)}) - the save points are not firing, "
+                    "so dump.rdb and every backup shipped since are the same stale file",
+                )
+            )
+    return findings
 
 
 # --- collectors ---
@@ -809,7 +823,7 @@ async def _collect_persistence(client: Redis) -> list[Finding]:
         info = await client.info("persistence")
     except ResponseError:
         return []  # same limitation as _collect_memory: a server without INFO
-    return evaluate_persistence(info)
+    return evaluate_persistence(info, now=datetime.now(UTC))
 
 
 async def _collect_dlqs(client: Redis, *, evidence_dir: Path | None = None) -> list[Finding]:

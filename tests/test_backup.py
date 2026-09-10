@@ -288,6 +288,7 @@ def test_run_backup_fails_loudly_on_a_missing_bucket_and_records_it(rdb, bucket,
     assert "last_success_at" not in state
     assert state["last_failure_at"] == "2026-09-10T15:53:08Z"
     assert "not found" in state["last_error"]
+    assert state["outcome"] == "failed"  # the last RUN, not the last success
     assert bucket.objects == {}
 
 
@@ -301,6 +302,7 @@ def test_a_failure_keeps_the_previous_success_on_record(rdb, bucket, tmp_path) -
     state = _state(tmp_path)
     assert state["last_success_at"] == good["last_success_at"]
     assert state["object"] == good["object"]
+    assert state["outcome"] == "failed"
     assert state["last_failure_at"] > state["last_success_at"]
 
 
@@ -361,3 +363,19 @@ def test_main_exits_nonzero_when_the_backup_fails(stub_main) -> None:
     both need the non-zero."""
     stub_main.run.side_effect = BackupError("bucket not found")
     assert backup.main(stub_main.argv) == 1
+
+
+def test_run_backup_records_any_failure_not_only_the_anticipated_ones(
+    rdb, client, tmp_path
+) -> None:
+    """A revoked key surfaces from google.auth as RefreshError, a transport
+    fault as TransportError - neither is a GoogleAPICallError nor an OSError.
+    Whatever the type, the run failed and the probe must be able to say so from
+    the state file; a traceback in the journal with no record is the silent
+    backup again, by a narrower door."""
+    checker = MagicMock(side_effect=RuntimeError("something nobody anticipated"))
+    with pytest.raises(BackupError, match="nobody anticipated"):
+        _run(rdb, client, tmp_path, checker=checker)
+    state = _state(tmp_path)
+    assert state["last_error"] == "RuntimeError: something nobody anticipated"
+    assert state["last_failure_at"] == "2026-09-10T15:53:08Z"

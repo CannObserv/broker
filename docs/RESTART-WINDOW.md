@@ -5,8 +5,11 @@ Runbook for CannObserv/broker#5, and the CannObserv/broker#2 cutover it enables.
 > **Status, 2026-09-10.** The `aclfile` half of the window ran at 00:46 UTC,
 > steps 2 and 3 followed rolling, and **step 4 retired the shared password at
 > 14:18 UTC** - `default` is `off`. What remains of #5 is `databases 1`, which
-> must be preceded by step 1a-bis (`BGREWRITEAOF`) and is held until broker#4
-> gives that rewrite a backup to destroy.
+> must be preceded by step 1a-bis (`BGREWRITEAOF`). **That hold lifted at 16:32
+> UTC the same day**: broker#4's hourly snapshot to `co-gcs-broker-backup` is
+> the recovery path the rewrite needs behind it, and its restore has been
+> rehearsed against a real object (`docs/RECOVERY.md`). The window is a matter
+> of scheduling.
 >
 > Consequence for every command below: `$U` (`default:`) was the identity of the
 > first window and **no longer authenticates between windows**. Read as
@@ -35,7 +38,7 @@ be done one service at a time with a rollback after each.
 | **Expected downtime** | under a minute - one `systemctl restart` |
 | **Blast radius** | all three participants lose the bus for that minute |
 | **Reversible** | yes, at every step |
-| **Data touched** | none. `/var/lib/redis` is not written by any step here |
+| **Data touched** | none by steps 1b to 1d and 2 to 4. Step 1a-bis rewrites the AOF and discards its history, deliberately, after a fresh snapshot has been shipped off-node |
 
 ---
 
@@ -66,6 +69,11 @@ live-settable via `CONFIG SET` anyway, so it never needs a window.
       with a single hourly Watched Item, so the quiesce is effectively free.
 - [ ] `uv run pytest` green on `co-broker` with the env sourced (**0 skipped**
       is the expected shape here; skips mean an artifact is missing).
+- [ ] The backup pipeline is healthy before anything depends on it:
+      `journalctl -u broker-backup -n 1 -o cat --no-pager` says `uploaded` or
+      `unchanged` with a `snapshot_at` inside the last hour, and the probe's
+      last tick raised no `backup` finding. A rotated key is found here, with
+      nothing open, not inside the window.
 - [ ] `deploy/redis-acl.conf` is the version you intend to install. Read it -
       the grants are the security boundary, and the `content.blobs` omission on
       `archiver` is the one nobody should "fix".
@@ -180,22 +188,45 @@ step 4's rollback - and step 4 is repeated to close it once the verification in
 1d is done.
 
 The rewrite destroys the AOF history, which is what recovered the incident
-below. Since broker#4 that is acceptable, because the recovery path is the
-hourly snapshot in `co-gcs-broker-backup` - but ship a fresh one first, so the
-newest snapshot is minutes old rather than up to an hour, and check it went:
+below. That is acceptable now that broker#4 ships an hourly snapshot to
+`co-gcs-broker-backup`, with one step first. The backup job ships whatever
+`dump.rdb` is, and only a save point rewrites that file, so a snapshot shipped
+by hand is up to an hour old unless you take the save yourself - `default` is
+on at this point, and `SAVE` is synchronous and sub-second on this dataset.
+The object is named by the save's own time, so the run reports `uploaded` and
+the journal line's `snapshot_at` is the minute just gone:
 
 ```bash
-sudo systemctl start broker-backup.service && sudo cat /var/lib/broker-backup/state.json
-#   "outcome": "uploaded" (or "unchanged" if no save point has passed - then wait for one, or
-#   accept that the newest snapshot is the one named there); docs/RECOVERY.md has the restore.
-redis-cli -u "$U" --no-auth-warning BGREWRITEAOF
-sleep 5
+redis-cli -u "$U" --no-auth-warning SAVE                   # -> OK
+sudo systemctl start broker-backup.service
+journalctl -u broker-backup -n 1 -o cat --no-pager         # THIS run's line, not the state file:
+#   "message": "Backup uploaded: gs://co-gcs-broker-backup/co-broker/<now>.rdb.gz", ..., "snapshot_at": "<now>"
+```
+
+`SAVE` rather than `BGSAVE`, deliberately: a background save leaves a child
+running, and a `BGREWRITEAOF` issued while one runs is only *scheduled*. If the
+line says `unchanged`, the save did not happen - read the `SAVE` reply. If the
+unit fails, systemd prints one line and the journal carries the error; the
+state file says `outcome: failed` too, but the journal is this run's and the
+file is cumulative. The restore, should it ever be needed, is
+`docs/RECOVERY.md`, *Same node, lost data*.
+
+Now the rewrite:
+
+```bash
+sudo ls /var/lib/redis/appendonlydir/                      # note the base number, <n>
+redis-cli -u "$U" --no-auth-warning BGREWRITEAOF           # -> Background append only file rewriting started
+while redis-cli -u "$U" --no-auth-warning INFO persistence | tr -d '\r' \
+      | grep -E '^aof_rewrite_(in_progress|scheduled):' | grep -qv ':0$'; do sleep 1; done
 redis-cli -u "$U" --no-auth-warning INFO persistence \
-    | grep -E 'aof_rewrite_in_progress|aof_last_bgrewrite_status'
+    | grep -E '^aof_(rewrites|rewrite_scheduled|rewrite_in_progress|last_bgrewrite_status):'
+#   aof_rewrites:1                  <- a counter, up by one from what it was
+#   aof_rewrite_scheduled:0
 #   aof_rewrite_in_progress:0
-#   aof_last_bgrewrite_status:ok
+#   aof_last_bgrewrite_status:ok    <- also what a server that never rewrote reports; proves nothing alone
 sudo ls -la /var/lib/redis/appendonlydir/
-#   a NEW base (appendonly.aof.<n+1>.base.rdb) and a near-empty incr
+#   appendonly.aof.<n+1>.base.rdb at roughly the dataset's size (~500 KB today; the old base was
+#   89 bytes) and a near-empty incr. THE BASE NUMBER ADVANCING IS THE CHECK.
 ```
 
 The rewrite regenerates the base from the current in-memory dataset, which
@@ -204,9 +235,11 @@ with the rewrite, a restart under `databases 1` keeps every key and logs **zero*
 `DB index is out of range`. Without it, the same restart loses everything older
 than the flush.
 
-**Do not skip the verification.** If `aof_last_bgrewrite_status` is not `ok`, or
-the base file's number did not advance, the landmine is still armed and the next
-step is the one that steps on it.
+**Do not skip the verification.** If `aof_rewrites` did not go up by one, or the
+base file's number did not advance, the landmine is still armed and the next
+step is the one that steps on it. A `NOPERM` or `WRONGPASS` on the
+`BGREWRITEAOF` line means the window was never opened - `default` is still
+off - and everything after it printed the never-ran defaults.
 
 ### Step 1b - add the two directives
 
@@ -271,7 +304,10 @@ classify a broker outage as transient.
 
 Remove the two directives from `/etc/redis/redis.conf`, `systemctl restart
 redis-server`. `/etc/redis/users.acl` can stay - it is inert without `aclfile`.
-No data is involved at any point.
+No data is involved in the rollback itself. The AOF history that step 1a-bis
+rewrote is gone either way; the snapshot shipped just before it is what stands
+behind a restart that comes up wrong (`docs/RECOVERY.md`, *Same node, lost
+data*).
 
 ---
 
@@ -448,7 +484,7 @@ It appears twice above, before and after the restart, for this reason.
 | `ERR DB index is out of range` from a test suite | `databases 1` working as intended | fix the test's URL; do not widen `databases` |
 | `redis-cli -u .../15` prints that error **and then `PONG`** | redis-cli falls back to db0 and carries on; redis-py raises instead | not a fault - but never verify `databases 1` with a URL suffix, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
 | Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u redis-server` |
-| Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart; the AOF still holds the history and replays correctly once the database exists again |
+| Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
 | `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
 
 ---

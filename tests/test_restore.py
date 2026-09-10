@@ -147,13 +147,27 @@ def test_main_refuses_when_the_bucket_holds_nothing(stub_main) -> None:
     assert not (stub_main.redis_dir / APPENDONLY_DIRNAME).exists()
 
 
-def test_main_list_prints_newest_first(stub_main, capsys) -> None:
-    for key in ("co-broker/20260910T153511Z.rdb.gz", "co-broker/20260910T163511Z.rdb.gz"):
-        stub_main.bucket.objects[key] = b""
+def test_main_list_prints_newest_first_with_what_the_metadata_says(stub_main, capsys) -> None:
+    """The node has no gcloud and its identity cannot read bucket metadata, but
+    a listing carries each object's metadata for free. Printing it is what
+    lets an operator verify a staged base's sha256 against the object it came
+    from, on the node, during a rebuild."""
+    newest = "co-broker/20260910T163511Z.rdb.gz"
+    stub_main.bucket.objects["co-broker/20260910T153511Z.rdb.gz"] = b"old"
+    stub_main.bucket.objects[newest] = b"new"
+    stub_main.bucket.metadata[newest] = {
+        "snapshot_at": "2026-09-10T16:35:11Z",
+        "sha256": "abc123",
+        "keys": "37",
+        "size_bytes": "498485",
+    }
     assert restore.main(["--list"]) == 0
     lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
-    assert lines[0].endswith("20260910T163511Z.rdb.gz")
-    assert lines[1].endswith("20260910T153511Z.rdb.gz")
+    assert lines[0].startswith(f"gs://a-backup-bucket/{newest}")
+    assert "snapshot_at=2026-09-10T16:35:11Z" in lines[0]
+    assert "keys=37" in lines[0]
+    assert "sha256=abc123" in lines[0]
+    assert lines[1].startswith("gs://a-backup-bucket/co-broker/20260910T153511Z.rdb.gz")
 
 
 def test_main_file_stages_a_local_snapshot_without_a_client(stub_main, rdb) -> None:
