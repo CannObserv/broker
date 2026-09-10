@@ -279,9 +279,11 @@ silent failure into a notifier alert.
 
 ## Provisioning the bucket and the writer
 
-Done from a workstation with `roles/storage.admin`; the node's identity cannot
-read the bucket's own metadata, so the lifecycle rule is verifiable only from
-there (the same blindness replicator's writer has).
+Done 2026-09-10 - the writer is
+`co-broker-backup@co-gcs.iam.gserviceaccount.com` - and kept for the next
+cluster. From a workstation with `roles/storage.admin`; the node's identity
+cannot read the bucket's own metadata, so the lifecycle rule is verifiable only
+from there (the same blindness replicator's writer has).
 
 ```bash
 PROJECT=co-gcs
@@ -331,8 +333,21 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
   The control case, the same snapshot with no staging, comes up with `DBSIZE 0`.
 - **2026-09-10, by hand** on `co-broker`, throwaway servers, Redis 7.0.15:
   positions intact; the control confirmed the trap.
-- **Against a real object in `co-gcs-broker-backup`**: pending the credential;
-  recorded here when done.
+- **2026-09-10 16:32 to 16:35 UTC, against the first real object.** The first
+  run created `co-broker/20260910T153511Z.rdb.gz` - 498,485 bytes of RDB,
+  144,810 gzipped, 37 keys, 27 of them with TTLs - and the metadata read back
+  from GCS matched the state file field for field. A second run two minutes
+  later reported `unchanged`: the create's precondition came back as a 412 and
+  not a 403 under an identity holding no `delete`, which is the assumption the
+  create-only design rests on, now observed rather than reasoned.
+  `restore --latest` staged that object on a scratch directory;
+  `redis-check-rdb` passed and the base's sha256 matched the metadata; a
+  throwaway server under `appendonly yes` logged `DB loaded from base file`
+  and came up with 36 of the 37 keys - the 37th a `replicator:cmd:fetch:*`
+  guard whose TTL had elapsed in the hour since the snapshot, which is the
+  correct outcome - and every group at exactly its snapshot position:
+  `replicator.fetch` and `watcher.blobs` at `entries-read 993` against the
+  live broker's 994 an hour on, the other three identical to live.
 
 ---
 

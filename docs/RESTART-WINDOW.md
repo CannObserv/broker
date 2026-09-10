@@ -177,9 +177,17 @@ So the two halves of R4's fix are hostile in this order and safe in the other.
 Purge the history first. `BGREWRITEAOF` belongs to no user but `default`, so
 this is where the window is opened - `ACL SETUSER default on` as `acladmin`,
 step 4's rollback - and step 4 is repeated to close it once the verification in
-1d is done:
+1d is done.
+
+The rewrite destroys the AOF history, which is what recovered the incident
+below. Since broker#4 that is acceptable, because the recovery path is the
+hourly snapshot in `co-gcs-broker-backup` - but ship a fresh one first, so the
+newest snapshot is minutes old rather than up to an hour, and check it went:
 
 ```bash
+sudo systemctl start broker-backup.service && sudo cat /var/lib/broker-backup/state.json
+#   "outcome": "uploaded" (or "unchanged" if no save point has passed - then wait for one, or
+#   accept that the newest snapshot is the one named there); docs/RECOVERY.md has the restore.
 redis-cli -u "$U" --no-auth-warning BGREWRITEAOF
 sleep 5
 redis-cli -u "$U" --no-auth-warning INFO persistence \
