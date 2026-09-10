@@ -10,7 +10,7 @@ the health probe's.
 | `wait-for-tailnet-addr.sh` | `/usr/local/sbin/` | R1's boot-race insurance. Probes `/proc/net/fib_trie`, never `ip addr` |
 | `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth + evidence capture, disk. Never blocks anything |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
-| `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). **Not yet installed** - it needs `aclfile` in redis.conf, which is immutable, so it rides the restart window in broker#5 |
+| `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day. Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
 (skipping when absent, so CI and dev clones pass), and
@@ -34,7 +34,9 @@ a file this repo only partly tracks, and `CONFIG REWRITE` normalises unrelated
 directives (`dir` and `logfile` get rewritten), which the live-config test would
 then see as drift.
 
-So the ACL cutover rides broker#5's window alongside `databases 1`.
+So the ACL cutover rode broker#5's window on 2026-09-10. `databases 1` was to
+ride the same one and did not - see the incident in `docs/RESTART-WINDOW.md`;
+it waits on a `BGREWRITEAOF` that itself waits on broker#4.
 
 Two things the tracked file cannot be written without knowing, both found by
 `tests/deploy/test_redis_acl.py` loading it into a throwaway server rather than
@@ -62,24 +64,30 @@ sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
 silently makes it `nopass` - an anonymous client is served while
 `CONFIG GET requirepass` still returns the password, which is R2 arriving as a
 side effect of turning on the mechanism meant to prevent it. And setting it
-`off` at first load locks out all three services, because the restart lands
-before any of them has moved onto its own credential. So the tracked file
-declares `default` **enabled, with today's password**, and retiring it is the
-last step rather than the first.
+`off` at the first load locks out every service still on `default:`, because
+that restart lands before any of them has moved onto its own credential. So on
+this cluster the file went in reading `on` with the then-current password,
+retiring it was the last step rather than the first, and **the tracked file now
+says `off`** - still carrying its password, because `off` is a flag that leaves
+the password set intact and the rollback `ACL SETUSER default on` would
+otherwise enable a `nopass` user with `+@all`. A new cluster repeats the order:
+`on` for the first load, migrate, `off` live.
 
-1. **In the window** - install `/etc/redis/users.acl`, add `aclfile` and
-   `databases 1` to `redis.conf`, restart. Nothing changes for any service:
+1. **In the window** - install `/etc/redis/users.acl`, add `aclfile` to
+   `redis.conf` (and `databases 1` only after a `BGREWRITEAOF` - see the
+   runbook's step 1a-bis), restart. Nothing changes for any service:
    every URL still says `default:` and `default` still has the same password.
    Confirm the tailnet wait fired, `NRestarts=0`, and that an anonymous
    `redis-cli` is refused.
 2. **Rolling, no window** - flip each service's URL to its own credential, one
    at a time, verifying each before the next.
 3. **Rolling** - flip the probe's `BROKER_REDIS_URL` to `brokeradmin`.
-4. **Live** - `ACL SETUSER default off` then `ACL SAVE`, run as `default`.
-   Reversing it, and widening any grant afterwards, is done as **`acladmin`** -
+4. **Live** - `ACL SETUSER default off` then `ACL SAVE`, run as **`acladmin`**,
    the break-glass user that exists because `+acl` would otherwise belong to
    nobody once `default` is off, freezing every grant on the broker
-   permanently. See `docs/RESTART-WINDOW.md` step 4.
+   permanently. Done 2026-09-10. Reversing it, widening any grant afterwards,
+   and re-opening `default` for a restart window are all done the same way.
+   See `docs/RESTART-WINDOW.md` step 4.
 
 Steps 2 to 4 are reversible and need no restart, which is the point of putting
 the irreversible-feeling step last. And all three participants classify `NOPERM`
@@ -197,13 +205,15 @@ rewrite time, which `maxmemory` also caps.
 
 `/etc/broker/.env` (`root:exedev`, `0640`) carries:
 
-- `BROKER_REDIS_URL` - what the probe connects to. Include the `default:`
-  username explicitly (`redis://default:<password>@localhost:6379/0`): the
-  empty-username form authenticates for redis-py and **fails** for `redis-cli`,
-  which sends a two-argument `AUTH "" <password>`, so every shell tool degrades
-  silently while the services look green (CannObserv/archiver#195). `localhost`
-  rather than `broker`, because this probe runs *on* the broker and `redis.conf`
-  binds loopback as well as the tailnet address, deliberately.
+- `BROKER_REDIS_URL` - what the probe connects to:
+  `redis://brokeradmin:<password>@localhost:6379/0`. The username is
+  load-bearing twice over: the empty-username form means `default`, which is
+  disabled since 2026-09-10, and even while it worked it **failed** for
+  `redis-cli`, which sends a two-argument `AUTH "" <password>`, so every shell
+  tool degraded silently while the services looked green
+  (CannObserv/archiver#195). `localhost` rather than `broker`, because this
+  probe runs *on* the broker and `redis.conf` binds loopback as well as the
+  tailnet address, deliberately.
 - `GOOGLE_APPLICATION_CREDENTIALS` - the read-only `co-pypi-reader` key the
   `uv run` in `ExecStart` needs to resolve `co-core` from the wheelhouse.
 

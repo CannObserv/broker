@@ -2,6 +2,25 @@
 
 Runbook for CannObserv/broker#5, and the CannObserv/broker#2 cutover it enables.
 
+> **Status, 2026-09-10.** The `aclfile` half of the window ran at 00:46 UTC,
+> steps 2 and 3 followed rolling, and **step 4 retired the shared password at
+> 14:18 UTC** - `default` is `off`. What remains of #5 is `databases 1`, which
+> must be preceded by step 1a-bis (`BGREWRITEAOF`) and is held until broker#4
+> gives that rewrite a backup to destroy.
+>
+> Consequence for every command below: `$U` (`default:`) was the identity of the
+> first window and **no longer authenticates between windows**. Read as
+> `brokeradmin`, change ACLs as `acladmin`, and for anything needing
+> `CONFIG SET`, `BGREWRITEAOF` or a shutdown, open the window by re-enabling
+> `default` and close it by disabling it again - step 4, both directions.
+>
+> ```bash
+> pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
+> B="redis://brokeradmin:$(pw BROKERADMIN)@localhost:6379/0"   # read, sweep, diagnose
+> A="redis://acladmin:$(pw ACLADMIN)@localhost:6379/0"         # ACL changes only
+> U="redis://default:$(pw DEFAULT)@localhost:6379/0"           # window-only; refused while off
+> ```
+
 Restarting `redis-server` on `co-broker` disconnects all three participants, so
 it is a cohort-wide event rather than a maintenance detail. This window carries
 everything that needs one, and nothing that does not.
@@ -45,8 +64,8 @@ live-settable via `CONFIG SET` anyway, so it never needs a window.
 
 - [ ] All three service owners agree the window. The cohort is pre-production
       with a single hourly Watched Item, so the quiesce is effectively free.
-- [ ] `uv run pytest` green on `co-broker` with the env sourced (**83 passed,
-      0 skipped** is the expected shape here; skips mean an artifact is missing).
+- [ ] `uv run pytest` green on `co-broker` with the env sourced (**0 skipped**
+      is the expected shape here; skips mean an artifact is missing).
 - [ ] `deploy/redis-acl.conf` is the version you intend to install. Read it -
       the grants are the security boundary, and the `content.blobs` omission on
       `archiver` is the one nobody should "fix".
@@ -59,13 +78,14 @@ live-settable via `CONFIG SET` anyway, so it never needs a window.
 
 ### 1. Mint the ACL passwords
 
-Five, one per placeholder. `__DEFAULT_PW__` is **the current `requirepass`
-value**, not a new one - that is what makes the restart a no-op for every
-service.
+Six, one per placeholder, plus `default`. `__DEFAULT_PW__` is **the current
+`requirepass` value**, not a new one - that is what makes the first restart a
+no-op for every service, and it stays on the line after `default` is retired so
+that the rollback can never land on `nopass`.
 
 ```bash
 sudo install -m 0400 -o root -g root /dev/null /etc/redis/broker-acl-passwords
-for p in ARCHIVER WATCHER REPLICATOR BROKERADMIN CITEST; do
+for p in ARCHIVER WATCHER REPLICATOR BROKERADMIN ACLADMIN CITEST; do
     echo "__${p}_PW__=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40)"
 done | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
 echo "__DEFAULT_PW__=$(sudo cat /etc/redis/broker-password)" \
@@ -90,17 +110,19 @@ sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
     | sudo tee /root/users.acl.check >/dev/null
 
 sudo redis-server --port 6399 --bind 127.0.0.1 --save '' --appendonly no \
-    --daemonize yes --logfile /root/aclcheck.log --aclfile /root/users.acl.check
+    --daemonize yes --pidfile /root/aclcheck.pid --logfile /root/aclcheck.log \
+    --aclfile /root/users.acl.check
 sleep 1
 redis-cli -p 6399 PING                                  # -> NOAUTH  (not PONG!)
-redis-cli -p 6399 -u "redis://default:$(sudo cat /etc/redis/broker-password)@127.0.0.1:6399" ACL LIST
-redis-cli -p 6399 -u "redis://default:$(sudo cat /etc/redis/broker-password)@127.0.0.1:6399" SHUTDOWN NOSAVE
+redis-cli -u "redis://acladmin:$(sudo sed -n 's/^__ACLADMIN_PW__=//p' /etc/redis/broker-acl-passwords)@127.0.0.1:6399" ACL LIST
+sudo kill "$(sudo cat /root/aclcheck.pid)"              # no user holds +shutdown, by design
 sudo shred -u /root/users.acl.check /root/aclcheck.log
 ```
 
 **`PING` must return `NOAUTH`.** If it returns `PONG`, stop - see *The `nopass`
-trap* below. `ACL LIST` must show six users: `archiver`, `watcher`,
-`replicator`, `brokeradmin`, `citest`, `default`.
+trap* below. `ACL LIST` must show seven users: `archiver`, `watcher`,
+`replicator`, `brokeradmin`, `acladmin`, `citest`, and `default` - **`off`**
+since step 4, still carrying its password hash.
 
 ### 3. Note where each service lives
 
@@ -152,7 +174,10 @@ done on 2026-09-08, and `FLUSHDB` is now sitting in the AOF.** Under
 is gone. Only entries appended *after* the flush survive.
 
 So the two halves of R4's fix are hostile in this order and safe in the other.
-Purge the history first:
+Purge the history first. `BGREWRITEAOF` belongs to no user but `default`, so
+this is where the window is opened - `ACL SETUSER default on` as `acladmin`,
+step 4's rollback - and step 4 is repeated to close it once the verification in
+1d is done:
 
 ```bash
 redis-cli -u "$U" --no-auth-warning BGREWRITEAOF
@@ -275,12 +300,21 @@ grant degrades to a backing-off publisher rather than dead-lettering valid
 events. Widen the grant live:
 
 ```bash
-redis-cli -u "$U" --no-auth-warning ACL SETUSER <service> +<command>
-redis-cli -u "$U" --no-auth-warning ACL SAVE      # persists to /etc/redis/users.acl
+redis-cli -u "$A" --no-auth-warning ACL SETUSER <service> +<command>
+redis-cli -u "$A" --no-auth-warning ACL SAVE      # persists to /etc/redis/users.acl
 ```
 
 Then add the same grant to `deploy/redis-acl.conf` and commit it, or the next
 render silently reverts it.
+
+This exact path ran on 2026-09-10, unplanned. `replicator` had been left without
+`+exists` (the command was in its observed inventory and attributed to the wrong
+client), and the moment replicator#85 brought its group loops back every fetch
+command was delivered, denied, retried and never acked. `XPENDING` climbed 2 to
+3, the probe's two-tick rule fired, the notifier alert reached a person, `ACL
+LOG` named the command in one query, and the `SETUSER` above drained the PEL to
+0 with no restart. Nothing dead-lettered, because replicator#82 classifies
+`NOPERM` as transient. That is the recovery story, exercised.
 
 ### Step 3 - the probe onto `brokeradmin`
 
@@ -296,28 +330,55 @@ failed: NoPermissionError`, it is a missing grant, not an outage.
 
 ### Step 4 - retire the shared password
 
-**Last, and only once steps 2 and 3 are confirmed for all four clients.**
+**Done 2026-09-10 14:18 UTC**, as `acladmin`. Recorded as it was run, so the
+next cluster - or this one after broker#4 rebuilds it - has the shape.
+
+**Last, and only once steps 2 and 3 are confirmed for all four clients.** The
+check is not "the services look fine"; it is that no connection is
+authenticated as `default`:
 
 ```bash
-redis-cli -u "$U" --no-auth-warning ACL SETUSER default off
-redis-cli -u "$U" --no-auth-warning ACL SAVE
+redis-cli -u "$B" --no-auth-warning CLIENT LIST | grep -oE 'user=[^ ]+' | sort | uniq -c
+#   4 user=archiver  1 user=brokeradmin  3 user=replicator  3 user=watcher  - and no user=default
+redis-cli -u "$B" --no-auth-warning ACL LOG 5             # quiet: nothing newer than the last fix
+redis-cli -u "$A" --no-auth-warning ACL LIST | grep '^user acladmin'   # precondition, not optional
 ```
 
-Run as `default` - this is the last thing `default` ever does. Then update
-`deploy/redis-acl.conf` to `user default off` and commit, so the tracked file
-matches what `ACL SAVE` wrote.
-
-**Precondition, and it is not optional: `acladmin` must exist first.**
-
 ```bash
-redis-cli -u "$U" --no-auth-warning ACL LIST | grep '^user acladmin'
+redis-cli -u "$A" --no-auth-warning ACL SETUSER default off
+redis-cli -u "$A" --no-auth-warning ACL SAVE
 ```
 
-Reversing step 4, and widening any grant afterwards:
+Then verify every axis, not only the one that changed:
 
 ```bash
-A="redis://acladmin:<pw>@localhost:6379/0"
-redis-cli -u "$A" --no-auth-warning ACL SETUSER default on ">$(sudo cat /etc/redis/broker-password)" '~*' '&*' +@all
+redis-cli --no-auth-warning PING                           # -> NOAUTH Authentication required.
+redis-cli -u "$U" --no-auth-warning PING                   # -> WRONGPASS ... or user is disabled
+for u in archiver watcher replicator brokeradmin acladmin citest; do
+    redis-cli -u "redis://$u:$(pw "$(echo "$u" | tr a-z A-Z)")@localhost:6379/0" --no-auth-warning PING   # -> PONG, each
+done
+redis-cli -u "$B" --no-auth-warning CLIENT LIST | grep -c 'flags=b'    # same count as before the flip
+sudo grep '^user default' /etc/redis/users.acl             # -> user default off #<hash> ~* &* +@all
+```
+
+`ACL SETUSER default off` does **not** disconnect clients already authenticated
+as `default` on this Redis (7.0): they keep working until they reconnect, and
+then fail. That is why the `CLIENT LIST` check comes first - a straggler would
+break at its next restart rather than now, and look healthy in between.
+
+Then update `deploy/redis-acl.conf` to `user default off` - keeping its
+`>__DEFAULT_PW__` - and commit, so the tracked file matches what `ACL SAVE`
+wrote. `tests/deploy/test_redis_acl.py` pins the line as declared, `off`, and
+carrying a password.
+
+Reversing step 4 - and, from now on, **opening any restart window**, since no
+other user can `BGREWRITEAOF`, `CONFIG SET` or shut the server down:
+
+```bash
+redis-cli -u "$A" --no-auth-warning ACL SETUSER default on     # the password survives 'off'
+redis-cli -u "$A" --no-auth-warning ACL SAVE
+# ... the window ...
+redis-cli -u "$A" --no-auth-warning ACL SETUSER default off
 redis-cli -u "$A" --no-auth-warning ACL SAVE
 ```
 
@@ -358,8 +419,10 @@ including the user-owned `observo-primary` - arriving as a *side effect of
 enabling the mechanism meant to prevent it*.
 
 `deploy/redis-acl.conf` therefore always declares `default`, and
-`test_default_is_declared_and_enabled_at_first_load` fails if the line is ever
-removed. **The one-line check is `redis-cli PING` with no credentials at all.**
+`test_default_is_declared_disabled_and_still_carries_a_password` fails if the
+line is ever removed - or if it loses its password, which would turn the
+rollback `ACL SETUSER default on` into the same trap by another door. **The
+one-line check is `redis-cli PING` with no credentials at all.**
 It appears twice above, before and after the restart, for this reason.
 
 ---
@@ -395,7 +458,12 @@ It appears twice above, before and after the restart, for this reason.
 - **Do not grant `archiver` `~content.blobs`** to make an error go away. That
   omission is the entire reason this file exists.
 - **Do not do step 4 before steps 2 and 3.** `user default off` with any client
-  still on `default:` locks that client out.
+  still on `default:` locks that client out. `CLIENT LIST` grouped by `user=`
+  is the check, and it showed zero `default` connections before the flip.
+- **Do not start a restart window with `default` still `off`.** Nothing else
+  can `CONFIG SET save ""` when a restart comes up wrong, and the on-disk copies
+  are being overwritten by the minute while someone finds `acladmin`'s
+  password. Re-enable before the restart, disable after the verification.
 - **Do not schedule this window alongside any service's own VM move.** R6
   generalised: one moving part at a time.
 
@@ -437,7 +505,9 @@ every group, 27 `replicator:cmd:fetch:*` keys with TTLs intact, `db0: 37 keys /
   window. **`CONFIG SET save ""` and `CONFIG SET auto-aof-rewrite-percentage 0`
   are the first commands to run when a restart comes up wrong** - before
   diagnosing anything - because both of the on-disk copies are being actively
-  overwritten while you think.
+  overwritten while you think. Since step 4 only `default` can run them, which
+  is why a window is entered with `default` already re-enabled and left that
+  way until the verification is done.
 - **An AOF rewrite would have been unrecoverable.** `auto-aof-rewrite-min-size`
   is 64 MB and the incr was 41 MB, so it did not fire. It was margin, not design.
 - **The probe reported nothing wrong.** Every threshold is an upper bound -

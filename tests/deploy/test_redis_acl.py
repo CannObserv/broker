@@ -160,8 +160,8 @@ def test_a_dlq_writer_can_also_drain_it(users, user) -> None:
         assert command in users[user], f"{user} cannot drain its own DLQ: missing {command}"
 
 
-def test_default_is_declared_and_enabled_at_first_load(users) -> None:
-    """The two-sided trap that makes this the sharpest line in the file.
+def test_default_is_declared_disabled_and_still_carries_a_password(users) -> None:
+    """The sharpest line in the file, and it has now been through both of its states.
 
     **Omitting `default` from an aclfile silently makes it `nopass`** - verified
     on a scratch instance: `requirepass` set, aclfile without a `default` line,
@@ -169,19 +169,34 @@ def test_default_is_declared_and_enabled_at_first_load(users) -> None:
     returns the password. The ACL subsystem takes ownership of `default` the
     moment an aclfile exists and defaults it to `nopass ~* &* +@all`. That is R2
     arriving as a side effect of turning on the mechanism meant to prevent it,
-    and every check anyone would think to run still reports auth as on.
+    and every check anyone would think to run still reports auth as on. So the
+    line must exist.
 
-    **And `off` here locks out all three services**, because the restart that
-    enables `aclfile` lands before any service has moved onto its own
-    credential - every URL still says `default:` at that instant.
+    **It is `off` because CannObserv/broker#2 step 4 ran on 2026-09-10** - live,
+    as `acladmin`, once every service and the probe were on their own
+    credential. The shared password is no longer an identity anything can
+    authenticate as, and the tracked file says so, so that a re-render onto a
+    rebuilt node (broker#4) cannot quietly reopen it.
 
-    So the file must declare `default`, and must declare it enabled with a
-    password. Disabling it is a live `ACL SETUSER` at the end of the cutover.
+    **It keeps its password while disabled**, which looks redundant and is not.
+    `off` is a flag; the password set is untouched by it, and the rollback is
+    `ACL SETUSER default on` - which on a line carrying no password would enable
+    a `nopass` user holding `+@all`. The password on a disabled user is what
+    makes the rollback land somewhere safe.
+
+    The one ordering caveat is for a NEW cluster whose services still say
+    `default:` at the restart that enables `aclfile`: there this line must read
+    `on` for that first load and go `off` live at the end, or the restart locks
+    all three services out. That sequence is recorded in docs/RESTART-WINDOW.md
+    and is history on this one.
     """
     assert "default" in users, "omitting default from an aclfile makes it nopass"
     rules = users["default"]
-    assert rules[0] == "on", f"default must stay enabled at first load, got {rules}"
-    assert any(r.startswith(">") for r in rules), "default must carry a password, not nopass"
+    assert rules[0] == "off", f"the shared password was retired on 2026-09-10; got {rules}"
+    assert any(r.startswith(">") for r in rules), (
+        "a disabled default must still carry a password: "
+        "'ACL SETUSER default on' would otherwise roll back to nopass"
+    )
     assert "nopass" not in rules
 
 
@@ -347,32 +362,35 @@ def test_anonymous_access_is_refused_at_first_load(live_acl_broker) -> None:
         live_acl_broker().ping()
 
 
-def test_disabling_default_is_live_and_reversible(live_acl_broker) -> None:
-    """The last step of the cutover, exercised rather than trusted.
+def test_retiring_default_is_reversible_live_as_acladmin(live_acl_broker) -> None:
+    """The last step of the cutover and its undo, exercised as the users that
+    actually perform them.
 
-    Retiring the shared password is the one genuinely irreversible-feeling step,
-    so it is deliberately the one that needs no window: `ACL SETUSER` applies
-    immediately and `ACL SETUSER default on >...` puts it back.
+    The tracked file ships `default off`, so on this throwaway server the shared
+    identity is refused from the first load - the state the production broker
+    has been in since 2026-09-10. The rollback is one live `ACL SETUSER` as
+    `acladmin`, the only user holding `+acl`, and it is issued WITHOUT
+    re-supplying a password: that is the assertion that `off` leaves the
+    password set intact, which is what makes carrying a password on a disabled
+    user worth its apparent redundancy. Then it is disabled again the same way.
 
-    **Read what this proves carefully.** It runs as `default`, which on this
-    throwaway server still holds `+@all`, so it demonstrates the *mechanism* and
-    not the production rollback path - in production `default` is the user being
-    disabled and cannot undo its own disabling. What makes the rollback real
-    there is `acladmin`, pinned by
-    ``test_a_grant_can_still_be_widened_after_default_is_disabled``. Before that
-    user existed, this test read as proof of something it does not establish.
+    An earlier version of this test ran as `default` and disabled itself, which
+    demonstrated the mechanism and nothing about the production path - there
+    `default` is the user being disabled and cannot undo its own disabling.
     """
-    admin = live_acl_broker("default")
-    assert admin.ping()
-
-    admin.execute_command("ACL", "SETUSER", "default", "off")
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
         live_acl_broker("default").ping()
     # The per-service users are untouched by it - that is the whole point.
     assert live_acl_broker("archiver").ping()
 
-    admin.execute_command("ACL", "SETUSER", "default", "on", f">{PASSWORD}", "~*", "&*", "+@all")
-    assert live_acl_broker("default").ping()
+    admin = live_acl_broker("acladmin")
+    try:
+        admin.execute_command("ACL", "SETUSER", "default", "on")
+        assert live_acl_broker("default").ping()
+    finally:
+        admin.execute_command("ACL", "SETUSER", "default", "off")
+    with pytest.raises(redis_pkg.exceptions.AuthenticationError):
+        live_acl_broker("default").ping()
 
 
 def test_archiver_is_refused_content_blobs_but_served_its_own_streams(live_acl_broker) -> None:
