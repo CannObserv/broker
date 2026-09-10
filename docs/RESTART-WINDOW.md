@@ -4,12 +4,16 @@ Runbook for CannObserv/broker#5, and the CannObserv/broker#2 cutover it enables.
 
 > **Status, 2026-09-10.** The `aclfile` half of the window ran at 00:46 UTC,
 > steps 2 and 3 followed rolling, and **step 4 retired the shared password at
-> 14:18 UTC** - `default` is `off`. What remains of #5 is `databases 1`, which
-> must be preceded by step 1a-bis (`BGREWRITEAOF`). **That hold lifted at 16:32
-> UTC the same day**: broker#4's hourly snapshot to `co-gcs-broker-backup` is
-> the recovery path the rewrite needs behind it, and its restore has been
-> rehearsed against a real object (`docs/RECOVERY.md`). The window is a matter
-> of scheduling.
+> 14:18 UTC**, and **`databases 1` landed at 20:10 UTC**. Both halves of R4 are
+> closed and this runbook is now a record rather than a plan. It is kept because
+> the next cluster needs the shape, and because step 1a-bis is the one nobody
+> should rediscover.
+>
+> The order that worked, all in one window with `default` re-enabled for it:
+> `SAVE`, ship a backup off-node, `BGREWRITEAOF` and verify the base number
+> advanced, add the directive to both files, restart, verify against a
+> before-snapshot, `default off`. Zero `DB index is out of range` on the
+> restart, every group at its position, 2 seconds of downtime.
 >
 > Consequence for every command below: `$U` (`default:`) was the identity of the
 > first window and **no longer authenticates between windows**. Read as
@@ -241,6 +245,20 @@ step is the one that steps on it. A `NOPERM` or `WRONGPASS` on the
 `BGREWRITEAOF` line means the window was never opened - `default` is still
 off - and everything after it printed the never-ran defaults.
 
+**As executed, 2026-09-10 20:06 UTC.** The AOF held **61 `SELECT` commands
+naming db 0, 14 and 15** plus one `FLUSHDB` - db14 as well as the db15 this
+runbook anticipated, so the blast radius was wider than the incident write-up
+assumed. After the rewrite: `aof_rewrites` 0 to 1, base `appendonly.aof.1` to
+`appendonly.aof.2`, base size 89 bytes to 508,520, incr 42.9 MB to **0**, and
+zero `SELECT` or `FLUSHDB` left in the new incr file. The server logged
+`Removing the history file appendonly.aof.1.incr.aof`, which is the 42.9 MB
+carrying the flush. Confirm it the same way:
+
+```bash
+sudo grep -ac '^SELECT'  /var/lib/redis/appendonlydir/appendonly.aof.*.incr.aof   # -> 0
+sudo grep -ac '^FLUSHDB' /var/lib/redis/appendonlydir/appendonly.aof.*.incr.aof   # -> 0
+```
+
 ### Step 1b - add the two directives
 
 To **both** `/etc/redis/redis.conf` (inside the `CannObserv/broker#1` block, or
@@ -272,33 +290,77 @@ sudo systemctl restart redis-server
 
 ### Step 1d - verify, in this order
 
+**`redis-server` does not log to journald on this node.** `logfile` is
+`/var/log/redis/redis-server.log`, so `journalctl -u redis-server` holds exactly
+one entry in the unit's whole history - the one time the tailnet wait actually
+had to wait. Every check below that reads the server's own output therefore
+reads the **file**. This is not pedantry: the earlier version of this runbook
+grepped the journal for `DB index is out of range`, which is the single check
+that would have caught the 2026-09-10 incident, and it would have returned
+"0 occurrences" on an empty journal and read as a pass.
+
 ```bash
-# R1's boot race. The wait must be visible; observo#473 is what it prevents.
-journalctl -u redis-server -n 30 -o cat --no-pager | grep -i 'tailnet address'
+# THE CHECK THAT MATTERS MOST, and it is in the file, not the journal.
+sudo grep -c 'DB index is out of range' /var/log/redis/redis-server.log   # -> 0
+sudo tail -20 /var/log/redis/redis-server.log
+#   * DB loaded from base file appendonly.aof.<n>.base.rdb    <- the snapshot was read
+#   * Done loading RDB, keys loaded: <N>, keys expired: 0
+#   * Ready to accept connections
+# `Creating AOF base file ... on server start` instead means it loaded NOTHING.
+
 systemctl show redis-server -p NRestarts        # -> 0
 
-# THE CHECK THAT MATTERS MOST. Anonymous must be refused.
+# R1's boot race. The wait prints ONLY when it actually waited, so silence here
+# means the address was already up - which it is on any restart that is not a
+# cold boot. The check that always means something is the bind:
+sudo ss -ltnp | grep 6379                       # -> 127.0.0.1:6379 AND 100.97.91.19:6379
+journalctl -u redis-server --no-pager | grep -i 'tailnet address'   # only after a real wait
+
+# Anonymous must still be refused.
 redis-cli PING                                   # -> NOAUTH
 
-U="redis://default:$(sudo cat /etc/redis/broker-password)@localhost:6379/0"
-redis-cli -u "$U" --no-auth-warning PING         # -> PONG, nothing changed for anyone
-redis-cli -u "$U" --no-auth-warning ACL LIST     # -> six users
+pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
+U="redis://default:$(pw DEFAULT)@localhost:6379/0"       # window-only; open at this point
+B="redis://brokeradmin:$(pw BROKERADMIN)@localhost:6379/0"
 redis-cli -u "$U" --no-auth-warning SELECT 15    # -> ERR DB index is out of range
+redis-cli -u "$U" --no-auth-warning SELECT 1     # -> ERR too: `databases 1` means db0 alone
+redis-cli -u "$U" --no-auth-warning SELECT 0     # -> OK
 
-# The data. Ten streams, five groups, all as before.
+# The data, against the snapshot taken before the window. Lengths alone are not
+# enough - entries-added is the counter that tells a trim from a wipe.
 for s in info.changes info.registry info.watch-status content.fetch \
          content.fetch-policy content.blobs content.revisions \
          content.artifacts content.replicate content.fetch.dlq; do
-    printf '%-22s %s\n' "$s" "$(redis-cli -u "$U" --no-auth-warning XLEN $s)"
+    printf '%-22s XLEN=%s entries-added=%s\n' "$s" \
+        "$(redis-cli -u "$B" --no-auth-warning XLEN $s)" \
+        "$(redis-cli -u "$B" --no-auth-warning XINFO STREAM $s 2>/dev/null | grep -A1 entries-added | tail -1)"
+done
+for s in content.fetch content.blobs content.revisions content.artifacts content.replicate; do
+    echo "== $s"; redis-cli -u "$B" --no-auth-warning XINFO GROUPS $s
 done
 
 set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy -q                    # the live-config test now covers both new directives
 ```
 
-Then confirm each service reconnected. They are still using `default:`, so they
-should recover on their own retry loops without intervention - all three
-classify a broker outage as transient.
+**Read the diff, do not eyeball the numbers.** The two LWW streams move on their
+own - `info.watch-status` grows on the `*/5` republish and
+`content.fetch-policy` is trimmed by its producer's `maxlen` - so a length that
+changed is not a finding. `entries-added` going **backwards** is, on any stream;
+so is a group's `last-delivered-id` moving backwards.
+
+Then confirm each service reconnected: `CLIENT LIST` grouped by `user=` should
+show all three, and `ACL LOG` should be empty (a restart clears it). They
+recover on their own retry loops without intervention - all three classify a
+broker outage as transient.
+
+**Do not start a second `redis-server` against this config to "test" it.** It
+inherits `dir /var/lib/redis` and `appendonly yes`, so it opens the live AOF for
+append alongside the running server. Trial-parse with a throwaway directory
+instead: `redis-server /etc/redis/redis.conf --dir "$(mktemp -d)" --port 6398
+--appendonly no --logfile ''`. And note that extra CLI arguments are read as
+config lines *numbered past the end of the file*, so a `FATAL CONFIG FILE ERROR`
+at a line the file does not have is the argument, not the config.
 
 ### Rollback for step 1
 

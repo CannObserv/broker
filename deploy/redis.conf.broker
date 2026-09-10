@@ -71,6 +71,29 @@ appendfsync everysec
 maxmemory 512mb
 maxmemory-policy noeviction
 
+# broker#5, R4's database-index axis. `SELECT 15` now fails outright, so a
+# repointed REPLICATOR_TEST_REDIS_URL has nowhere to land. Redis ACLs cannot
+# partition by database index at all, so this axis can only be closed here; the
+# topic-name axis is closed separately by the `citest` user in redis-acl.conf,
+# and neither substitutes for the other.
+#
+# Startup-only, and this is the directive that cost a 2m23s outage on
+# 2026-09-10. A command recorded in the AOF against a database index that no
+# longer exists executes against whatever database is CURRENTLY selected, which
+# is db0: `SELECT 15` fails, the replay does not abort, and the next command
+# from that section lands in db0 instead. This broker's AOF held 61 SELECTs
+# naming db 0, 14 and 15 plus one FLUSHDB - so it replayed as a full wipe of
+# db0 and the broker came up with 4% of its entries.
+#
+# THE ORDER IS THE WHOLE FIX. `BGREWRITEAOF` before this line goes in: the
+# rewrite regenerates the base from the in-memory dataset, which is db0 and
+# nothing else, so no SELECT and no FLUSHDB survive into it. Verified both
+# ways on scratch instances, and on this node on 2026-09-10 - `aof_rewrites`
+# 0 -> 1, base 89 bytes -> 508,520, incr 42.9 MB -> 0, zero SELECTs left.
+# docs/RESTART-WINDOW.md step 1a-bis is the runbook; do not add this directive
+# to a broker whose AOF has not been rewritten since its last multi-db command.
+databases 1
+
 # broker#2. Immutable config - this is why the ACL users needed a window at all.
 # Everything after this is live: ACL SETUSER applies immediately, ACL SAVE
 # persists to the file.
