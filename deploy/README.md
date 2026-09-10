@@ -241,7 +241,7 @@ taxonomy.
 ```bash
 sudo install -m 0400 -o root -g root /dev/null /etc/broker/notifier.env
 sudo tee /etc/broker/notifier.env >/dev/null <<'ENV'
-NOTIFIER_MONITOR_ID=<id from POST /api/v1/monitors>
+NOTIFIER_MONITOR_ID=<the monitor's own id - NOT the tenant_id>
 NOTIFIER_API_KEY=<key>
 ENV
 sudo systemctl start broker-bus-health.service
@@ -273,6 +273,29 @@ make the wrong destination unnameable rather than merely discouraged.
 A failed check-in is a WARN line and never a failed unit. The probe is WARN-only
 by contract, and a monitoring unit that starts failing on its own transport
 trains an operator to ignore it.
+
+### Two things to check when a check-in fails
+
+**`HTTP 404` means the monitor id is wrong, and the likeliest cause is a
+`tenant_id`.** Both are ULIDs of the same shape and both appear in the monitor's
+own JSON, so they are easy to transpose. Read it back and compare:
+
+```bash
+sudo sh -c 'set -a; . /etc/broker/notifier.env; set +a
+  curl -s -H "X-API-Key: $NOTIFIER_API_KEY" \
+    http://notifier:9000/api/v1/monitors/$NOTIFIER_MONITOR_ID' | python3 -m json.tool
+```
+
+`last_checkin_at`, `last_status` and `last_variables` should reflect the most
+recent tick. This is the only end-to-end confirmation - a clean journald line
+proves the POST returned 2xx, not that notifier recorded anything useful.
+
+**`enabled: false` means the dead-man's timer is not running.** Notifier's
+`sweep_monitors` selects `enabled is True` only, so a disabled monitor records
+check-ins and reports state while alarming on nothing when they stop. Its
+check-in route does *not* gate on the flag, so `status: alert` still dispatches
+- which makes the failure asymmetric and easy to miss: findings reach a person,
+silence does not. Silence is the half this probe exists for.
 
 ## DLQ evidence
 
