@@ -185,6 +185,27 @@ def test_default_is_declared_and_enabled_at_first_load(users) -> None:
     assert "nopass" not in rules
 
 
+def test_the_nodes_diagnostics_survive_disabling_default(users) -> None:
+    """`user default off` must not take `CLIENT LIST` and `ACL LOG` with it.
+
+    Both earned their place during the cutover. `ACL LOG` found archiver's
+    `config|get` denial in one command, where the alternative was reading three
+    services' journals on two hosts this node deliberately cannot reach. And
+    `CLIENT LIST`'s `flags=b` is the only reliable way to tell a blocked
+    consumer from a client that merely ran a read once - `XINFO CONSUMERS`
+    ``idle`` does not update on an empty read, and ``consumers=0`` on a stream
+    that has never carried a message means nothing at all.
+
+    No service user holds either, and none should: connection shape and denial
+    history are the node's business, not a participant's.
+    """
+    assert "+client|list" in users["brokeradmin"]
+    assert "+acl|log" in users["brokeradmin"]
+    for user in SERVICE_USERS:
+        assert "+client|list" not in users[user]
+        assert "+acl|log" not in users[user]
+
+
 def test_the_probe_cannot_write_to_a_stream(users) -> None:
     """`brokeradmin` is instance-wide by necessity - `INFO memory` has no key and
     the DLQ sweep is `SCAN MATCH *.dlq` so it finds queues nobody declared. Wide
