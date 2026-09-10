@@ -185,6 +185,27 @@ def test_default_is_declared_and_enabled_at_first_load(users) -> None:
     assert "nopass" not in rules
 
 
+def test_a_grant_can_still_be_widened_after_default_is_disabled(users) -> None:
+    """The recovery story the whole cutover rests on has to survive step 4.
+
+    A rule that is too narrow produces `NOPERM`; all three participants classify
+    that transient and back off rather than losing data; an operator widens the
+    grant live with one `ACL SETUSER`. That last step needs `+acl`, and once
+    `default` is disabled the only user holding it is this one - without it the
+    documented recovery becomes "edit the file and restart", which on this
+    instance is a cohort-wide event.
+
+    Separate from `brokeradmin` on purpose. That user holds `~*` because `INFO`
+    and the DLQ sweep need it, so its narrow command list is the only boundary
+    it has, and `+acl` would let it grant itself `+xadd`. The observer cannot
+    change; the changer cannot read.
+    """
+    assert "+acl" in users["acladmin"]
+    assert "+acl" not in users["brokeradmin"]
+    for user in SERVICE_USERS:
+        assert "+acl" not in users[user]
+
+
 def test_the_nodes_diagnostics_survive_disabling_default(users) -> None:
     """`user default off` must not take `CLIENT LIST` and `ACL LOG` with it.
 
@@ -331,9 +352,15 @@ def test_disabling_default_is_live_and_reversible(live_acl_broker) -> None:
 
     Retiring the shared password is the one genuinely irreversible-feeling step,
     so it is deliberately the one that needs no window: `ACL SETUSER` applies
-    immediately and `ACL SETUSER default on >...` puts it back. Proving both
-    directions here is what makes it safe to do live at the end, after every
-    service is confirmed on its own credential.
+    immediately and `ACL SETUSER default on >...` puts it back.
+
+    **Read what this proves carefully.** It runs as `default`, which on this
+    throwaway server still holds `+@all`, so it demonstrates the *mechanism* and
+    not the production rollback path - in production `default` is the user being
+    disabled and cannot undo its own disabling. What makes the rollback real
+    there is `acladmin`, pinned by
+    ``test_a_grant_can_still_be_widened_after_default_is_disabled``. Before that
+    user existed, this test read as proof of something it does not establish.
     """
     admin = live_acl_broker("default")
     assert admin.ping()

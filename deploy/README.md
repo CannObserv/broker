@@ -75,10 +75,11 @@ last step rather than the first.
 2. **Rolling, no window** - flip each service's URL to its own credential, one
    at a time, verifying each before the next.
 3. **Rolling** - flip the probe's `BROKER_REDIS_URL` to `brokeradmin`.
-4. **Live** - `ACL SETUSER default off` then `ACL SAVE`, run as `default`
-   (`brokeradmin` deliberately has no `+acl`). Reversing it is
-   `ACL SETUSER default on >...` plus `ACL SAVE`; both directions are pinned by
-   `test_disabling_default_is_live_and_reversible`.
+4. **Live** - `ACL SETUSER default off` then `ACL SAVE`, run as `default`.
+   Reversing it, and widening any grant afterwards, is done as **`acladmin`** -
+   the break-glass user that exists because `+acl` would otherwise belong to
+   nobody once `default` is off, freezing every grant on the broker
+   permanently. See `docs/RESTART-WINDOW.md` step 4.
 
 Steps 2 to 4 are reversible and need no restart, which is the point of putting
 the irreversible-feeling step last. And all three participants classify `NOPERM`

@@ -303,21 +303,42 @@ redis-cli -u "$U" --no-auth-warning ACL SETUSER default off
 redis-cli -u "$U" --no-auth-warning ACL SAVE
 ```
 
-Run as `default` - `brokeradmin` deliberately has no `+acl`, and this is the
-last thing `default` ever does. Then update `deploy/redis-acl.conf` to
-`user default off` and commit, so the tracked file matches what `ACL SAVE` wrote.
+Run as `default` - this is the last thing `default` ever does. Then update
+`deploy/redis-acl.conf` to `user default off` and commit, so the tracked file
+matches what `ACL SAVE` wrote.
 
-Reversing it:
+**Precondition, and it is not optional: `acladmin` must exist first.**
 
 ```bash
-redis-cli -u "redis://brokeradmin:<pw>@localhost:6379/0" --no-auth-warning \
-    ACL SETUSER default on ">$(sudo cat /etc/redis/broker-password)" '~*' '&*' +@all
+redis-cli -u "$U" --no-auth-warning ACL LIST | grep '^user acladmin'
 ```
 
-...except `brokeradmin` cannot run `ACL`. **Keep a shell on the node** while
-doing step 4; recovery is `redis-server`'s own config, by restarting with the
-`aclfile` line commented out, which restores `requirepass` behaviour. This is
-the one step where having the node available matters more than the command.
+Reversing step 4, and widening any grant afterwards:
+
+```bash
+A="redis://acladmin:<pw>@localhost:6379/0"
+redis-cli -u "$A" --no-auth-warning ACL SETUSER default on ">$(sudo cat /etc/redis/broker-password)" '~*' '&*' +@all
+redis-cli -u "$A" --no-auth-warning ACL SAVE
+```
+
+**Why `acladmin` exists at all**, because this was nearly got wrong: `ACL
+SETUSER` requires `+acl`, and until that user was added **no user had it** -
+not `brokeradmin`, not any service. `default off` would therefore have frozen
+every grant on the broker permanently. That breaks more than this step's
+rollback; it breaks the recovery story the whole cutover rests on, since
+step 2's "a `NOPERM` is survivable, widen the grant live" would have required
+editing `users.acl` and restarting - a cohort-wide event, for a typo.
+
+`acladmin` is deliberately *not* `brokeradmin` with more grants. `brokeradmin`
+holds `~*` because `INFO` and the DLQ sweep need it, so its narrow command list
+is the only boundary it has, and `+acl` would let it grant itself `+xadd`.
+Verified live: `acladmin` can run `ACL LIST` and `ACL SETUSER` and is refused
+`XADD`, `XLEN`, `INFO`, `CONFIG SET` and `FLUSHALL`.
+
+**Keep a shell on the node** through step 4 regardless. The last-resort recovery
+is still `redis-server`'s own config - restart with the `aclfile` line commented
+out, restoring `requirepass` behaviour - and that is a cohort-wide event, which
+is exactly why `acladmin` is the path you want to reach for first.
 
 ---
 
