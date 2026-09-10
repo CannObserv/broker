@@ -70,4 +70,10 @@ appendfsync everysec
 # still ~25x current usage. Same number, arrived at independently.
 maxmemory 512mb
 maxmemory-policy noeviction
+
+# broker#2. Immutable config - this is why the ACL users needed a window at all.
+# Everything after this is live: ACL SETUSER applies immediately, ACL SAVE
+# persists to the file.
+aclfile /etc/redis/users.acl
+
 ###############################################################################

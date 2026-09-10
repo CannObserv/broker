@@ -132,6 +132,49 @@ sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
 Installing it does nothing on its own - Redis does not read it until `aclfile`
 is set. That is why this is safe to do before the restart.
 
+### Step 1a-bis - `BGREWRITEAOF` FIRST. This is not optional.
+
+**`databases 1` against this broker's AOF wipes db0.** Found the hard way on
+2026-09-10; the incident is recorded at the bottom of this file, and both the
+failure and this fix are reproduced in a scratch instance rather than reasoned
+about.
+
+The mechanism, in one line: **a command recorded against a database index that
+no longer exists executes against whatever database is currently selected, which
+is db0.** On replay, `SELECT 15` fails with `DB index is out of range`, the
+replay does not abort, the current database stays db0 - and the very next
+command from that section lands there instead.
+
+For most commands that is harmless pollution. For the one this epic itself
+recorded, it is catastrophic: **broker#1 D4 said "flush `db15`", that flush was
+done on 2026-09-08, and `FLUSHDB` is now sitting in the AOF.** Under
+`databases 1` it replays as a full wipe of db0, and everything written before it
+is gone. Only entries appended *after* the flush survive.
+
+So the two halves of R4's fix are hostile in this order and safe in the other.
+Purge the history first:
+
+```bash
+redis-cli -u "$U" --no-auth-warning BGREWRITEAOF
+sleep 5
+redis-cli -u "$U" --no-auth-warning INFO persistence \
+    | grep -E 'aof_rewrite_in_progress|aof_last_bgrewrite_status'
+#   aof_rewrite_in_progress:0
+#   aof_last_bgrewrite_status:ok
+sudo ls -la /var/lib/redis/appendonlydir/
+#   a NEW base (appendonly.aof.<n+1>.base.rdb) and a near-empty incr
+```
+
+The rewrite regenerates the base from the current in-memory dataset, which
+contains db0 and nothing else - no `SELECT`, no historical `FLUSHDB`. Verified:
+with the rewrite, a restart under `databases 1` keeps every key and logs **zero**
+`DB index is out of range`. Without it, the same restart loses everything older
+than the flush.
+
+**Do not skip the verification.** If `aof_last_bgrewrite_status` is not `ok`, or
+the base file's number did not advance, the landmine is still armed and the next
+step is the one that steps on it.
+
 ### Step 1b - add the two directives
 
 To **both** `/etc/redis/redis.conf` (inside the `CannObserv/broker#1` block, or
@@ -313,6 +356,8 @@ It appears twice above, before and after the restart, for this reason.
 | `ERR DB index is out of range` from a test suite | `databases 1` working as intended | fix the test's URL; do not widen `databases` |
 | `redis-cli -u .../15` prints that error **and then `PONG`** | redis-cli falls back to db0 and carries on; redis-py raises instead | not a fault - but never verify `databases 1` with a URL suffix, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
 | Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u redis-server` |
+| Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart; the AOF still holds the history and replays correctly once the database exists again |
+| `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
 
 ---
 
@@ -332,3 +377,53 @@ It appears twice above, before and after the restart, for this reason.
   still on `default:` locks that client out.
 - **Do not schedule this window alongside any service's own VM move.** R6
   generalised: one moving part at a time.
+
+---
+
+## Incident, 2026-09-10: `databases 1` wiped db0
+
+Recorded because the fix above is only credible with the failure beside it.
+
+**What happened.** `databases 1` and `aclfile` were added together and
+`redis-server` restarted at 00:46:21. The AOF replayed, `SELECT 15` failed, and
+the `FLUSHDB` this epic ran against db15 on 2026-09-08 executed against **db0**.
+The broker came up holding only what had been written since that flush.
+
+**Duration: 2 minutes 23 seconds.** 00:46:22 to 00:48:45, from restart to the
+rollback of `databases 1` being live.
+
+**The remnant matched the theory exactly**, which is what identified it:
+
+| Stream | before | during the incident | added since the 09-08 flush |
+|---|---|---|---|
+| `content.fetch` | 948 | **30** | 30 |
+| `content.blobs` | 948 | **30** | 30 |
+| `info.watch-status` | 29,076 | **1,304** | 1,304 |
+| `content.fetch-policy` | 28,750 | **978** | 978 |
+
+**Recovery was complete**, because the AOF is append-only and the history was
+never rewritten - removing `databases 1` and restarting replayed it correctly.
+All ten streams, all five consumer groups at their real positions, `lag 0` on
+every group, 27 `replicator:cmd:fetch:*` keys with TTLs intact, `db0: 37 keys /
+27 expires` - identical to the pre-incident state.
+
+**Three things nearly made it worse, and are worth carrying:**
+
+- **A background save clobbered the shutdown RDB.** `dump.rdb` was 5.1 MB (the
+  full pre-restart dataset) when first listed and 206 KB roughly a minute later,
+  because the degraded server hit a `save` point and overwrote it with the small
+  dataset. If the AOF had *also* been damaged, that minute was the whole recovery
+  window. **`CONFIG SET save ""` and `CONFIG SET auto-aof-rewrite-percentage 0`
+  are the first commands to run when a restart comes up wrong** - before
+  diagnosing anything - because both of the on-disk copies are being actively
+  overwritten while you think.
+- **An AOF rewrite would have been unrecoverable.** `auto-aof-rewrite-min-size`
+  is 64 MB and the incr was 41 MB, so it did not fire. It was margin, not design.
+- **The probe reported nothing wrong.** Every threshold is an upper bound -
+  length caps, memory, DLQ depth - so a broker that has lost 96% of its entries
+  is, to this probe, a very healthy broker. See below.
+
+**A follow-up the probe should carry:** there is no check for a stream getting
+*shorter*. `XLEN` collapsing between ticks is not something a producer-capped
+stream does, and the state file already persists per-tick numbers, so the
+comparison is nearly free. Filed as its own issue.
