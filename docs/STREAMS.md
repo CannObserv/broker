@@ -286,6 +286,8 @@ Per tick it probes:
   - nobody else watches these, and this is the one place that can;
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
   named and the entries captured; see *Who drains a DLQ* above;
+- **`entries-added` going backwards on any stream** - the one check here that is
+  not an upper bound. See *Detecting loss* below;
 - `/` disk headroom (WARN at 90% used or under 2 GiB free) - which on this node
   is the AOF's headroom, and is the check whose meaning the move restored.
 
@@ -334,6 +336,48 @@ entry can be refused and free enough on the error reply to put usage back under
 the cap, and a naive fill-then-probe sees `XADD` succeed two commands after it
 was refused. Anyone reproducing this should fill to the first refusal, then
 lower `maxmemory` below the current `used_memory` so the state holds still.
+
+## Detecting loss - the one check that is not an upper bound
+
+Every other threshold in the probe is a ceiling: length against a retention cap,
+memory against `maxmemory`, DLQ depth against zero, disk against a fraction. So
+until CannObserv/broker#10, **a broker that had lost data looked healthier than
+one under load.** That was not hypothetical - a `databases 1` restart on
+2026-09-10 replayed a historical `FLUSHDB` against db0, the broker came up
+holding 4% of its entries, and the probe ticked twice reporting
+`finding_count: 0`, correctly by its own rules.
+
+**Length cannot be the signal.** Three streams shrink as normal operation:
+`info.changes` rides archiver's periodic `XTRIM`; `info.registry` is capped on
+every publish (CannObserv/archiver#141) and can drop most of itself in a single
+tick - it sat at ~2,600 entries in early September and at 116 by the 10th,
+entirely legitimately, one generation per item with older generations
+superseded; and the two LWW streams carry a producer-side `maxlen`. Any
+percentage threshold would either miss a wipe or fire on `info.registry` every
+snapshot.
+
+**`entries-added` is what separates them.** It is monotonic for the life of a
+stream *object*: a trim removes entries while it keeps climbing, and it can only
+fall if the stream was destroyed and recreated. Verified against Redis 7.0.15
+rather than assumed:
+
+| Operation | `length` | `entries-added` |
+|---|---|---|
+| 50 x `XADD` | 50 | 50 |
+| `XTRIM MAXLEN 10` | **10** | **50** - unchanged, so no finding |
+| `FLUSHDB` then one `XADD` | 1 | **1** - went backwards, so a finding |
+
+A `FLUSHDB`, a `FLUSHALL`, a restore from a stale snapshot and a `DEL` followed
+by a fresh `XADD` are indistinguishable from here, which is the point: the probe
+is not diagnosing a cause, it is refusing to call an empty broker healthy.
+
+`content.replicate` additionally gets the cheaper rule - it is carved out of
+every trim path, so **any** decrease in its length is a fault.
+
+Both baselines are carried between oneshot runs in the same `StateDirectory`
+file as the pending counters, under `@`-prefixed keys, and an unreachable broker
+passes them through untouched - otherwise the tick after an outage would compare
+against nothing and a wipe *during* the outage would go unseen.
 
 ## Mirrored constants - the cost of the repo split
 

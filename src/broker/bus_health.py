@@ -430,6 +430,77 @@ def evaluate_stream(
     return findings
 
 
+# State-file keys for the continuity baseline. The `@` prefix namespaces them
+# away from the pending counters, which are keyed `<topic>/<group>`; a consumer
+# group name cannot start with `@` under cannobserv#384's convention, and
+# nothing else writes this file.
+CONTINUITY_ENTRIES_KEY = "@entries-added/{topic}"
+CONTINUITY_LENGTH_KEY = "@length/{topic}"
+
+
+def evaluate_stream_continuity(
+    check: StreamCheck,
+    *,
+    entries_added: int,
+    entries_added_prev: int | None,
+    length: int,
+    length_prev: int | None,
+) -> list[Finding]:
+    """Warn when a stream has lost entries rather than grown past a cap.
+
+    **Every other check in this module is an upper bound**, so a broker that has
+    been emptied looks healthier than one under load. CannObserv/broker#10, filed
+    after a `databases 1` restart replayed a historical `FLUSHDB` against db0:
+    the broker came up with 4% of its entries and this probe reported
+    `finding_count: 0` twice, correctly by its own rules.
+
+    Length alone cannot be the signal. Three streams shrink as normal operation
+    - `info.changes` rides archiver's periodic `XTRIM`, `info.registry` is capped
+    on every publish and can drop most of itself in one tick (archiver#141), and
+    the LWW streams carry a producer-side `maxlen`. A percentage threshold would
+    either miss the wipe or cry wolf on `info.registry` every snapshot.
+
+    ``entries-added`` is the signal that separates them, because it is monotonic
+    for the life of a stream *object*: a trim removes entries while it keeps
+    climbing, and it can only fall if the stream was destroyed and recreated.
+    `FLUSHDB`, `FLUSHALL`, a restore from a stale snapshot and a `DEL` followed
+    by a fresh `XADD` all look identical from here, which is the point - the
+    probe is not diagnosing the cause, it is refusing to call an empty broker
+    healthy.
+
+    ``never_trimmed`` streams get the cheaper rule as well: nothing legitimate
+    shortens them, so any decrease is a fault.
+    """
+    if entries_added_prev is None or length_prev is None:
+        # First tick after a deploy, a state-file loss, or a new stream. The
+        # two-tick pending rule declines to alarm on one observation for the
+        # same reason.
+        return []
+
+    findings: list[Finding] = []
+    if entries_added < entries_added_prev:
+        findings.append(
+            Finding(
+                check="stream-reset",
+                subject=check.topic,
+                message=f"entries-added went BACKWARDS, {entries_added_prev} -> "
+                f"{entries_added} (length {length_prev} -> {length}) - that counter "
+                "is monotonic for the life of a stream, so the stream was "
+                "destroyed and recreated: a flush, a stale restore, or a DEL",
+            )
+        )
+    elif check.never_trimmed and length < length_prev:
+        findings.append(
+            Finding(
+                check="stream-shrank",
+                subject=check.topic,
+                message=f"length {length_prev} -> {length} on a stream that is "
+                "never trimmed by design - nothing legitimate shortens it",
+            )
+        )
+    return findings
+
+
 def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int) -> list[Finding]:
     """Two-tick rule: one tick of non-zero pending is in-flight delivery;
     non-zero across two consecutive ticks means the consumer is wedged or its
@@ -545,6 +616,21 @@ async def _collect_stream(
     findings.extend(
         evaluate_stream(check, length=length, last_entry_ms=last_entry_ms, now_ms=now_ms)
     )
+
+    entries_added = int(info.get("entries-added", 0))
+    entries_key = CONTINUITY_ENTRIES_KEY.format(topic=check.topic)
+    length_key = CONTINUITY_LENGTH_KEY.format(topic=check.topic)
+    findings.extend(
+        evaluate_stream_continuity(
+            check,
+            entries_added=entries_added,
+            entries_added_prev=previous_pending.get(entries_key),
+            length=length,
+            length_prev=previous_pending.get(length_key),
+        )
+    )
+    pending[entries_key] = entries_added
+    pending[length_key] = length
 
     if check.pending_group is not None:
         key = f"{check.topic}/{check.pending_group}"

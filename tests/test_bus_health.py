@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
+    CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
     CONTENT_REPLICATE,
     CONTENT_REVISIONS,
@@ -962,3 +963,113 @@ async def test_half_configured_is_reported_not_ignored(fake_redis, tmp_path, mon
     )
 
     error_spy.assert_called_once()
+
+
+# --- the broker losing data (CannObserv/broker#10) ---
+#
+# Every other threshold here is an UPPER bound, so a broker that has lost
+# entries looks exceptionally healthy. On 2026-09-10 a `databases 1` restart
+# replayed a historical FLUSHDB against db0, the broker came up holding 4% of
+# its entries, and the probe ticked twice reporting finding_count 0 - correctly,
+# by its own rules.
+
+
+def test_a_trim_is_not_a_loss() -> None:
+    """The tolerance question, and why raw length cannot be the signal.
+
+    Three streams shrink as normal operation: `info.changes` rides archiver's
+    periodic XTRIM, `info.registry` is capped on every publish (archiver#141)
+    and can drop a large fraction in one tick, and the LWW streams carry a
+    producer-side maxlen. A length-based rule either misses the wipe or cries
+    wolf on all three.
+    """
+    check = _check_for(INFO_REGISTRY)
+    findings = bus_health.evaluate_stream_continuity(
+        check, entries_added=2721, entries_added_prev=2600, length=116, length_prev=2605
+    )
+    assert findings == []
+
+
+def test_entries_added_going_backwards_is_a_reset() -> None:
+    """The signal that actually separates the two.
+
+    `entries-added` is monotonic for the life of a stream object: a trim removes
+    entries while it keeps climbing. It can only fall if the stream was
+    destroyed and recreated - which is what a FLUSHDB, a FLUSHALL, a restore
+    from a stale snapshot, or a DEL followed by a fresh XADD all look like from
+    here.
+    """
+    findings = bus_health.evaluate_stream_continuity(
+        _check_for(CONTENT_FETCH),
+        entries_added=30,
+        entries_added_prev=948,
+        length=30,
+        length_prev=948,
+    )
+    assert [f.check for f in findings] == ["stream-reset"]
+    assert "948" in findings[0].message and "30" in findings[0].message
+
+
+def test_a_never_trimmed_stream_must_never_shrink() -> None:
+    """The cheap floor, for the streams where any decrease is a fault by
+    definition. `content.replicate` is carved out of every trim path, so nothing
+    legitimate can shorten it - and it is the least tolerant stream on the bus."""
+    findings = bus_health.evaluate_stream_continuity(
+        _check_for(CONTENT_REPLICATE),
+        entries_added=40,
+        entries_added_prev=40,
+        length=12,
+        length_prev=40,
+    )
+    assert [f.check for f in findings] == ["stream-shrank"]
+
+
+def test_continuity_needs_a_previous_tick() -> None:
+    """First tick after a deploy, a state-file loss, or a new stream. Nothing to
+    compare against is not a finding - the two-tick pending rule takes the same
+    position for the same reason."""
+    assert (
+        bus_health.evaluate_stream_continuity(
+            _check_for(CONTENT_FETCH),
+            entries_added=30,
+            entries_added_prev=None,
+            length=30,
+            length_prev=None,
+        )
+        == []
+    )
+
+
+async def test_collect_detects_a_wiped_stream_across_ticks(fake_redis, tmp_path) -> None:
+    """End to end against a real stream object, because the whole check rests on
+    what `XINFO STREAM` reports for `entries-added` after a recreate."""
+    for _ in range(5):
+        await fake_redis.xadd(CONTENT_FETCH, {"k": "v"})
+    _, state = await collect_broker_findings(fake_redis, previous_pending={})
+
+    await fake_redis.delete(CONTENT_FETCH)  # the wipe
+    await fake_redis.xadd(CONTENT_FETCH, {"k": "v"})
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_pending=state)
+    assert any(f.check == "stream-reset" and f.subject == CONTENT_FETCH for f in findings)
+
+
+async def test_continuity_state_survives_a_broker_outage(fake_redis, tmp_path) -> None:
+    """An unreachable broker must not reset the baseline, or the tick after an
+    outage compares against nothing and a wipe during the outage goes unseen.
+    Same contract the pending counters already have."""
+
+    class DownRedis:
+        def __getattr__(self, _name):
+            async def _raise(*a, **kw):
+                raise OSError("down")
+
+            return _raise
+
+    for _ in range(5):
+        await fake_redis.xadd(CONTENT_FETCH, {"k": "v"})
+    _, state = await collect_broker_findings(fake_redis, previous_pending={})
+    assert any(k.startswith("@") for k in state)
+
+    _, after_outage = await collect_broker_findings(DownRedis(), previous_pending=state)
+    assert after_outage == state
