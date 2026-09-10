@@ -21,11 +21,6 @@ than as a property of the pattern list.
 
 import fnmatch
 import re
-import shutil
-import socket
-import subprocess
-import time
-from pathlib import Path
 
 import pytest
 import redis as redis_pkg
@@ -44,14 +39,9 @@ from co_core.pure.adapters.bus.streams import (
     stream_kind,
 )
 
-DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
-ACL_FILE = DEPLOY / "redis-acl.conf"
-RENDER_SCRIPT = DEPLOY / "render-acl.sh"
+from tests.deploy.conftest import ACL_FILE
 
 SERVICE_USERS = ("archiver", "watcher", "replicator")
-
-# Throwaway, for the spawned server below. Never a real credential.
-PASSWORD = "throwaway-password"
 
 CANONICAL_STREAMS = frozenset(
     {
@@ -364,96 +354,7 @@ def test_the_probe_cannot_write_to_a_stream(users) -> None:
 # --- does it actually parse? ---
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@pytest.fixture(scope="module")
-def live_acl_broker(tmp_path_factory):
-    """A throwaway redis-server running the tracked ACL file.
-
-    This is the assertion that could otherwise only be made during the restart
-    window. `aclfile` is an immutable config, so it is enabled by restarting an
-    instance three services depend on - and redis **aborts startup** on an ACL
-    error, refusing the whole file rather than the offending line. A syntax
-    error found there is found with the broker down.
-
-    It has already earned this twice. The first run caught that an aclfile
-    permits no comments; the second that `+client|setinfo` does not exist before
-    Redis 7.2, so the pre-emptive grant broker#2 recommended would have taken
-    every user down with it.
-
-    Binds loopback on a free port with no persistence and never reads
-    BROKER_REDIS_URL, so it cannot reach `co-broker`.
-    """
-    binary = shutil.which("redis-server")
-    if not binary:
-        pytest.skip("redis-server not installed")
-
-    tmp_path = tmp_path_factory.mktemp("acl")
-    passwords = tmp_path / "passwords"
-    placeholders = sorted(set(re.findall(r"__[A-Z]+_PW__", ACL_FILE.read_text())))
-    passwords.write_text("".join(f"{m}={PASSWORD}\n" for m in placeholders))
-    acl = tmp_path / "users.acl"
-    # Rendered through the same script the install uses, so what is tested is
-    # what is installed - including the comment strip, which is not cosmetic.
-    acl.write_text(
-        subprocess.run(
-            [str(RENDER_SCRIPT), str(passwords)], capture_output=True, text=True, check=True
-        ).stdout
-    )
-
-    port = _free_port()
-    proc = subprocess.Popen(
-        [
-            binary,
-            "--port",
-            str(port),
-            "--bind",
-            "127.0.0.1",
-            "--save",
-            "",
-            "--appendonly",
-            "no",
-            "--aclfile",
-            str(acl),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            pytest.fail(f"redis-server refused the ACL file:\n{proc.stdout.read()}")
-        with socket.socket() as s:
-            s.settimeout(0.2)
-            if s.connect_ex(("127.0.0.1", port)) == 0:
-                break
-        time.sleep(0.1)
-    else:
-        proc.terminate()
-        pytest.fail("redis-server did not start")
-
-    def connect(user: str | None = None):
-        kwargs = {} if user is None else {"username": user, "password": PASSWORD}
-        return redis_pkg.Redis(
-            host="127.0.0.1",
-            port=port,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-            decode_responses=True,
-            **kwargs,
-        )
-
-    yield connect
-    proc.terminate()
-    proc.wait(timeout=10)
-
-
-def test_anonymous_access_is_refused_at_first_load(live_acl_broker) -> None:
+def test_anonymous_access_is_refused_at_first_load(tracked_acl_broker) -> None:
     """Startup alone proves the file parsed - redis aborts on an ACL error and
     refuses the whole file rather than one line. This adds the assertion that
     matters more: **the restart that enables `aclfile` must not open the broker.**
@@ -468,10 +369,10 @@ def test_anonymous_access_is_refused_at_first_load(live_acl_broker) -> None:
     is wrong.
     """
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
-        live_acl_broker().ping()
+        tracked_acl_broker().ping()
 
 
-def test_retiring_default_is_reversible_live_as_acladmin(live_acl_broker) -> None:
+def test_retiring_default_is_reversible_live_as_acladmin(tracked_acl_broker) -> None:
     """The last step of the cutover and its undo, exercised as the users that
     actually perform them.
 
@@ -488,21 +389,21 @@ def test_retiring_default_is_reversible_live_as_acladmin(live_acl_broker) -> Non
     `default` is the user being disabled and cannot undo its own disabling.
     """
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
-        live_acl_broker("default").ping()
+        tracked_acl_broker("default").ping()
     # The per-service users are untouched by it - that is the whole point.
-    assert live_acl_broker("archiver").ping()
+    assert tracked_acl_broker("archiver").ping()
 
-    admin = live_acl_broker("acladmin")
+    admin = tracked_acl_broker("acladmin")
     try:
         admin.execute_command("ACL", "SETUSER", "default", "on")
-        assert live_acl_broker("default").ping()
+        assert tracked_acl_broker("default").ping()
     finally:
         admin.execute_command("ACL", "SETUSER", "default", "off")
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
-        live_acl_broker("default").ping()
+        tracked_acl_broker("default").ping()
 
 
-def test_archiver_is_refused_content_blobs_but_served_its_own_streams(live_acl_broker) -> None:
+def test_archiver_is_refused_content_blobs_but_served_its_own_streams(tracked_acl_broker) -> None:
     """The enforcement this whole file exists for, exercised rather than read.
 
     `content.blobs` was an unqualified role rule in archiver's guidelines -
@@ -510,27 +411,27 @@ def test_archiver_is_refused_content_blobs_but_served_its_own_streams(live_acl_b
     denial is also the quieter of the two ACL mistakes, so it is the one worth an
     end-to-end assertion.
     """
-    client = live_acl_broker("archiver")
+    client = tracked_acl_broker("archiver")
     assert client.xadd(CONTENT_REVISIONS, {"k": "v"})
     with pytest.raises(redis_pkg.exceptions.NoPermissionError):
         client.xadd(CONTENT_BLOBS, {"k": "v"})
 
 
 @pytest.mark.parametrize("user", SERVICE_USERS)
-def test_each_service_can_read_the_version_and_be_health_checked(live_acl_broker, user) -> None:
+def test_each_service_can_read_the_version_and_be_health_checked(tracked_acl_broker, user) -> None:
     """+info and +ping, exercised. Both were absent from the draft and both fail
     as something other than a permissions problem: a warn-only floor check going
     permanently blind, and idle-connection health checks failing."""
-    client = live_acl_broker(user)
+    client = tracked_acl_broker(user)
     assert client.info("server")["redis_version"]
     assert client.ping()
 
 
-def test_the_probe_can_sweep_but_cannot_publish(live_acl_broker) -> None:
+def test_the_probe_can_sweep_but_cannot_publish(tracked_acl_broker) -> None:
     """`brokeradmin` holds `~*` because `INFO memory` has no key and the DLQ
     sweep must find queues nobody declared. Wide keys make the command list the
     only remaining boundary, so the assertion is on what it cannot do."""
-    client = live_acl_broker("brokeradmin")
+    client = tracked_acl_broker("brokeradmin")
     assert client.info("memory")["maxmemory"] is not None
     assert list(client.scan_iter(match="*.dlq")) == []
     with pytest.raises(redis_pkg.exceptions.NoPermissionError):
@@ -538,7 +439,7 @@ def test_the_probe_can_sweep_but_cannot_publish(live_acl_broker) -> None:
 
 
 @pytest.mark.parametrize("topic", COMMAND_STREAMS)
-def test_replicator_can_dedupe_a_command_on_every_command_stream(live_acl_broker, topic) -> None:
+def test_replicator_can_dedupe_a_command_on_every_command_stream(tracked_acl_broker, topic) -> None:
     """The pure test above matches globs with ``fnmatch``; this one uses Redis's
     own matcher, on both of the commands these keys ever see.
 
@@ -550,7 +451,7 @@ def test_replicator_can_dedupe_a_command_on_every_command_stream(live_acl_broker
     mistake the pattern checks cannot see, so it is written as an explicit
     denial, the way the archiver/``content.blobs`` assertion is.
     """
-    client = live_acl_broker("replicator")
+    client = tracked_acl_broker("replicator")
     key = dedupe_key(topic, SAMPLE_COMMAND_ID)
 
     assert client.set(key, "some-message-id", nx=True, ex=86400) is True
@@ -564,12 +465,12 @@ def test_replicator_can_dedupe_a_command_on_every_command_stream(live_acl_broker
             refused()
 
 
-def test_citest_cannot_name_a_production_topic(live_acl_broker) -> None:
+def test_citest_cannot_name_a_production_topic(tracked_acl_broker) -> None:
     """R4, on the axis ACLs can actually enforce. The db-15 guard was never the
     enforcement - Redis ACLs cannot partition by database index at all - so a
     credential that cannot NAME a production topic is. The database-index axis is
     closed separately by `databases 1` (CannObserv/broker#5)."""
-    client = live_acl_broker("citest")
+    client = tracked_acl_broker("citest")
     assert client.xadd("probe.scratch", {"k": "v"})
     for topic in (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_BLOBS):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):

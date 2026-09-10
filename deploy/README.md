@@ -98,6 +98,45 @@ as transient, so a grant that is too narrow degrades to a backing-off publisher
 rather than dead-lettering valid events - bought deliberately (archiver#193
 Phase 1, replicator#82) and the reason a wrong rule here is recoverable.
 
+## Changing a grant, and the half of it that is not a command
+
+The mechanism is deliberately live. An ACL that can only be changed by a
+cohort-wide restart is an ACL nobody will dare tighten, which is the whole
+reason the grants are in a separate `aclfile` rather than in `redis.conf`:
+
+```bash
+pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
+A="redis://acladmin:$(pw ACLADMIN)@127.0.0.1:6379/0"
+
+redis-cli -u "$A" --no-auth-warning ACL SETUSER <user> <rule>   # applies now
+redis-cli -u "$A" --no-auth-warning ACL SAVE                    # -> /etc/redis/users.acl
+# then mirror the same rule into deploy/redis-acl.conf, with its reason, and commit
+```
+
+**The third line is the one that gets skipped.** Until broker#11 nothing
+checked it, and it rested on someone remembering four times: eleven corrections
+during the broker#2 cutover, step 4 of the restart window, and broker#9's key
+pattern. `tests/deploy/test_live_acl_matches_tracked_acl.py` now compares every
+tracked user's rules against the running broker, loading the tracked file into
+the throwaway `redis-server` the parse tests already spawn - a byte comparison
+is out, because `ACL SAVE` rewrites in Redis's canonical form (`#<sha256>` for
+passwords, the rule string reordered, `-@admin` folded into `-@dangerous`).
+This is the ACL's counterpart to reading `maxmemory` back through `CONFIG GET`.
+
+It costs `brokeradmin` the read-only `+acl|getuser`. Two limits, both
+deliberate and both recorded on the grant itself:
+
+- **It cannot enumerate.** `+acl|getuser` permits `ACL GETUSER` alone -
+  `ACL USERS`, `ACL LIST`, `ACL WHOAMI` and `ACL CAT` are each denied
+  separately - so a user the tracked file never declared is invisible to a
+  per-name lookup. An untracked identity that is actually *in use* is still
+  caught, by the `user=` field in `CLIENT LIST`.
+- **It cannot see a grant that is wrong in both places.** Both real ACL bugs
+  in this epic were exactly that. Where a grant has a derivable source, prefer
+  a test over the source - `test_replicator_can_name_every_dedupe_namespace`
+  derives the dedupe namespaces from co-core's command taxonomy, and that is
+  what caught broker#9.
+
 ## Why the tuning is in `redis.conf` and not in the drop-in
 
 broker#1 Phase 1 step 1 left this open - "keep layering on Debian's package unit

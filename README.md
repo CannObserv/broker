@@ -10,6 +10,7 @@ imported by any service; the services reach the broker over the network, by URL.
 | Path | What it is |
 |---|---|
 | [`deploy/redis.conf.broker`](deploy/redis.conf.broker) | The broker's tuning as deployed - bind, auth, AOF persistence, `noeviction`, an explicit `maxmemory` cap. Appended to `/etc/redis/redis.conf`, with the credential templated |
+| [`deploy/redis-acl.conf`](deploy/redis-acl.conf) + [`deploy/render-acl.sh`](deploy/render-acl.sh) | The per-service ACL users - what actually scopes each service to its own streams, rather than documenting it. Rendered to `/etc/redis/users.acl`; changed live as `acladmin` and mirrored back |
 | [`deploy/redis-server.service.d/broker.conf`](deploy/redis-server.service.d/broker.conf) + [`deploy/wait-for-tailnet-addr.sh`](deploy/wait-for-tailnet-addr.sh) | Unit ordering only: `After=tailscaled` plus the `/proc/net/fib_trie` wait that R1's boot race exists for |
 | [`deploy/broker-bus-health.service`](deploy/broker-bus-health.service) / [`.timer`](deploy/broker-bus-health.timer) | The periodic WARN-only health probe, every 10 minutes |
 | [`src/broker/bus_health.py`](src/broker/bus_health.py) | The probe: memory headroom **and eviction policy**, per-stream `XLEN` against retention caps, last-entry age on groupless streams, `XPENDING`, DLQ depth, disk, persistence status, and the backup's freshness |

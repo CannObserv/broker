@@ -430,8 +430,10 @@ sudo systemctl start broker-bus-health.service
 journalctl -u broker-bus-health -n 5 -o cat --no-pager   # -> finding_count: 0
 ```
 
-`brokeradmin` is narrowed to read-and-trim: no `XADD`, no `ACL`, no
-`CONFIG SET`, no `FLUSHDB`. If the probe reports `broker unreachable or probe
+`brokeradmin` is narrowed to read-and-trim: no `XADD`, no `CONFIG SET`, no
+`FLUSHDB`, and nothing that can CHANGE an ACL. It reads one - `+acl|log` and,
+since broker#11, `+acl|getuser` - and read-versus-change is the line `acladmin`
+sits on the other side of. If the probe reports `broker unreachable or probe
 failed: NoPermissionError`, it is a missing grant, not an outage.
 
 ### Step 4 - retire the shared password

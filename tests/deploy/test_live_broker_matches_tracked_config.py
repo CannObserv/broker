@@ -25,7 +25,6 @@ clones pass. On the broker node, source the env first - and as
 which silently corrupts values.
 """
 
-import os
 import time
 
 import pytest
@@ -46,28 +45,6 @@ SIZE_VALUED = {"maxmemory"}
 # broker HAS a password is worth doing; asserting WHICH one belongs nowhere a
 # test failure could print it.
 NOT_COMPARED = {"requirepass"}
-
-
-@pytest.fixture(scope="module")
-def live_client():
-    url = os.environ.get("BROKER_REDIS_URL")
-    if not url:
-        pytest.skip("BROKER_REDIS_URL not set - not a host with broker credentials")
-
-    redis = pytest.importorskip("redis")
-    client = redis.Redis.from_url(
-        url, socket_connect_timeout=2, socket_timeout=2, decode_responses=True
-    )
-    try:
-        try:
-            client.ping()
-        except redis.exceptions.RedisError as e:
-            pytest.skip(f"broker not answering: {e!r}")
-        yield client
-    finally:
-        # Closed on the skip path too: ``ping`` failing still leaves whatever
-        # connection the pool created behind it.
-        client.close()
 
 
 @pytest.fixture(scope="module")
