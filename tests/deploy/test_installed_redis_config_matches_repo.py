@@ -54,7 +54,7 @@ from pathlib import Path
 
 import pytest
 
-DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
+from tests.deploy.conftest import DEPLOY
 
 REPO_REDIS_CONF = DEPLOY / "redis.conf.broker"
 REPO_DROPIN = DEPLOY / "redis-server.service.d" / "broker.conf"

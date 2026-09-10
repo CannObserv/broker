@@ -343,6 +343,14 @@ set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy -q                    # the live-config test now covers both new directives
 ```
 
+**Two failures are expected here and only here.** The window is open, which
+means `default` is live `on` against a tracked file that says `off`, so
+`test_every_tracked_user_has_the_same_rules_on_the_live_broker` reports
+`default.enabled` and `default.flags` - exactly those two lines, on no other
+user, and the failure message says so itself. Re-run the suite after the window
+closes; **if those two survive the close, the window was never closed**, and
+that is a real finding rather than noise.
+
 **Read the diff, do not eyeball the numbers.** The two LWW streams move on their
 own - `info.watch-status` grows on the `*/5` republish and
 `content.fetch-policy` is trimmed by its producer's `maxlen` - so a length that

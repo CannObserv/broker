@@ -1,7 +1,12 @@
-"""Fixtures for the deploy tests that need a *server* rather than a file.
+"""What the deploy tests share: the tracked ACL file, and two servers.
 
-Two of them, and the distinction between them is the whole reason they are
-here:
+``parse_users`` and ``ACL_FILE`` are here rather than in a test module because
+two test modules read the tracked file and neither should have to import the
+other to do it - importing ``test_redis_acl`` for a parser dragged co-core into
+the import graph of a module that has no use for it.
+
+Then the two fixtures, and the distinction between them is the whole reason
+they are here:
 
 ``tracked_acl_broker``
     A throwaway ``redis-server`` loading the ACL file **this repo tracks**, on a
@@ -39,10 +44,44 @@ RENDER_SCRIPT = DEPLOY / "render-acl.sh"
 PASSWORD = "throwaway-password"
 
 
+def parse_users(text: str) -> dict[str, list[str]]:
+    """`user <name> <rule> <rule> ...`, one per line.
+
+    Deliberately strict about the one-line rule: neither redis.conf nor an
+    aclfile supports backslash continuation, and the version of this file
+    drafted in the issue thread used it.
+    """
+    users: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        assert not line.endswith("\\"), f"aclfile has no line continuation: {line!r}"
+        assert line.startswith("user "), f"not a user line: {line!r}"
+        _, name, *rules = line.split()
+        users[name] = rules
+    return users
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _stop(proc: subprocess.Popen) -> None:
+    """Reaped on every exit path, and with a ``kill`` behind the ``terminate``.
+
+    A ``terminate`` that is never waited on leaves a zombie, and a ``wait`` with
+    no fallback turns a server that ignores SIGTERM into a ``TimeoutExpired``
+    raised from teardown - with the server still holding its port.
+    """
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
 
 
 @pytest.fixture(scope="module")
@@ -62,6 +101,13 @@ def tracked_acl_broker(tmp_path_factory):
 
     Binds loopback on a free port with no persistence and never reads
     BROKER_REDIS_URL, so it cannot reach `co-broker`.
+
+    **Module-scoped deliberately, not by oversight.** Sharing it across the two
+    modules that use it would save one spawn, and cost the isolation that
+    `test_retiring_default_is_reversible_live_as_acladmin` needs - that test
+    disables and re-enables `default` on this server. It restores it in a
+    `finally`, but a fixture every module in the directory leans on is the wrong
+    place to rely on that.
     """
     binary = shutil.which("redis-server")
     if not binary:
@@ -81,36 +127,42 @@ def tracked_acl_broker(tmp_path_factory):
     )
 
     port = _free_port()
-    proc = subprocess.Popen(
-        [
-            binary,
-            "--port",
-            str(port),
-            "--bind",
-            "127.0.0.1",
-            "--save",
-            "",
-            "--appendonly",
-            "no",
-            "--aclfile",
-            str(acl),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    # Logged to a file rather than a pipe nobody reads: this fixture outlives the
+    # whole module, and a `stdout=PIPE` whose 64KB buffer fills blocks the server
+    # on its next log line. The diagnostic is what the pipe was for, so it is
+    # read back from the file on the refusal path.
+    log = tmp_path / "redis-server.log"
+    with log.open("w") as stream:
+        proc = subprocess.Popen(
+            [
+                binary,
+                "--port",
+                str(port),
+                "--bind",
+                "127.0.0.1",
+                "--save",
+                "",
+                "--appendonly",
+                "no",
+                "--aclfile",
+                str(acl),
+            ],
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
     deadline = time.time() + 10
     while time.time() < deadline:
         if proc.poll() is not None:
-            pytest.fail(f"redis-server refused the ACL file:\n{proc.stdout.read()}")
+            pytest.fail(f"redis-server refused the ACL file:\n{log.read_text()}")
         with socket.socket() as s:
             s.settimeout(0.2)
             if s.connect_ex(("127.0.0.1", port)) == 0:
                 break
         time.sleep(0.1)
     else:
-        proc.terminate()
-        pytest.fail("redis-server did not start")
+        _stop(proc)
+        pytest.fail(f"redis-server did not start:\n{log.read_text()}")
 
     def connect(user: str | None = None):
         kwargs = {} if user is None else {"username": user, "password": PASSWORD}
@@ -124,8 +176,7 @@ def tracked_acl_broker(tmp_path_factory):
         )
 
     yield connect
-    proc.terminate()
-    proc.wait(timeout=10)
+    _stop(proc)
 
 
 @pytest.fixture(scope="module")
@@ -134,14 +185,16 @@ def live_client():
     if not url:
         pytest.skip("BROKER_REDIS_URL not set - not a host with broker credentials")
 
-    redis = pytest.importorskip("redis")
-    client = redis.Redis.from_url(
+    # No ``importorskip``: this module imports redis at the top, so a clone
+    # without it never reaches here - and redis is a hard dependency of the
+    # project, not an extra.
+    client = redis_pkg.Redis.from_url(
         url, socket_connect_timeout=2, socket_timeout=2, decode_responses=True
     )
     try:
         try:
             client.ping()
-        except redis.exceptions.RedisError as e:
+        except redis_pkg.exceptions.RedisError as e:
             pytest.skip(f"broker not answering: {e!r}")
         yield client
     finally:

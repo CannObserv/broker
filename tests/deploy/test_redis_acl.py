@@ -39,7 +39,7 @@ from co_core.pure.adapters.bus.streams import (
     stream_kind,
 )
 
-from tests.deploy.conftest import ACL_FILE
+from tests.deploy.conftest import ACL_FILE, parse_users
 
 SERVICE_USERS = ("archiver", "watcher", "replicator")
 
@@ -99,25 +99,6 @@ def admits(patterns: set[str], key: str) -> bool:
     honest. Both patterns in play here use ``*`` and nothing else.
     """
     return any(fnmatch.fnmatchcase(key, pattern) for pattern in patterns)
-
-
-def parse_users(text: str) -> dict[str, list[str]]:
-    """`user <name> <rule> <rule> ...`, one per line.
-
-    Deliberately strict about the one-line rule: neither redis.conf nor an
-    aclfile supports backslash continuation, and the version of this file
-    drafted in the issue thread used it.
-    """
-    users: dict[str, list[str]] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        assert not line.endswith("\\"), f"aclfile has no line continuation: {line!r}"
-        assert line.startswith("user "), f"not a user line: {line!r}"
-        _, name, *rules = line.split()
-        users[name] = rules
-    return users
 
 
 @pytest.fixture(scope="module")
@@ -339,6 +320,28 @@ def test_the_nodes_diagnostics_survive_disabling_default(users) -> None:
     for user in SERVICE_USERS:
         assert "+client|list" not in users[user]
         assert "+acl|log" not in users[user]
+
+
+def test_only_the_probe_can_read_an_acl(users) -> None:
+    """`+acl|getuser` is the mirror test's grant, and it is also a credential read.
+
+    `ACL GETUSER` returns the target user's password *hash* - unsalted sha256 -
+    for every user on the instance, so it belongs only to the one identity that
+    already reads every key and every stream. A service user acquiring it reads
+    the whole cohort's credential material.
+
+    Asserted here rather than only live, because
+    `tests/deploy/test_live_acl_matches_tracked_acl.py` skips without
+    `BROKER_REDIS_URL` - so without this, CI protects neither half of the grant
+    that makes that test possible.
+    """
+    assert "+acl|getuser" in users["brokeradmin"], (
+        "the mirror test needs it: tests/deploy/test_live_acl_matches_tracked_acl.py"
+    )
+    for name, rules in users.items():
+        if name in {"brokeradmin", "acladmin", "default"}:
+            continue
+        assert "+acl|getuser" not in rules, f"{name} can read every user's password hash"
 
 
 def test_the_probe_cannot_write_to_a_stream(users) -> None:

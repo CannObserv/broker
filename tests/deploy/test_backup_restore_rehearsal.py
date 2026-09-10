@@ -27,17 +27,12 @@ import pytest
 import redis as redis_pkg
 
 from src.broker import backup, restore
+from tests.deploy.conftest import _free_port
 from tests.gcs_fakes import FakeBucket, FakeClient
 
 pytestmark = pytest.mark.skipif(
     shutil.which("redis-server") is None, reason="redis-server not installed"
 )
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 class Scratch:
