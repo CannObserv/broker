@@ -76,6 +76,10 @@ NON_STREAM_PATTERNS = frozenset({"*", "replicator:cmd:*", "probe.*", "replicator
 # than wedging its loop on the node.
 COMMAND_STREAMS = tuple(s for s in sorted(CANONICAL_STREAMS) if stream_kind(s) == "command")
 
+# A stand-in for the ULID replicator puts in the last segment. Any value works -
+# what is under test is the namespace before it.
+SAMPLE_COMMAND_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
 
 def dedupe_key(topic: str, command_id: str) -> str:
     """Replicator's de-duplication key for a command on ``topic``.
@@ -84,8 +88,11 @@ def dedupe_key(topic: str, command_id: str) -> str:
     one co-core's ``group_name`` puts after the service, so ``content.fetch``
     gives both ``replicator.fetch`` and ``replicator:cmd:fetch:<id>``. Derived
     through that helper rather than spelled, for the reason cannobserv#384
-    exists: a convention change arrives with the wheel and trips a test, instead
-    of being something someone has to notice.
+    exists - though note what that does and does not buy here: the grant is now
+    the whole ``replicator:cmd:*`` namespace, so no change to the suffix
+    derivation can make the pattern tests below go red. What they still catch is
+    the grant being re-narrowed to one segment, which is the regression
+    broker#9 was.
 
     The keys themselves are Replicator's, documented in its
     ``docs/CONVENTIONS.md``; the inventory row is in ../docs/STREAMS.md.
@@ -128,8 +135,23 @@ def users() -> dict[str, list[str]]:
     return parse_users(ACL_FILE.read_text())
 
 
+# Redis spells a key grant four ways, and only one of them starts with `~`:
+# `allkeys` is `~*` by another name, and `%R~`, `%W~` and `%RW~` are read-only,
+# write-only and read-write selectors over the same glob. Any of them would be
+# invisible to a `startswith("~")` filter - which would make every assertion in
+# this file that reads "user X cannot name pattern P" pass while X names it, and
+# would hide a typo'd `%R~content.revision` from
+# `test_every_key_pattern_names_a_real_stream`.
+_KEY_RULE = re.compile(r"^(?:%(?:R|W|RW)?)?~(?P<pattern>.+)$")
+
+
 def key_patterns(rules: list[str]) -> set[str]:
-    return {r[1:] for r in rules if r.startswith("~")}
+    patterns = {"*"} if "allkeys" in rules else set()
+    for rule in rules:
+        match = _KEY_RULE.match(rule)
+        if match:
+            patterns.add(match.group("pattern"))
+    return patterns
 
 
 # --- what the file says ---
@@ -192,7 +214,7 @@ def test_replicator_can_name_every_dedupe_namespace(users) -> None:
     patterns = key_patterns(users["replicator"])
     assert COMMAND_STREAMS, "co-core classified no stream as a command"
     for topic in COMMAND_STREAMS:
-        key = dedupe_key(topic, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        key = dedupe_key(topic, SAMPLE_COMMAND_ID)
         assert admits(patterns, key), (
             f"replicator cannot name {key!r} - the dedupe write and the EXISTS "
             f"before {topic}'s handler are both denied"
@@ -203,12 +225,20 @@ def test_no_other_user_can_name_the_dedupe_keyspace(users) -> None:
     """They are Replicator's private state, and the broker's own sweep does not
     want them: `brokeradmin` holds `~*` for `INFO` and the DLQ scan, and that is
     the one exception. A second service naming this pattern would be reaching
-    into another's dedupe window."""
-    key = dedupe_key(COMMAND_STREAMS[0], "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+    into another's dedupe window.
+
+    Over every command stream's namespace rather than the first, for the reason
+    the test above is written over the taxonomy: a grant reaching into one
+    segment is exactly the shape of mistake broker#9 corrected, and checking
+    only ``fetch`` would miss its mirror image.
+    """
+    assert COMMAND_STREAMS, "co-core classified no stream as a command"
     for name, rules in users.items():
         if name in {"replicator", "brokeradmin", "acladmin", "default"}:
             continue
-        assert not admits(key_patterns(rules), key), f"{name} can name {key!r}"
+        for topic in COMMAND_STREAMS:
+            key = dedupe_key(topic, SAMPLE_COMMAND_ID)
+            assert not admits(key_patterns(rules), key), f"{name} can name {key!r}"
 
 
 @pytest.mark.parametrize("user", SERVICE_USERS)
@@ -515,15 +545,23 @@ def test_replicator_can_dedupe_a_command_on_every_command_stream(live_acl_broker
     ``SET .. NX EX`` is the write after a completed handler and ``EXISTS`` is the
     read before the next one. Nothing else touches them - no ``GET``, no
     ``DEL``, no ``TTL`` (CannObserv/broker#9, and Replicator's own CI AST-scans
-    ``src/`` to keep that surface closed), which is why this asserts exactly two.
+    ``src/`` to keep that surface closed), which is why this asserts exactly two
+    and then asserts the third is refused: a grant that is too *wide* is the one
+    mistake the pattern checks cannot see, so it is written as an explicit
+    denial, the way the archiver/``content.blobs`` assertion is.
     """
     client = live_acl_broker("replicator")
-    key = dedupe_key(topic, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+    key = dedupe_key(topic, SAMPLE_COMMAND_ID)
 
     assert client.set(key, "some-message-id", nx=True, ex=86400) is True
     assert client.exists(key) == 1
     # The window is not extended by a redelivery: the second SET is a no-op.
     assert client.set(key, "another-message-id", nx=True, ex=86400) is None
+    # And the surface stops there - the value is never read back, only its
+    # existence, so the grant must not stretch to GET, DEL or TTL.
+    for refused in (lambda: client.get(key), lambda: client.delete(key), lambda: client.ttl(key)):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
 
 
 def test_citest_cannot_name_a_production_topic(live_acl_broker) -> None:

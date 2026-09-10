@@ -15,7 +15,10 @@ bottom.
 - every stream's entries;
 - **every consumer group's `last-delivered-id`** and PEL - the messages
   delivered and not yet acked;
-- replicator's `replicator:cmd:fetch:*` expiring state.
+- replicator's `replicator:cmd:*` expiring state - the namespace, not one
+  segment of it: there is one per command stream, and naming only `fetch` is
+  the mistake broker#9 corrected in the ACL. Inventoried in
+  [STREAMS.md](STREAMS.md), *Non-stream keys on `db0`*.
 
 A group's position is recoverable from nowhere else. Losing it means every
 group re-provisions at `ensure_group`'s default `$`, which is silent and skips
@@ -208,7 +211,7 @@ that says it was not - stop, the directory is wrong.
 
 The key count is a bound, not an equality. `keys` is at most the object's
 `keys` metadata (`restore --list` prints it), short by exactly the
-`replicator:cmd:fetch:*` guards whose expiry passed between the snapshot and
+`replicator:cmd:*` guards whose expiry passed between the snapshot and
 now - and the base loads those before the expiry cycle removes them, so for a
 second after start the count can read higher than it will settle at. After an
 outage longer than a guard's TTL, `expires` is 0, and that is correct:

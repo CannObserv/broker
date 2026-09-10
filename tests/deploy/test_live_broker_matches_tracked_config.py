@@ -12,6 +12,13 @@ and it needs no privilege: the probe's own ``BROKER_REDIS_URL`` is enough, where
 reading ``/etc/redis/redis.conf`` would need root or a group membership that
 widens who can see the credential.
 
+One assertion here is about the live *keyspace* rather than the live config
+(``test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance``): it sits
+in this module because it needs the same credential and the same "the files
+cannot see this" argument, and because what it pins is the premise of
+``maxmemory-policy`` being worth pinning at all - see ``docs/STREAMS.md``,
+"``noeviction`` is load-bearing beyond refusing writes".
+
 Skips unless ``BROKER_REDIS_URL`` is set and the broker answers, so CI and dev
 clones pass. On the broker node, source the env first - and as
 ``set -a; . /etc/broker/.env; set +a``, never ``export $(cat ... | xargs)``,
@@ -19,6 +26,7 @@ which silently corrupts values.
 """
 
 import os
+import time
 
 import pytest
 
@@ -51,11 +59,15 @@ def live_client():
         url, socket_connect_timeout=2, socket_timeout=2, decode_responses=True
     )
     try:
-        client.ping()
-    except redis.exceptions.RedisError as e:
-        pytest.skip(f"broker not answering: {e!r}")
-    yield client
-    client.close()
+        try:
+            client.ping()
+        except redis.exceptions.RedisError as e:
+            pytest.skip(f"broker not answering: {e!r}")
+        yield client
+    finally:
+        # Closed on the skip path too: ``ping`` failing still leaves whatever
+        # connection the pool created behind it.
+        client.close()
 
 
 @pytest.fixture(scope="module")
@@ -95,6 +107,26 @@ def test_the_cap_is_live_and_nonzero(live_config) -> None:
     assert parse_size(live_config["maxmemory"]) > 0
 
 
+def _volatile_versus_dedupe(client) -> tuple[int, int] | None:
+    """``(volatile keys, distinct dedupe keys)`` on the connection's own database,
+    or ``None`` when that database is empty.
+
+    The database index is read off the connection rather than spelled ``db0``:
+    ``INFO keyspace`` reports every database and ``SCAN`` only reaches the one
+    ``BROKER_REDIS_URL`` selected, so a hard-coded name would silently compare
+    two different keyspaces if that URL ever carried another suffix.
+
+    Distinct, because ``SCAN`` guarantees at-least-once and may return the same
+    key twice when the hash table rehashes mid-iteration - which would overcount
+    the dedupe side and fail the equality below for no reason.
+    """
+    db = client.get_connection_kwargs().get("db", 0)
+    keyspace = client.info("keyspace").get(f"db{db}")
+    if not keyspace:
+        return None
+    return keyspace["expires"], len(set(client.scan_iter(match="replicator:cmd:*", count=1000)))
+
+
 def test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance(live_client) -> None:
     """The claim that makes ``noeviction`` load-bearing, asserted rather than
     assumed (CannObserv/broker#9).
@@ -113,16 +145,32 @@ def test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance(live_client)
     tenant's volatile key arriving on its own is the case worth catching, and
     it fails this.
 
+    **Read twice, because the two sources disagree transiently.** ``expires``
+    still counts a key whose TTL has passed until the expire cycle reclaims it,
+    where ``SCAN`` already filters that key out - so a dedupe key expiring
+    between the two reads presents as a non-dedupe volatile key that does not
+    exist, with a failure message naming the wrong cause. The condition this
+    guards is persistent, so it has to survive a second reading.
+
     An empty dedupe namespace is legitimate - the TTL is 24h and a quiet day
     expires them all - so zero on both sides passes.
     """
-    keyspace = live_client.info("keyspace").get("db0")
-    if not keyspace:
-        pytest.skip("db0 is empty - nothing to say about which keys are volatile")
+    reading = _volatile_versus_dedupe(live_client)
+    if reading is None:
+        pytest.skip("the database is empty - nothing to say about which keys are volatile")
+    if reading[0] != reading[1]:
+        # The two sources skew transiently and always in the same direction:
+        # INFO's ``expires`` still counts a key whose TTL has passed until the
+        # expire cycle reclaims it, while SCAN already filters that key out.
+        # Measured at 2000 vs 0 inside the ~100ms reclaim window. The condition
+        # worth catching is persistent, so insist on it twice rather than ship a
+        # red build that names the wrong cause.
+        time.sleep(0.5)
+        reading = _volatile_versus_dedupe(live_client) or reading
 
-    dedupe = list(live_client.scan_iter(match="replicator:cmd:*", count=1000))
-    assert keyspace["expires"] == len(dedupe), (
-        f"{keyspace['expires']} volatile keys but {len(dedupe)} dedupe keys - "
+    expires, dedupe = reading
+    assert expires == dedupe, (
+        f"{expires} volatile keys but {dedupe} dedupe keys - "
         "another tenant now writes a key with a TTL, so replicator's namespace "
         "is no longer the whole eviction candidate set; see docs/STREAMS.md, "
         '"Non-stream keys on db0"'

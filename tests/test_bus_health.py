@@ -39,6 +39,7 @@ from fakeredis import aioredis as fakeredis_aio
 from src.broker import bus_health
 from src.broker.bus_health import (
     BACKUP_WARN_MAX_AGE_SECONDS,
+    BROKER_EVICTION_POLICY,
     DISK_WARN_MIN_FREE_BYTES,
     FACT_PRODUCER_MAXLEN,
     FACT_WARN_LENGTH,
@@ -83,6 +84,61 @@ def test_memory_warns_when_maxmemory_unset() -> None:
     findings = evaluate_memory(used_memory=100, maxmemory=0)
     assert len(findings) == 1
     assert "maxmemory" in findings[0].message
+
+
+def test_memory_healthy_under_the_required_policy() -> None:
+    assert evaluate_memory(used_memory=100, maxmemory=1000, policy=BROKER_EVICTION_POLICY) == []
+
+
+def test_memory_warns_on_a_volatile_eviction_policy() -> None:
+    """The silent one, and the whole reason this check exists (CannObserv/broker#9).
+
+    Replicator's dedupe keys are the only volatile keys on the instance, so a
+    ``volatile-*`` policy makes that one namespace the entire eviction candidate
+    set. Nothing reports the eviction, so without this the probe calls the
+    broker healthy on every tick while the keys are being deleted.
+    """
+    findings = evaluate_memory(used_memory=100, maxmemory=1000, policy="volatile-lru")
+    assert [f.check for f in findings] == ["eviction-policy"]
+    assert "volatile-lru" in findings[0].message
+    assert "dedupe" in findings[0].message
+
+
+def test_memory_warns_on_an_allkeys_eviction_policy() -> None:
+    """The other family, with a different consequence worth naming: it evicts
+    stream entries, which is the loss the continuity check catches after the
+    fact rather than before it."""
+    findings = evaluate_memory(used_memory=100, maxmemory=1000, policy="allkeys-lru")
+    assert [f.check for f in findings] == ["eviction-policy"]
+    assert "stream entries" in findings[0].message
+
+
+def test_memory_policy_unreported_is_not_a_finding() -> None:
+    """A server that does not report it (fakeredis) is a probe limitation, the
+    same rule ``evaluate_persistence`` follows for its missing fields."""
+    assert evaluate_memory(used_memory=100, maxmemory=1000, policy=None) == []
+
+
+def test_memory_reports_the_policy_and_the_absent_cap_together() -> None:
+    """Both are ways the protection becomes inert and they are independent, so
+    one must not hide the other behind an early return."""
+    findings = evaluate_memory(used_memory=100, maxmemory=0, policy="volatile-ttl")
+    assert {f.check for f in findings} == {"eviction-policy", "memory"}
+
+
+async def test_collect_memory_reads_the_policy_from_the_section_it_already_fetches(
+    monkeypatch,
+) -> None:
+    """No second call and no new grant: ``maxmemory_policy`` rides the same
+    ``INFO memory`` the headroom check already pays for."""
+
+    class Server:
+        async def info(self, section):
+            assert section == "memory"
+            return {"used_memory": 1, "maxmemory": 1000, "maxmemory_policy": "volatile-lru"}
+
+    findings = await bus_health._collect_memory(Server())
+    assert [f.check for f in findings] == ["eviction-policy"]
 
 
 # --- disk ---

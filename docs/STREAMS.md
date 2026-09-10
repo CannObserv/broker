@@ -314,7 +314,10 @@ producer's loop stops reporting exactly when that producer is down.
 Per tick it probes:
 
 - `used_memory` vs `maxmemory` (WARN at 75% - before the `noeviction` cap
-  starts refusing `XADD` instance-wide), and `maxmemory 0` (inert ceiling);
+  starts refusing `XADD` instance-wide), `maxmemory 0` (inert ceiling), and
+  **`maxmemory-policy` other than `noeviction`** - the third way the protection
+  goes inert, and the only one whose damage is otherwise reported by nobody
+  (see below). All from the one `INFO memory` the first check already pays for;
 - `XLEN` per stream, each threshold derived as **that stream's own retention
   cap + 10%** - so a breach means the retention mechanism broke, not that
   traffic grew. Three caps apply and they are not interchangeable: 110k for
@@ -417,12 +420,24 @@ tuning pass moves off `noeviction`, that trade has to be made deliberately, and
 `allkeys-*` is not the escape either: it evicts stream entries, which is the
 loss `## Detecting loss` exists to catch after the fact.
 
-Both halves are asserted rather than trusted:
-`test_tracked_config_sets_an_explicit_nonzero_maxmemory` pins the policy in the
-tracked config, and `test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance`
-pins the keyspace claim against the live broker - because the hazard changes
-shape the moment a second service writes a key with a TTL, and that is the day
-this section stops being true.
+All three claims are checked rather than trusted, and the third is the one
+that matters at 3am:
+
+- `test_tracked_config_sets_an_explicit_nonzero_maxmemory` pins the policy in
+  the tracked config, with the hazard in the failing test's own docstring so
+  whoever changes it deliberately reads why;
+- `test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance` pins the
+  keyspace claim against the live broker - the hazard changes shape the moment
+  a second service writes a key with a TTL, and that is the day this section
+  stops being true;
+- **the probe reports a wrong policy every tick**, which is what closes the gap
+  the other two leave. A `CONFIG SET maxmemory-policy volatile-lru` is live,
+  persisted nowhere, and reaches nothing that runs on a schedule - so until
+  this check existed, the only detector was a test suite someone had to
+  remember to run on the node. The finding names the family, because the two
+  fail differently: `volatile-*` evicts only the dedupe keys and reports it to
+  nobody; `allkeys-*` evicts stream entries, which *Detecting loss* catches,
+  but only afterwards.
 
 ## Detecting loss - the one check that is not an upper bound
 
@@ -493,7 +508,7 @@ stopped being trimmed at all, which is the condition the check exists for.
 
 | Signal | Lives in | Why there |
 |---|---|---|
-| Broker memory, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth, disk | **this repo** (`broker-bus-health.timer`) | All six measure the broker's host |
+| Broker memory and eviction policy, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth, disk, persistence status, backup freshness | **this repo** (`broker-bus-health.timer`) | Every one of them measures the broker's host |
 | `information.changes_outbox` depth / age / dead-lettered | **archiver** (`archiver-bus-health.timer`) | Queries archiver's database |
 | The dashboard bus panel's group lag | **archiver** (`collect_group_lag`) | `XPENDING` from a client is an ordinary call, and the panel is archiver's UI |
 | Redis >= 7.0 floor at service start | **each participant** (`check_redis_floor.sh`) | A client-side assertion about the broker it is about to talk to |

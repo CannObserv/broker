@@ -106,6 +106,15 @@ logger = get_logger("src.broker.bus_health")
 # producer and each one starts its retry flood.
 MEMORY_WARN_FRACTION = 0.75
 
+# The policy the cap is only safe under, mirrored from deploy/redis.conf.broker.
+# It is checked every tick for the same reason `maxmemory 0` is: both are ways
+# the protection silently becomes inert, both arrive as a live `CONFIG SET` that
+# no file records, and a policy is the one an operator is most likely to reach
+# for under memory pressure - "evict something" reads safer than "refuse
+# writes" and is the opposite. See docs/STREAMS.md, "`noeviction` is
+# load-bearing beyond refusing writes" (CannObserv/broker#9).
+BROKER_EVICTION_POLICY = "noeviction"
+
 # Root-filesystem headroom. On this node ``/`` is where ``/var/lib/redis``
 # lives, so this is the AOF's headroom and nothing else alerts on it. The
 # fraction matches the state observed when archiver#130 was un-deferred (91%
@@ -356,21 +365,74 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
 # --- pure evaluators ---
 
 
-def evaluate_memory(*, used_memory: int, maxmemory: int) -> list[Finding]:
-    """Warn on headroom pressure, and on ``maxmemory 0`` - which makes
-    ``noeviction`` inert and re-opens the whole-broker OOM-kill tail."""
+def _evaluate_eviction_policy(policy: str | None) -> list[Finding]:
+    """Warn unless the instance is running the policy the cap assumes.
+
+    The two wrong families fail differently, and the message says which,
+    because the remedy differs and one of them is invisible:
+
+    - ``volatile-*`` evicts **only** replicator's ``replicator:cmd:*`` dedupe
+      keys, because they are the only volatile keys on this instance. Nothing
+      reports an eviction, so the first symptom is a window of duplicate
+      fetches at live origins.
+    - ``allkeys-*`` evicts stream entries, which ``evaluate_stream_continuity``
+      catches - but only after the loss, and only on the next tick.
+
+    ``None`` is a server that does not report the field, a probe limitation
+    rather than a fault, and is treated the way ``evaluate_persistence`` treats
+    its missing fields.
+    """
+    if policy is None or policy == BROKER_EVICTION_POLICY:
+        return []
+    if policy.startswith("volatile-"):
+        consequence = (
+            "it evicts ONLY replicator's replicator:cmd:* dedupe keys - the only "
+            "volatile keys here - and an eviction is reported to nobody, so the "
+            "first symptom is duplicate fetches at live origins"
+        )
+    elif policy.startswith("allkeys-"):
+        consequence = (
+            "it evicts stream entries, which is data loss the continuity check "
+            "can only report after the fact"
+        )
+    else:
+        consequence = "the cap is only safe under a policy that refuses writes rather than evicting"
+    return [
+        Finding(
+            check="eviction-policy",
+            subject="redis",
+            message=f"maxmemory-policy is {policy!r}, not {BROKER_EVICTION_POLICY!r} - "
+            f"{consequence}; see docs/STREAMS.md, "
+            '"noeviction is load-bearing beyond refusing writes"',
+        )
+    ]
+
+
+def evaluate_memory(
+    *, used_memory: int, maxmemory: int, policy: str | None = None
+) -> list[Finding]:
+    """Warn on headroom pressure, on ``maxmemory 0`` - which makes the policy
+    inert and re-opens the whole-broker OOM-kill tail - and on a policy the cap
+    is not safe under.
+
+    All three are independent, so none of them returns early over another: a
+    broker can be uncapped *and* set to evict, and hiding the second behind the
+    first would report half a misconfiguration.
+    """
+    findings = _evaluate_eviction_policy(policy)
     if maxmemory == 0:
-        return [
+        findings.append(
             Finding(
                 check="memory",
                 subject="redis",
                 message="maxmemory is 0 - noeviction has no ceiling to enforce; "
                 "see deploy/README.md (CannObserv/archiver#128)",
             )
-        ]
+        )
+        return findings  # the fraction below is undefined without a ceiling
     fraction = used_memory / maxmemory
     if fraction >= MEMORY_WARN_FRACTION:
-        return [
+        findings.append(
             Finding(
                 check="memory",
                 subject="redis",
@@ -378,8 +440,8 @@ def evaluate_memory(*, used_memory: int, maxmemory: int) -> list[Finding]:
                 f"maxmemory {maxmemory} (warn at {MEMORY_WARN_FRACTION:.0%}); "
                 "at 100% XADD fails instance-wide for every producer",
             )
-        ]
-    return []
+        )
+    return findings
 
 
 def evaluate_disk(*, total: int, free: int) -> list[Finding]:
@@ -815,6 +877,9 @@ async def _collect_memory(client: Redis) -> list[Finding]:
     return evaluate_memory(
         used_memory=int(info.get("used_memory", 0)),
         maxmemory=int(info.get("maxmemory", 0)),
+        # Rides the section the headroom check already pays for - no second
+        # call, and no grant beyond the +info brokeradmin already holds.
+        policy=info.get("maxmemory_policy"),
     )
 
 
