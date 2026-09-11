@@ -8,7 +8,7 @@ skill. Follows the [agentskills.io](https://agentskills.io) spec.
 
 | Path | What it is |
 |---|---|
-| `skills-vendor/gregoryfoster-skills/` | The submodule. Read-only here - changes go upstream |
+| `skills-vendor/gregoryfoster-skills/` | The submodule. Read-only here - changes go upstream. Ruff skips it (`pyproject.toml`), as every sibling does: the refresh hook moves it unreviewed |
 | `skills/<name>` | agentskills.io discovery: a symlink into the submodule, or a committed override that shadows it |
 | `.claude/skills/<name>` | Claude Code discovery: a symlink to `../../skills/<name>`, so an override shadows the vendor copy in both systems |
 | `.skills/doctor.sh` | A real file, not a symlink: it repairs dangling vendor symlinks by initialising the submodule, and would dangle itself if it were one. `reviewing-*` / `shipping-*` run it as their preflight |

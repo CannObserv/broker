@@ -32,6 +32,11 @@ filterwarnings = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# The vendored skills are upstream's code under upstream's rules. The daily
+# refresh hook moves them without review, so linting them here would let an
+# upstream commit fail this repo's gate - locally only, as CI never checks the
+# submodule out. See docs/SKILLS.md.
+extend-exclude = ["skills-vendor/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]
