@@ -19,6 +19,7 @@ the archiver/`content.blobs` assertion is written as an explicit denial rather
 than as a property of the pattern list.
 """
 
+import contextlib
 import fnmatch
 import re
 
@@ -39,7 +40,8 @@ from co_core.pure.adapters.bus.streams import (
     stream_kind,
 )
 
-from tests.deploy.conftest import ACL_FILE, parse_users
+from src.broker.bus_health import DLQ_DRAINERS
+from tests.deploy.conftest import ACL_FILE, PASSWORD, parse_users, split_rules
 
 SERVICE_USERS = ("archiver", "watcher", "replicator")
 
@@ -58,7 +60,9 @@ CANONICAL_STREAMS = frozenset(
 )
 
 # Patterns that are legitimately not a canonical stream or its DLQ.
-NON_STREAM_PATTERNS = frozenset({"*", "replicator:cmd:*", "probe.*", "replicator.itest.*"})
+# `*.dlq` is the backstop's disposal pattern: it names every dead-letter queue,
+# including the ones nobody declared, which is the whole point of a backstop.
+NON_STREAM_PATTERNS = frozenset({"*", "*.dlq", "replicator:cmd:*", "probe.*", "replicator.itest.*"})
 
 # The command streams, which is what makes the dedupe keyspace plural. Derived
 # from co-core's taxonomy rather than listed, so a third command stream added
@@ -118,11 +122,39 @@ _KEY_RULE = re.compile(r"^(?:%(?:R|W|RW)?)?~(?P<pattern>.+)$")
 
 def key_patterns(rules: list[str]) -> set[str]:
     patterns = {"*"} if "allkeys" in rules else set()
-    for rule in rules:
+    root, selectors = split_rules(rules)
+    # Selector patterns count. A selector is a narrower grant than a root rule -
+    # it carries its own command list - but it is still a pattern this user can
+    # NAME, and every assertion below that a user cannot reach a key has to mean
+    # "by any route". `root_key_patterns` is for the few places the distinction
+    # is the point.
+    for rule in [*root, *(r for selector in selectors for r in selector)]:
         match = _KEY_RULE.match(rule)
         if match:
             patterns.add(match.group("pattern"))
     return patterns
+
+
+def root_key_patterns(rules: list[str]) -> set[str]:
+    """Only the patterns on the root permission set, ignoring selectors."""
+    root, _ = split_rules(rules)
+    return key_patterns(root)
+
+
+def selector_patterns(rules: list[str], command: str) -> set[str]:
+    """The key patterns of every selector granting ``command``.
+
+    Empty when no selector grants it, which is the state every user but two is
+    in and the state this helper must not make look like a grant.
+    """
+    _root, selectors = split_rules(rules)
+    return {
+        match.group("pattern")
+        for selector in selectors
+        if command in selector
+        for rule in selector
+        if (match := _KEY_RULE.match(rule))
+    }
 
 
 # --- what the file says ---
@@ -344,14 +376,89 @@ def test_only_the_probe_can_read_an_acl(users) -> None:
         assert "+acl|getuser" not in rules, f"{name} can read every user's password hash"
 
 
+def test_no_user_holds_xdel_on_its_root_permission_set(users) -> None:
+    """Deletion is selector-scoped or it is not granted, for every user.
+
+    This is the assertion the `+set` stanza in the tracked file should have been
+    able to make about itself. A Redis ACL key pattern applies to **every**
+    command on the root permission set, so a root `+xdel` beside
+    `~content.replicate` is `XDEL` on a command stream - deleting commands the
+    consumer group has not delivered and orphaning the PEL entries naming them,
+    which is the exact hazard `docs/STREAMS.md` carves that stream out of the
+    trim set for. A selector is the only grammar that scopes a command to a
+    pattern, so the rule is: never on the root.
+    """
+    for name, rules in users.items():
+        root, _ = split_rules(rules)
+        assert "+xdel" not in root, (
+            f"{name} holds +xdel on its root permissions, which applies it to every key "
+            f"pattern the user has: {sorted(root_key_patterns(rules))}"
+        )
+
+
+def test_no_xdel_grant_can_name_a_fact_or_command_stream(users) -> None:
+    """What the selectors are *for*, asserted against co-core rather than read.
+
+    A dead-letter entry is a copy - the fact carrying the outcome went to
+    `content.blobs` or `content.artifacts` and is what issuers actually read - so
+    deleting one destroys no unique record. That argument collapses the moment a
+    deletion grant can reach the original, and a glob is how that happens
+    silently: `~content.*` would admit both `content.fetch.dlq` and
+    `content.fetch`.
+
+    Derived from the canonical stream set, so a tenth stream added upstream is
+    covered without an edit here.
+    """
+    for name, rules in users.items():
+        for pattern in sorted(selector_patterns(rules, "+xdel")):
+            reachable = sorted(s for s in CANONICAL_STREAMS if admits({pattern}, s))
+            assert not reachable, (
+                f"{name}'s +xdel selector names {pattern!r}, which admits {reachable} - "
+                "a deletion grant that can reach the stream the DLQ is a copy OF"
+            )
+
+
+def test_the_drainer_can_delete_from_every_queue_it_drains_and_can_read(users) -> None:
+    """The grant broker#12 found missing, derived from the assignment that made it owed.
+
+    `DLQ_DRAINERS` settled who triages each queue in broker#1 Phase 5, and the
+    comment above it claimed the assignment "costs nothing under D3 - each
+    service already holds `~<its own topic>.dlq` in the draft ACL". The key
+    pattern was there; the deletion command was not, so for a year the named
+    drainer of `content.replicate.dlq` could fill it and not empty it
+    (broker#12).
+
+    **Conditioned on being able to READ the queue, which is not a loophole but
+    the honest boundary.** `DLQ_DRAINERS` names replicator as the prospective
+    drainer of `info.changes.dlq`, and replicator holds no `~info.changes`
+    pattern at all - it cannot consume the stream, let alone triage its queue.
+    Granting deletion ahead of the group would be granting it to a service that
+    cannot read what it is deleting. The day replicator gets that group, it gets
+    the pattern, and this test starts demanding the grant on its own.
+    """
+    for dlq, drainer in sorted(DLQ_DRAINERS.items()):
+        rules = users.get(drainer)
+        if rules is None or dlq not in key_patterns(rules):
+            continue
+        assert admits(selector_patterns(rules, "+xdel"), dlq), (
+            f"{drainer} is the drainer of {dlq} and can read it, but holds no +xdel "
+            f"selector that names it - it can fill the queue and not empty it"
+        )
+
+
 def test_the_probe_cannot_write_to_a_stream(users) -> None:
     """`brokeradmin` is instance-wide by necessity - `INFO memory` has no key and
     the DLQ sweep is `SCAN MATCH *.dlq` so it finds queues nobody declared. Wide
     keys make a narrow command list the only remaining boundary, so the one thing
     it must not be able to do is publish."""
-    assert key_patterns(users["brokeradmin"]) == {"*"}
+    assert root_key_patterns(users["brokeradmin"]) == {"*"}
     assert "+xadd" not in users["brokeradmin"]
     assert "+@all" not in users["brokeradmin"]
+    # It can DELETE, as the declared backstop for a queue nobody drains
+    # (`DLQ_UNASSIGNED`), and that is the one exception - scoped by a selector to
+    # dead-letter queues, so the instance-wide `~*` above cannot carry it onto a
+    # fact or a command stream. Publishing remains the thing it cannot do.
+    assert selector_patterns(users["brokeradmin"], "+xdel") == {"*.dlq"}
 
 
 # --- does it actually parse? ---
@@ -466,6 +573,77 @@ def test_replicator_can_dedupe_a_command_on_every_command_stream(tracked_acl_bro
     for refused in (lambda: client.get(key), lambda: client.delete(key), lambda: client.ttl(key)):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             refused()
+
+
+@contextlib.contextmanager
+def _seeder(tracked_acl_broker):
+    """A throwaway publisher, because no tracked user can write everywhere.
+
+    These tests need bait on a stream the user under test cannot publish to -
+    that denial being half of what is asserted - and `acladmin` holds `+acl` and
+    `+ping` only. Created with the same throwaway password the fixture connects
+    with, and deleted in a `finally` so the module-scoped server is left as the
+    tracked file describes it.
+    """
+    admin = tracked_acl_broker("acladmin")
+    admin.execute_command("ACL", "SETUSER", "seed", "on", f">{PASSWORD}", "~*", "+xadd")
+    try:
+        yield tracked_acl_broker("seed")
+    finally:
+        admin.execute_command("ACL", "DELUSER", "seed")
+
+
+@pytest.mark.parametrize("topic", sorted(CANONICAL_STREAMS))
+def test_a_drainer_can_empty_its_own_queue_and_not_the_stream_it_copies(
+    tracked_acl_broker, topic
+) -> None:
+    """The selector, enforced by redis rather than asserted against the file.
+
+    Parametrised over every canonical stream and skipped where no drainer holds
+    the grant, so the pair under test is always (the queue it may empty, the
+    stream that queue copies FROM) for one topic. That pairing is the property
+    which makes "a dead-letter entry is only a copy" safe to rely on: the static
+    test can say the pattern does not admit the stream, and this says redis
+    agrees.
+    """
+    dlq = dlq_name(topic)
+    drainer = DLQ_DRAINERS.get(dlq)
+    if drainer is None:
+        pytest.skip(f"no drainer assigned for {dlq}")
+    rules = parse_users(ACL_FILE.read_text()).get(drainer)
+    if rules is None or not admits(selector_patterns(rules, "+xdel"), dlq):
+        pytest.skip(f"{drainer} holds no +xdel selector naming {dlq}")
+
+    client = tracked_acl_broker(drainer)
+    with _seeder(tracked_acl_broker) as seeder:
+        dlq_id = seeder.xadd(dlq, {"k": "v"})
+        topic_id = seeder.xadd(topic, {"k": "v"})
+        assert client.xdel(dlq, dlq_id) == 1, f"{drainer} cannot drain {dlq}"
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            client.xdel(topic, topic_id)
+
+
+def test_the_probe_can_dispose_of_one_dlq_entry_and_nothing_else(tracked_acl_broker) -> None:
+    """The backstop half, and the precision it exists to buy.
+
+    `DLQ_UNASSIGNED` makes the broker the drainer of a `*.dlq` key nobody
+    claimed, and before broker#12 its only tool was `XTRIM MAXLEN 0` - which on a
+    queue holding more than the one triaged entry takes the rest with it. So the
+    assertion is not just that a delete is permitted but that **the other entry
+    survives it**. `~*.dlq` is deliberately a glob: the queue this exists for is
+    by definition one nobody declared.
+    """
+    orphan = "nobody.claims.this.dlq"
+    probe = tracked_acl_broker("brokeradmin")
+    with _seeder(tracked_acl_broker) as seeder:
+        doomed = seeder.xadd(orphan, {"k": "triaged"})
+        kept = seeder.xadd(orphan, {"k": "keep"})
+        stream_id = seeder.xadd(CONTENT_FETCH, {"k": "v"})
+        assert probe.xdel(orphan, doomed) == 1
+        assert probe.xlen(orphan) == 1, "a per-entry disposal must leave the rest"
+        assert probe.xrange(orphan)[0][0] == kept
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            probe.xdel(CONTENT_FETCH, stream_id)
 
 
 def test_citest_cannot_name_a_production_topic(tracked_acl_broker) -> None:

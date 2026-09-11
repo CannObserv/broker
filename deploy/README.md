@@ -405,3 +405,20 @@ under time pressure. Delete a topic's dumps once its triage is finished; the
 high-water mark is read back from the filenames, so deleting them correctly
 re-arms capture rather than leaving a gap. See
 [`../docs/STREAMS.md`](../docs/STREAMS.md), *Who drains a DLQ*.
+
+The **disposal** step is `XDEL <queue> <id>`, per entry, and since broker#12
+each named drainer can do it for its own queues without an operator - a
+selector, `(+xdel ~<its own>.dlq)`, which cannot reach the stream the queue
+copies from. `brokeradmin` holds `(+xdel ~*.dlq)` as the backstop for a queue
+nobody claimed. Before that the only tool was `XTRIM MAXLEN 0`, which empties
+the queue: on one that has reached 110 entries, removing a single triaged frame
+took the other 109 with it.
+
+**Capture and disposal have one gap between them, and it is worth knowing
+before trusting the evidence directory as a complete record.** Capture happens
+on a probe tick, every 10 minutes, and `_collect_dlqs` returns early on
+`depth == 0` - so an entry written and deleted inside one interval leaves no
+dump and no finding. Nothing exploits that today (no service drains
+automatically), and broker#13 closes it by recording each queue's
+`entries-added`, which is monotonic: a counter that climbed while depth stayed 0
+proves entries passed through unseen.

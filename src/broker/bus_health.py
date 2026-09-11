@@ -200,10 +200,20 @@ REPLICATE_GROUP = group_name(CONTENT_REPLICATE, "replicator")
 #
 # The rule behind the values: the drainer is the stream's consumer, because it
 # is the service whose ``dead_letter()`` put the entry there and therefore the
-# only one that can read it. That also costs nothing under D3 - each service
-# already holds ``~<its own topic>.dlq`` in the draft ACL, where Archiver's old
-# cluster-wide role would have needed instance-wide SCAN plus a grant on every
-# other service's queues.
+# only one that can read it. It is still far cheaper under D3 than Archiver's old
+# cluster-wide role, which would have needed instance-wide SCAN plus a grant on
+# every other service's queues.
+#
+# **It did not cost nothing, which is what this comment used to say.** Each
+# service already held ``~<its own topic>.dlq``, so the claim looked right - but a
+# key pattern is not a deletion grant, and no drainer held ``+xdel`` on anything.
+# Every name in this table was a service that could fill its queue and not empty
+# it, for five of the six queues below. Found by broker#12 when a frame parked in
+# ``content.replicate.dlq``; closed by a selector per drainer in
+# ``deploy/redis-acl.conf``, scoped so the grant cannot reach the stream the queue
+# is a copy of. A row added here now needs the matching selector or
+# ``test_the_drainer_can_delete_from_every_queue_it_drains_and_can_read`` goes
+# red.
 DLQ_DRAINERS: dict[str, str] = {
     dlq_name(CONTENT_REVISIONS): "archiver",
     dlq_name(CONTENT_ARTIFACTS): "archiver",

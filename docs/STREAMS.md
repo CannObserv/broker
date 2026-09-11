@@ -128,8 +128,14 @@ Three roles, and no two of them are reliably the same service:
   Archiver granted `~content.fetch.dlq` plus `+xrange +xtrim`, and finding a
   queue nobody told it about would need instance-wide `SCAN` - a cluster-wide
   hole through the one model whose payoff is that Archiver cannot name
-  `content.blobs`. The consumer-drains rule needs **no** extra grant: every
-  service already holds `~<its own topic>.dlq`. And **triage is not mechanical**
+  `content.blobs`. The consumer-drains rule needs a far smaller grant: every
+  service already holds `~<its own topic>.dlq`. **It is not "no extra grant",
+  which is what this said until CannObserv/broker#12** - a key pattern is not a
+  deletion grant, and for five of the six queues below the named drainer could
+  write its queue and not empty it. Each drainer now holds a **selector**,
+  `(+xdel ~<its own>.dlq)`, which is the only ACL grammar that scopes a command
+  to a pattern; the root permission set never holds `+xdel`, so the grant cannot
+  reach the stream the queue is a copy of. And **triage is not mechanical**
   - "residue, or a real permanent failure?" is a question about the payload, and
   the consumer is the party that can read it. The #162 drain settles that: those
   110 were Replicator's writes, of Watcher's commands, caused by Archiver's test
@@ -340,6 +346,12 @@ Per tick it probes:
   - nobody else watches these, and this is the one place that can;
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
   named and the entries captured; see *Who drains a DLQ* above;
+The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
+`XTRIM MAXLEN 0`, which was the only tool the broker had before
+CannObserv/broker#12 and which takes every *other* entry with it - on a queue
+that reached 110, emptying it to remove one triaged frame destroys 109 audits
+nobody did. `XTRIM` stays granted for the retention trims in the table above.
+
 - **`entries-added` going backwards on any stream** - the one check here that is
   not an upper bound. See *Detecting loss* below;
 - `/` disk headroom (WARN at 90% used or under 2 GiB free) - which on this node

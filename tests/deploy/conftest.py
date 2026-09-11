@@ -63,6 +63,41 @@ def parse_users(text: str) -> dict[str, list[str]]:
     return users
 
 
+def split_rules(rules: list[str]) -> tuple[list[str], list[list[str]]]:
+    """One user's tokens, separated into root rules and selector rule groups.
+
+    A **selector** is Redis 7's answer to "this command on that pattern only":
+    `(+xdel ~a.dlq ~b.dlq)`, written inside the user line, granting its commands
+    on its own key patterns and nothing else. The root permission set never
+    learns the command.
+
+    It has to be parsed rather than split, and the failure if it is not is
+    silent in the worst direction: `line.split()` scatters a selector across
+    tokens with the brackets still attached, so `~b.dlq)` reads as a **root** key
+    pattern - one with a trailing bracket, naming a stream that does not exist -
+    while the genuinely root patterns and the selector's become
+    indistinguishable. Every assertion in this directory about what a user can
+    name rests on this separation.
+    """
+    root: list[str] = []
+    selectors: list[list[str]] = []
+    current: list[str] | None = None
+    for token in rules:
+        if current is None:
+            if not token.startswith("("):
+                root.append(token)
+                continue
+            current, token = [], token[1:]
+        if token.endswith(")"):
+            current.append(token[:-1])
+            selectors.append([t for t in current if t])
+            current = None
+        elif token:
+            current.append(token)
+    assert current is None, f"unclosed selector in {rules}"
+    return root, selectors
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
