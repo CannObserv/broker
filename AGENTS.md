@@ -114,9 +114,10 @@ tests/           mirrors src/; tests/deploy/ asserts installed artifacts match d
 
 Vendored from `gregoryfoster/skills` into `skills/` (agentskills.io) and
 `.claude/skills/` (Claude Code). Symlinks dangle until the submodule is
-initialised: `bash .skills/doctor.sh`. Review/ship are the `-python-fastapi`
-variants - right gate, wrong deploy step: broker has no service to restart after
-a merge. [docs/SKILLS.md](docs/SKILLS.md).
+initialised: `bash .skills/doctor.sh`. A `SessionStart` hook refreshes the
+submodule daily on `main` and commits the bump itself. Review/ship are the
+`-python-fastapi` variants - right gate, wrong deploy step: broker has no service
+to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Related
 

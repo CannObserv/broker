@@ -21,18 +21,30 @@ Adding a skill means both entries, `skills/<name>` and `.claude/skills/<name>`.
 
 ## Refresh
 
-**No auto-refresh hook is installed.** The submodule pointer is frozen at the
-commit it was vendored at until bumped by hand:
+A `SessionStart` hook advances the submodule pointer. At most once per UTC day,
+on `main` only, it pulls upstream and **commits the bump itself** - staging only
+`skills-vendor/` and `.skills/doctor.sh` - so a session can open with a
+`chore: update skills submodules` commit waiting to be pushed. It never blocks a
+session. Log: `.git/skills-update.log`.
 
-```bash
-git submodule update --init --remote --merge -- skills-vendor/
-git add skills-vendor/ && git commit -m "chore: update skill submodules"
-```
+The install is two artifacts, and only the second makes it run:
+`.claude/hooks/skills-submodule-update.sh` (a symlink into the vendored
+`managing-skills`) and its entry in `.claude/settings.json`. The symlink alone
+looks installed and refreshes nothing.
 
-`--init` is load-bearing: without it an unregistered submodule is skipped
-silently and git still exits 0. The once-per-UTC-day `SessionStart` hook that
-automates this (on `main` only, commits the bump itself):
-`bash skills-vendor/gregoryfoster-skills/skills/managing-skills/scripts/install-refresh.sh`.
+| To | Run |
+|---|---|
+| Check both halves | `bash skills/managing-skills/scripts/install-refresh.sh --check` |
+| Remove both | `bash skills/managing-skills/scripts/install-refresh.sh --uninstall` |
+| Refresh by hand | `git submodule update --init --remote --merge -- skills-vendor/` |
+| Hold at a commit | one `<submodule-path> <commit-ish>` line in `.skills/skills-pin` |
+
+`--init` in the manual refresh is load-bearing: without it an unregistered
+submodule is skipped silently and git still exits 0.
+
+The first session in a fresh clone or new worktree fails the hook with exit 127:
+it is a vendor symlink, and Claude Code runs hooks in parallel, so nothing can
+initialise the submodule before it. `bash .skills/doctor.sh` once fixes it.
 
 ## Selection
 
