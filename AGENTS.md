@@ -102,12 +102,21 @@ docs/STREAMS.md  the cluster stream inventory - who produces, consumes, drains
 docs/RECOVERY.md node loss: the backup, the restore, the rehearsal record
 docs/RESTART-WINDOW.md
                  the cohort restart window, its identities, the 2026-09-10 incident
+docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  logging.py (service-local, not a mirror)
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/
                  and rehearses the restore against a real redis-server
 ```
+
+## Agent Skills
+
+Vendored from `gregoryfoster/skills` into `skills/` (agentskills.io) and
+`.claude/skills/` (Claude Code). Symlinks dangle until the submodule is
+initialised: `bash .skills/doctor.sh`. Review/ship are the `-python-fastapi`
+variants - right gate, wrong deploy step: broker has no service to restart after
+a merge. [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Related
 
