@@ -35,6 +35,10 @@ The checks, per tick:
   entry is operator-actionable. The entries are dumped to local storage on
   first sight and the finding names the service that owes it triage; see
   "The DLQ split" below.
+- ``entries-added`` per ``*.dlq`` key, against the depth it accounts for - the
+  half depth cannot see, because a queue filled and emptied inside one interval
+  is empty at both observations (CannObserv/broker#13). Its key going missing
+  between ticks is the same judgement and the same finding name.
 - disk usage on ``/`` - the AOF self-bounds, but the headroom is thinner than
   the memory headroom and nothing else alerts on it.
 
@@ -231,6 +235,9 @@ DLQ_DRAINERS: dict[str, str] = {
 # see one - the per-service ACL users cannot SCAN the instance. So it is
 # reported as unassigned rather than skipped or fatal.
 DLQ_UNASSIGNED = "no drainer assigned, broker is backstop"
+
+# Derived, never spelled - the same reason group names come from ``group_name()``.
+DLQ_SUFFIX = dlq_name("")
 
 # Lives inside systemd's StateDirectory, derived from --state-file rather than
 # taking a second flag, so it cannot be pointed somewhere the unit's User= does
@@ -904,12 +911,12 @@ async def _collect_persistence(client: Redis) -> list[Finding]:
 async def _collect_dlqs(
     client: Redis,
     *,
+    previous_state: dict[str, int],
     evidence_dir: Path | None = None,
-    previous_state: dict[str, int] | None = None,
 ) -> tuple[list[Finding], dict[str, int]]:
     """Depth, and what the depth cannot see.
 
-    Scan is filtered to stream keys, and each call is guarded anyway: a stray
+    Scan is filtered to stream keys, and the read is guarded anyway: a stray
     non-stream ``*.dlq`` key must not raise WRONGTYPE out of this function,
     where it would be reported as "broker unreachable" and discard every other
     finding on the tick.
@@ -923,8 +930,10 @@ async def _collect_dlqs(
     inside one interval used to leave nothing anywhere - and depth cannot see it,
     because the queue is empty at both observations. ``entries-added`` can: it is
     monotonic, unaffected by XDEL and XTRIM, and already this repo's authority on
-    trim-versus-wipe. The cost is one ``XINFO STREAM`` per dead-letter key per
-    tick on a scan that was happening anyway.
+    trim-versus-wipe. It costs nothing: ``XINFO STREAM`` carries ``length`` too,
+    so it *replaces* the ``XLEN`` this loop already ran, on a scan that was
+    happening anyway - and reading both out of one reply is also what keeps the
+    floor a floor, since two reads could straddle an ``XADD``.
 
     This **extends** ``evaluate_stream_continuity`` rather than paralleling it -
     same ``@entries-added/<topic>`` state key, same ``stream-reset`` finding when
@@ -934,20 +943,32 @@ async def _collect_dlqs(
     genuinely new judgement here is ``dlq-unobserved``, which has no analogue for
     a fact stream - no other stream has a per-entry record on disk that a drain
     can outrun.
+
+    ``entries-added`` cannot report its own stream's deletion, so the key simply
+    going missing between ticks is judged separately and given the same name -
+    see ``_evaluate_vanished_dlqs``.
     """
-    previous = previous_state or {}
     findings: list[Finding] = []
     totals: dict[str, int] = {}
+    seen: set[str] = set()
     async for key in client.scan_iter(match="*.dlq", _type="stream"):
         topic = _decode(key)
+        seen.add(topic)
         try:
-            depth = await client.xlen(topic)
-            added = int((await client.xinfo_stream(topic))["entries-added"])
-        except (ResponseError, KeyError, TypeError, ValueError):
+            info = await client.xinfo_stream(topic)
+        except ResponseError:
             continue
-        totals[CONTINUITY_ENTRIES_KEY.format(topic=topic)] = added
+        # Depth comes out of the SAME reply as ``entries-added``, not a second
+        # ``XLEN``. One round trip, and - the part that matters - ONE atomic
+        # observation: read apart, an ``XADD`` landing between them raises
+        # ``added`` without appearing in ``depth``, and `dlq-unobserved` would
+        # then claim payloads are gone for entries still sitting in the queue,
+        # which the very next tick would capture. A floor that can overstate is
+        # not a floor.
+        depth = int(info.get("length", 0))
         drainer = DLQ_DRAINERS.get(topic)
         owner = f"{drainer}'s to triage" if drainer else DLQ_UNASSIGNED
+        entries_key = CONTINUITY_ENTRIES_KEY.format(topic=topic)
 
         if depth:
             parts = [f"depth {depth} - {owner}"]
@@ -956,16 +977,68 @@ async def _collect_dlqs(
             parts.append('resting state is 0; see docs/STREAMS.md, "Who drains a DLQ"')
             findings.append(Finding(check="dlq", subject=topic, message="; ".join(parts)))
 
+        try:
+            added = int(info["entries-added"])
+        except (KeyError, TypeError, ValueError):
+            # No ``entries-added`` before Redis 7.0, and this repo's floor is a
+            # client-side assertion rather than something the probe can rely on.
+            # The continuity half degrades to silence; the depth finding and its
+            # evidence capture above - the load-bearing half, per this module's
+            # header - must not go quiet with it.
+            continue
+        totals[entries_key] = added
         findings.extend(
             _evaluate_dlq_continuity(
                 topic,
                 owner=owner,
                 depth=depth,
                 added=added,
-                before=previous.get(CONTINUITY_ENTRIES_KEY.format(topic=topic)),
+                before=previous_state.get(entries_key),
             )
         )
+    findings.extend(_evaluate_vanished_dlqs(previous_state, seen=seen))
     return findings, totals
+
+
+def _evaluate_vanished_dlqs(previous: dict[str, int], *, seen: set[str]) -> list[Finding]:
+    """A queue whose KEY is gone, which ``entries-added`` cannot report itself.
+
+    Every legitimate disposal leaves the key behind - ``XDEL`` per entry since
+    broker#12, and the ``XTRIM MAXLEN 0`` it replaced - so a ``*.dlq`` that had a
+    baseline last tick and is absent from this tick's scan was ``DEL``eted,
+    flushed, or lost with the database. Without this the worst case was the
+    silent one: the counter-went-backwards finding needs the stream recreated
+    *before the next tick* to have anything to compare, so a queue deleted and
+    left deleted passed unremarked while its evidence dumps stayed on disk.
+
+    Fires once. The baseline is not carried into this tick's state, so the next
+    tick has nothing to compare and says nothing further.
+    """
+    prefix = CONTINUITY_ENTRIES_KEY.format(topic="")
+    findings: list[Finding] = []
+    for state_key, before in sorted(previous.items()):
+        topic = state_key.removeprefix(prefix)
+        if topic == state_key or not topic.endswith(DLQ_SUFFIX) or topic in seen:
+            continue
+        drainer = DLQ_DRAINERS.get(topic)
+        owner = f"{drainer}'s to triage" if drainer else DLQ_UNASSIGNED
+        findings.append(
+            Finding(
+                # The same name the counter-went-backwards case uses, for the
+                # same reason: one condition - this queue's identity is gone -
+                # should not need two names in an alert rule.
+                check="stream-reset",
+                subject=topic,
+                message=(
+                    f"the dead-letter queue KEY is GONE - it held {before} entries-added "
+                    f"last tick and this tick's scan does not return it, so it was deleted, "
+                    f"flushed or lost with the database rather than drained (XDEL and XTRIM "
+                    f"both leave the key); any evidence dump on disk for it describes a "
+                    f"queue that no longer exists ({owner})"
+                ),
+            )
+        )
+    return findings
 
 
 def _evaluate_dlq_continuity(
@@ -1113,7 +1186,7 @@ async def collect_broker_findings(
             findings.extend(stream_findings)
             state.update(stream_pending)
         dlq_findings, dlq_totals = await _collect_dlqs(
-            client, evidence_dir=evidence_dir, previous_state=previous_state
+            client, previous_state=previous_state, evidence_dir=evidence_dir
         )
         findings.extend(dlq_findings)
         state.update(dlq_totals)
@@ -1145,7 +1218,14 @@ def load_state(path: Path) -> dict[str, int]:
 
 
 def save_state(path: Path, state: dict[str, int]) -> None:
-    path.write_text(json.dumps(state))
+    """Written through a temporary file and renamed, because a half-written file
+    reads back as ``{}``: ``load_state`` cannot tell truncation from absence, and
+    every baseline in here - the pending grace counts and the DLQ
+    ``entries-added`` totals - is a comparison that silently declines to fire
+    without it."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state))
+    tmp.replace(path)
 
 
 def read_backup_state(path: Path) -> dict | None:

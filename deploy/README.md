@@ -421,10 +421,18 @@ depth cannot see it either, because the queue is empty at both observations. The
 probe therefore records each queue's `entries-added`, which is monotonic and
 survives `XDEL`: a counter that advanced by more than the depth accounts for
 means entries passed through unseen, and the probe says so (`dlq-unobserved`).
-It reports a **floor**, `added - depth`, not a count - depth can include entries
-captured on an earlier tick, so subtracting it can only understate.
+It reports a **floor**, `added - <last tick's added> - depth`, not a count -
+depth can include entries captured on an earlier tick, so subtracting it can
+only understate. The baseline is the `@entries-added/<queue>` key in
+`StateDirectory=broker-bus-health`; no baseline (first tick after a deploy, or a
+lost state file) means no comparison and no finding.
 
 The payloads are still gone; what the check buys is that their *existence*
-cannot be. A counter that goes **backwards** is a different and worse finding
-(`dlq-reset`): `entries-added` only resets when the stream itself is deleted, so
-any evidence dump still on disk describes a queue that no longer exists.
+cannot be. The queue's **identity** going is a different and worse finding, and
+it is reported under the same name the declared streams use, `stream-reset` -
+one condition should not need two names in an alert rule. It arrives two ways:
+`entries-added` going backwards, which only happens when the stream was deleted
+and recreated, and the key being **absent** from a tick's scan after a tick that
+had it. Both mean any evidence dump still on disk describes a queue that no
+longer exists. Disposal never does this: `XDEL` and `XTRIM MAXLEN 0` both leave
+the key behind.

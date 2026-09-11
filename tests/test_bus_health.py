@@ -60,6 +60,19 @@ from src.broker.bus_health import (
 )
 
 
+@pytest.fixture(autouse=True)
+def no_notifier_env(monkeypatch):
+    """The check-in is inert only while both variables are unset, and several
+    tests drive ``run_once`` end to end without stubbing ``_http_post``. An
+    operator who sourced ``/etc/broker/notifier.env`` for the curl check in
+    ``deploy/README.md`` and then ran the suite would post synthetic findings to
+    the live monitor. Cleared here so the default cannot depend on the shell;
+    ``checkin_env`` sets them back for the tests that are about the check-in.
+    """
+    monkeypatch.delenv("NOTIFIER_MONITOR_ID", raising=False)
+    monkeypatch.delenv("NOTIFIER_API_KEY", raising=False)
+
+
 @pytest.fixture
 async def fake_redis():
     r = fakeredis_aio.FakeRedis()
@@ -416,7 +429,7 @@ async def test_a_dlq_drained_between_ticks_is_reported_although_it_is_empty(
     )
     drained = [f for f in findings if f.check == "dlq-unobserved" and f.subject == dlq]
     assert drained, "an emptied queue that grew since the last tick must be reported"
-    assert "2" in drained[0].message, drained[0].message
+    assert "at least 2" in drained[0].message, drained[0].message
 
 
 async def test_a_dlq_entry_removed_after_being_seen_is_not_reported(fake_redis) -> None:
@@ -441,9 +454,9 @@ async def test_the_unobserved_count_is_a_floor_rather_than_a_guess(fake_redis) -
     must not claim to know it was exactly two.
 
     Depth can include entries added *before* the last tick, which were captured
-    then, so ``added - depth`` is a lower bound on what passed through unseen
-    rather than an exact count. Stated as a floor because the alternative is a
-    number that is sometimes wrong in the direction of crying wolf.
+    then, so ``added - before - depth`` is a lower bound on what passed through
+    unseen rather than an exact count. Stated as a floor because the alternative
+    is a number that is sometimes wrong in the direction of crying wolf.
     """
     dlq = "content.replicate.dlq"
     for _ in range(2):
@@ -491,6 +504,78 @@ async def test_entries_added_going_backwards_on_a_dlq_is_a_worse_finding(fake_re
     )
     reset = [f for f in findings if f.check == "stream-reset" and f.subject == dlq]
     assert reset, "entries-added 5 -> 1 is a deleted stream, not a drain"
+
+
+async def test_a_server_without_entries_added_still_reports_the_depth(fake_redis) -> None:
+    """The continuity half is additive, and it must not be able to take the
+    load-bearing half with it.
+
+    ``entries-added`` is a Redis 7.0 field and this repo's floor is a
+    client-side assertion, not something the probe can assume. Reading it out of
+    the same ``XINFO STREAM`` the depth comes from means one failure mode covers
+    both, so the field's absence is handled *after* the depth finding and its
+    evidence capture, never before.
+    """
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+
+    class _NoEntriesAdded:
+        def __getattr__(self, name):
+            return getattr(fake_redis, name)
+
+        async def xinfo_stream(self, topic, *a, **kw):
+            info = dict(await fake_redis.xinfo_stream(topic, *a, **kw))
+            info.pop("entries-added", None)
+            return info
+
+    findings, state = await collect_broker_findings(_NoEntriesAdded(), previous_state={})
+
+    assert [f.subject for f in findings if f.check == "dlq"] == ["content.fetch.dlq"]
+    assert not [f for f in findings if f.check in {"dlq-unobserved", "stream-reset"}]
+    assert CONTINUITY_ENTRIES_KEY.format(topic="content.fetch.dlq") not in state
+
+
+async def test_a_dlq_key_that_vanished_is_reported_once(fake_redis) -> None:
+    """The silent half of the reset case, and the worse one.
+
+    ``entries-added`` cannot report its own stream's deletion, and the
+    counter-went-backwards finding needs the queue recreated *before the next
+    tick* to have anything to compare - so a queue deleted and left deleted used
+    to pass unremarked while its evidence dumps sat on disk claiming to describe
+    it. Every legitimate disposal leaves the key: ``XDEL`` per entry since
+    broker#12, and the ``XTRIM MAXLEN 0`` it replaced.
+    """
+    dlq = "content.fetch.dlq"
+    await fake_redis.xadd(dlq, {"k": "v"})
+    _findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    assert CONTINUITY_ENTRIES_KEY.format(topic=dlq) in state
+
+    await fake_redis.delete(dlq)  # not a drain - the key itself
+
+    findings, after = await collect_broker_findings(fake_redis, previous_state=state)
+    gone = [f for f in findings if f.check == "stream-reset" and f.subject == dlq]
+    assert gone, "a dead-letter queue whose key is gone must not be silence"
+    assert "replicator" in gone[0].message, gone[0].message
+
+    # Once. The baseline is not carried forward, so the next tick has nothing to
+    # compare and a permanently-absent queue does not become a permanent finding.
+    assert CONTINUITY_ENTRIES_KEY.format(topic=dlq) not in after
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=after)
+    assert not [f for f in findings if f.check == "stream-reset"]
+
+
+async def test_a_declared_stream_going_absent_is_not_a_vanished_dlq(fake_redis) -> None:
+    """The vanished-key rule is keyed on the ``*.dlq`` suffix, because it rests on
+    dead-letter disposal always leaving the key. A fact stream has no such
+    guarantee - ``evaluate_stream_continuity`` owns those - so it must not be
+    swept up by a prefix match on the shared state key."""
+    for _ in range(3):
+        await fake_redis.xadd(CONTENT_FETCH, {"k": "v"})
+    _findings, state = await collect_broker_findings(fake_redis, previous_state={})
+
+    await fake_redis.delete(CONTENT_FETCH)
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
+    assert not [f for f in findings if f.check == "stream-reset"]
 
 
 async def test_the_state_file_keeps_pending_and_dlq_totals_apart(fake_redis, tmp_path) -> None:

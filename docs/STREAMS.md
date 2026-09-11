@@ -356,13 +356,21 @@ nobody did. `XTRIM` stays granted for the retention trims in the table above.
   not an upper bound. See *Detecting loss* below. On a **dead-letter queue** it
   means the queue was deleted rather than drained, so any evidence dump still on
   disk describes a stream that no longer exists;
+- **a `*.dlq` key that a tick's `SCAN` no longer returns**, after a tick that
+  recorded it (`stream-reset`, the same name and the same meaning - this queue's
+  identity is gone). `entries-added` cannot report its own stream's deletion, and
+  every legitimate disposal leaves the key: `XDEL` per entry, and the
+  `XTRIM MAXLEN 0` it replaced. Fires once, because the baseline is not carried
+  into the tick that reports it;
 - **`entries-added` climbing past what the depth accounts for, on a dead-letter
   queue** (`dlq-unobserved`, CannObserv/broker#13) - entries arrived and were
   removed between two ticks, so evidence capture never saw them and those
-  payloads are gone. Reported as a floor, `added - depth`, because depth can
-  include entries captured on an earlier tick. It makes the *existence* of a
-  drained failure undeniable, which is what the per-queue drain grants
-  (CannObserv/broker#12) made worth having;
+  payloads are gone. Reported as a floor, `added - <last tick's added> - depth`,
+  because depth can include entries captured on an earlier tick. Depth and
+  `entries-added` are read from one `XINFO STREAM` rather than an `XLEN` and an
+  `XINFO`, so an `XADD` cannot land between them and push the floor above the
+  truth. It makes the *existence* of a drained failure undeniable, which is what
+  the per-queue drain grants (CannObserv/broker#12) made worth having;
 - `/` disk headroom (WARN at 90% used or under 2 GiB free) - which on this node
   is the AOF's headroom, and is the check whose meaning the move restored.
 
