@@ -35,6 +35,7 @@ from co_core.pure.adapters.bus.streams import (
     stream_kind,
 )
 from fakeredis import aioredis as fakeredis_aio
+from redis.exceptions import ResponseError
 
 from src.broker import bus_health
 from src.broker.bus_health import (
@@ -60,24 +61,27 @@ from src.broker.bus_health import (
 )
 
 
-@pytest.fixture(autouse=True)
-def no_notifier_env(monkeypatch):
-    """The check-in is inert only while both variables are unset, and several
-    tests drive ``run_once`` end to end without stubbing ``_http_post``. An
-    operator who sourced ``/etc/broker/notifier.env`` for the curl check in
-    ``deploy/README.md`` and then ran the suite would post synthetic findings to
-    the live monitor. Cleared here so the default cannot depend on the shell;
-    ``checkin_env`` sets them back for the tests that are about the check-in.
-    """
-    monkeypatch.delenv("NOTIFIER_MONITOR_ID", raising=False)
-    monkeypatch.delenv("NOTIFIER_API_KEY", raising=False)
-
-
 @pytest.fixture
 async def fake_redis():
     r = fakeredis_aio.FakeRedis()
     yield r
     await r.aclose()
+
+
+class _DelegatingClient:
+    """Forwards every call to a real client except the one a subclass overrides.
+
+    The probe's behaviour against a server that answers *differently* - an older
+    Redis with no ``entries-added``, a read that races a deletion - has no other
+    seam, and a full mock would stop exercising the real command surface the
+    rest of these tests are built on.
+    """
+
+    def __init__(self, delegate):
+        self._delegate = delegate
+
+    def __getattr__(self, name):
+        return getattr(self._delegate, name)
 
 
 # --- memory ---
@@ -518,16 +522,13 @@ async def test_a_server_without_entries_added_still_reports_the_depth(fake_redis
     """
     await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
 
-    class _NoEntriesAdded:
-        def __getattr__(self, name):
-            return getattr(fake_redis, name)
-
+    class _NoEntriesAdded(_DelegatingClient):
         async def xinfo_stream(self, topic, *a, **kw):
-            info = dict(await fake_redis.xinfo_stream(topic, *a, **kw))
+            info = dict(await self._delegate.xinfo_stream(topic, *a, **kw))
             info.pop("entries-added", None)
             return info
 
-    findings, state = await collect_broker_findings(_NoEntriesAdded(), previous_state={})
+    findings, state = await collect_broker_findings(_NoEntriesAdded(fake_redis), previous_state={})
 
     assert [f.subject for f in findings if f.check == "dlq"] == ["content.fetch.dlq"]
     assert not [f for f in findings if f.check in {"dlq-unobserved", "stream-reset"}]
@@ -563,6 +564,39 @@ async def test_a_dlq_key_that_vanished_is_reported_once(fake_redis) -> None:
     assert not [f for f in findings if f.check == "stream-reset"]
 
 
+async def test_a_queue_that_goes_between_the_scan_and_the_read_keeps_its_baseline(
+    fake_redis,
+) -> None:
+    """The vanished-key finding must survive a ``DEL`` that races the tick.
+
+    ``SCAN`` returns the key and the ``XINFO STREAM`` for it then fails, which
+    is what a deletion landing between the two looks like from here. That tick
+    cannot judge - the key was in the scan, so the vanished rule declines - so
+    the baseline has to be carried forward for the *next* tick to judge with.
+    Dropping it there would make exactly the deletion this check exists for
+    unreportable, on any tick unlucky enough to straddle it.
+    """
+    dlq = "content.fetch.dlq"
+    await fake_redis.xadd(dlq, {"k": "v"})
+    _findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    entries_key = CONTINUITY_ENTRIES_KEY.format(topic=dlq)
+    assert entries_key in state
+
+    class _ReadRaces(_DelegatingClient):
+        async def xinfo_stream(self, topic, *a, **kw):
+            if topic == dlq:
+                raise ResponseError("ERR no such key")
+            return await self._delegate.xinfo_stream(topic, *a, **kw)
+
+    findings, during = await collect_broker_findings(_ReadRaces(fake_redis), previous_state=state)
+    assert not [f for f in findings if f.check == "stream-reset"], "the scan still returned it"
+    assert during[entries_key] == state[entries_key], "the baseline must survive the race"
+
+    await fake_redis.delete(dlq)
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=during)
+    assert [f.check for f in findings if f.subject == dlq] == ["stream-reset"]
+
+
 async def test_a_declared_stream_going_absent_is_not_a_vanished_dlq(fake_redis) -> None:
     """The vanished-key rule is keyed on the ``*.dlq`` suffix, because it rests on
     dead-letter disposal always leaving the key. A fact stream has no such
@@ -575,7 +609,52 @@ async def test_a_declared_stream_going_absent_is_not_a_vanished_dlq(fake_redis) 
     await fake_redis.delete(CONTENT_FETCH)
 
     findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
+    reset = [f for f in findings if f.check == "stream-reset"]
+    assert not [f for f in reset if "dead-letter" in f.message], (
+        "the *.dlq suffix filter is what keeps the DLQ rule off a fact stream"
+    )
+
+
+async def test_a_declared_stream_that_vanished_is_reported(fake_redis) -> None:
+    """broker#10's failure mode, on the nine streams that carry the data.
+
+    ``_collect_stream`` returns early when the key does not exist, calling it
+    dormancy - true of a stream nothing has written **yet**, and false of one
+    that was written and then destroyed. That early return happens before the
+    continuity check, before the group check, and before the baselines are
+    written, so a ``DEL`` or a ``FLUSHDB`` produced ``finding_count: 0`` and then
+    erased the only record that the stream had ever existed. Verified against a
+    real server: every subsequent tick was silent too.
+
+    Which is exactly what ``evaluate_stream_continuity`` exists to prevent - it
+    was only ever reached while the stream was still there to read a counter
+    from. CannObserv/broker#13 closed the identical hole for dead-letter queues
+    and left this one open, which is the wrong half to close first: these carry
+    the cluster's data.
+    """
+    await fake_redis.xadd(CONTENT_FETCH, {"k": "v"})
+    _findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    assert state[CONTINUITY_ENTRIES_KEY.format(topic=CONTENT_FETCH)] == 1
+
+    await fake_redis.delete(CONTENT_FETCH)
+    findings, after = await collect_broker_findings(fake_redis, previous_state=state)
+
+    vanished = [f for f in findings if f.check == "stream-reset" and f.subject == CONTENT_FETCH]
+    assert vanished, "a declared stream that was written and is now absent is not dormancy"
+    # Fires once: the baseline is not carried forward, so the next tick has
+    # nothing to compare and says nothing further.
+    assert CONTINUITY_ENTRIES_KEY.format(topic=CONTENT_FETCH) not in after
+    again, _ = await collect_broker_findings(fake_redis, previous_state=after)
+    assert not [f for f in again if f.check == "stream-reset"]
+
+
+async def test_a_stream_nothing_has_written_yet_is_still_dormancy(fake_redis) -> None:
+    """The other half, and the reason the early return is there. No baseline
+    means the stream was never seen, which on this cluster is an ordinary state -
+    ``content.replicate`` sat at zero entries for the whole of broker#7."""
+    findings, state = await collect_broker_findings(fake_redis, previous_state={})
     assert not [f for f in findings if f.check == "stream-reset"]
+    assert CONTINUITY_ENTRIES_KEY.format(topic=CONTENT_FETCH) not in state
 
 
 async def test_the_state_file_keeps_pending_and_dlq_totals_apart(fake_redis, tmp_path) -> None:

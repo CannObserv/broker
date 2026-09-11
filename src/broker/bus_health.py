@@ -245,6 +245,17 @@ DLQ_SUFFIX = dlq_name("")
 DLQ_EVIDENCE_DIRNAME = "dlq-evidence"
 
 
+def _dlq_owner(topic: str) -> str:
+    """Who owes this queue triage, in the one phrasing every finding uses.
+
+    The depth finding, the continuity findings and the vanished-key finding all
+    name the addressee, and two spellings of ``DLQ_UNASSIGNED`` would be two
+    strings an alert rule has to know about.
+    """
+    drainer = DLQ_DRAINERS.get(topic)
+    return f"{drainer}'s to triage" if drainer else DLQ_UNASSIGNED
+
+
 # --- the notifier check-in (CannObserv/broker#3) ---
 #
 # Findings were an audience of zero: a WARN line in journald on a node nobody is
@@ -826,9 +837,41 @@ async def _collect_stream(
     findings: list[Finding] = []
     pending: dict[str, int] = {}
 
+    entries_key = CONTINUITY_ENTRIES_KEY.format(topic=check.topic)
+    length_key = CONTINUITY_LENGTH_KEY.format(topic=check.topic)
+
     if not await client.exists(check.topic):
-        # A stream nothing has written yet is dormancy, not a fault - the age
-        # and length checks both need entries to exist before they mean much.
+        # A stream nothing has written **yet** is dormancy, not a fault - the age
+        # and length checks both need entries to exist before they mean much, and
+        # on this cluster an untouched topic is ordinary: `content.replicate` sat
+        # at zero entries for the whole of broker#1.
+        #
+        # **A stream that was written and is now absent is a different thing, and
+        # it used to return from here in silence** (CannObserv/broker#13 review).
+        # Nothing legitimate deletes a stream on this broker - a trim leaves the
+        # key, and XDEL leaves the key - so absence after a baseline is a DEL, a
+        # FLUSHDB, or a restore that came up empty. Returning early skipped the
+        # continuity check, the group check and both baselines, so the tick
+        # reported finding_count 0 AND erased the only record the stream had ever
+        # existed. That is broker#10's failure mode exactly, and it was reachable
+        # on the nine topics that carry the cluster's data while the same hole
+        # was being closed for dead-letter queues.
+        if previous_state.get(entries_key) is not None:
+            findings.append(
+                Finding(
+                    # The name `evaluate_stream_continuity` already uses for
+                    # "this stream's identity is gone". One condition, one name.
+                    check="stream-reset",
+                    subject=check.topic,
+                    message=f"the stream KEY is GONE - its entries-added counter stood at "
+                    f"{previous_state[entries_key]} (a LIFETIME total, not a depth) last "
+                    "tick and the key does not exist now, so it was deleted, flushed or "
+                    "lost with the database rather than trimmed: both XTRIM and XDEL "
+                    "leave the key behind",
+                )
+            )
+        # The baseline is deliberately not carried forward, so this fires once
+        # rather than every tick until someone rewrites the stream.
         return findings, pending
 
     info = await client.xinfo_stream(check.topic)
@@ -841,8 +884,6 @@ async def _collect_stream(
     )
 
     entries_added = int(info.get("entries-added", 0))
-    entries_key = CONTINUITY_ENTRIES_KEY.format(topic=check.topic)
-    length_key = CONTINUITY_LENGTH_KEY.format(topic=check.topic)
     findings.extend(
         evaluate_stream_continuity(
             check,
@@ -951,12 +992,23 @@ async def _collect_dlqs(
     findings: list[Finding] = []
     totals: dict[str, int] = {}
     seen: set[str] = set()
-    async for key in client.scan_iter(match="*.dlq", _type="stream"):
+    async for key in client.scan_iter(match=f"*{DLQ_SUFFIX}", _type="stream"):
         topic = _decode(key)
         seen.add(topic)
+        entries_key = CONTINUITY_ENTRIES_KEY.format(topic=topic)
+        owner = _dlq_owner(topic)
         try:
             info = await client.xinfo_stream(topic)
         except ResponseError:
+            # A stray non-stream key, or one ``DEL``eted between the ``SCAN``
+            # and this read. ``seen`` already declines to call it vanished on
+            # this tick, so dropping its baseline as well would make a deletion
+            # that raced the scan unreportable for good - the exact silence
+            # ``_evaluate_vanished_dlqs`` exists to close. Carry the baseline
+            # forward untouched and let the next tick, which sees the key
+            # either present or absent, be the one that judges.
+            if entries_key in previous_state:
+                totals[entries_key] = previous_state[entries_key]
             continue
         # Depth comes out of the SAME reply as ``entries-added``, not a second
         # ``XLEN``. One round trip, and - the part that matters - ONE atomic
@@ -966,9 +1018,6 @@ async def _collect_dlqs(
         # which the very next tick would capture. A floor that can overstate is
         # not a floor.
         depth = int(info.get("length", 0))
-        drainer = DLQ_DRAINERS.get(topic)
-        owner = f"{drainer}'s to triage" if drainer else DLQ_UNASSIGNED
-        entries_key = CONTINUITY_ENTRIES_KEY.format(topic=topic)
 
         if depth:
             parts = [f"depth {depth} - {owner}"]
@@ -1020,8 +1069,7 @@ def _evaluate_vanished_dlqs(previous: dict[str, int], *, seen: set[str]) -> list
         topic = state_key.removeprefix(prefix)
         if topic == state_key or not topic.endswith(DLQ_SUFFIX) or topic in seen:
             continue
-        drainer = DLQ_DRAINERS.get(topic)
-        owner = f"{drainer}'s to triage" if drainer else DLQ_UNASSIGNED
+        owner = _dlq_owner(topic)
         findings.append(
             Finding(
                 # The same name the counter-went-backwards case uses, for the
@@ -1030,11 +1078,13 @@ def _evaluate_vanished_dlqs(previous: dict[str, int], *, seen: set[str]) -> list
                 check="stream-reset",
                 subject=topic,
                 message=(
-                    f"the dead-letter queue KEY is GONE - it held {before} entries-added "
-                    f"last tick and this tick's scan does not return it, so it was deleted, "
-                    f"flushed or lost with the database rather than drained (XDEL and XTRIM "
-                    f"both leave the key); any evidence dump on disk for it describes a "
-                    f"queue that no longer exists ({owner})"
+                    f"the dead-letter queue is NO LONGER A STREAM on this broker - its "
+                    f"entries-added counter stood at {before} (a LIFETIME total, not a "
+                    "depth) last tick and this tick's scan does not return it. Deleted, "
+                    "flushed, lost with the database, or replaced by a non-stream key - "
+                    "not drained, because XDEL and XTRIM both leave the stream behind. "
+                    f"Any evidence dump on disk for it describes a queue that no longer "
+                    f"exists ({owner})"
                 ),
             )
         )
@@ -1222,9 +1272,18 @@ def save_state(path: Path, state: dict[str, int]) -> None:
     reads back as ``{}``: ``load_state`` cannot tell truncation from absence, and
     every baseline in here - the pending grace counts and the DLQ
     ``entries-added`` totals - is a comparison that silently declines to fire
-    without it."""
+    without it.
+
+    The ``fsync`` is the half that makes the rename mean anything: rename is
+    atomic against another *reader*, but against a power loss it can land while
+    the bytes it points at have not, which is the truncated file again by
+    another route. Flushed to disk first, so the only two states a crash can
+    leave are last tick's file intact and this tick's file complete."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(state))
+    with tmp.open("w") as f:
+        f.write(json.dumps(state))
+        f.flush()
+        os.fsync(f.fileno())
     tmp.replace(path)
 
 
