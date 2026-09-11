@@ -353,7 +353,16 @@ that reached 110, emptying it to remove one triaged frame destroys 109 audits
 nobody did. `XTRIM` stays granted for the retention trims in the table above.
 
 - **`entries-added` going backwards on any stream** - the one check here that is
-  not an upper bound. See *Detecting loss* below;
+  not an upper bound. See *Detecting loss* below. On a **dead-letter queue** it
+  means the queue was deleted rather than drained, so any evidence dump still on
+  disk describes a stream that no longer exists;
+- **`entries-added` climbing past what the depth accounts for, on a dead-letter
+  queue** (`dlq-unobserved`, CannObserv/broker#13) - entries arrived and were
+  removed between two ticks, so evidence capture never saw them and those
+  payloads are gone. Reported as a floor, `added - depth`, because depth can
+  include entries captured on an earlier tick. It makes the *existence* of a
+  drained failure undeniable, which is what the per-queue drain grants
+  (CannObserv/broker#12) made worth having;
 - `/` disk headroom (WARN at 90% used or under 2 GiB free) - which on this node
   is the AOF's headroom, and is the check whose meaning the move restored.
 
@@ -520,7 +529,7 @@ stopped being trimmed at all, which is the condition the check exists for.
 
 | Signal | Lives in | Why there |
 |---|---|---|
-| Broker memory and eviction policy, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth, disk, persistence status, backup freshness | **this repo** (`broker-bus-health.timer`) | Every one of them measures the broker's host |
+| Broker memory and eviction policy, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth and `entries-added` continuity, disk, persistence status, backup freshness | **this repo** (`broker-bus-health.timer`) | Every one of them measures the broker's host |
 | `information.changes_outbox` depth / age / dead-lettered | **archiver** (`archiver-bus-health.timer`) | Queries archiver's database |
 | The dashboard bus panel's group lag | **archiver** (`collect_group_lag`) | `XPENDING` from a client is an ordinary call, and the panel is archiver's UI |
 | Redis >= 7.0 floor at service start | **each participant** (`check_redis_floor.sh`) | A client-side assertion about the broker it is about to talk to |

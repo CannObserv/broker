@@ -814,7 +814,7 @@ async def _capture_dlq_evidence(client: Redis, topic: str, evidence_dir: Path) -
 
 
 async def _collect_stream(
-    client: Redis, check: StreamCheck, previous_pending: dict[str, int]
+    client: Redis, check: StreamCheck, previous_state: dict[str, int]
 ) -> tuple[list[Finding], dict[str, int]]:
     findings: list[Finding] = []
     pending: dict[str, int] = {}
@@ -840,9 +840,9 @@ async def _collect_stream(
         evaluate_stream_continuity(
             check,
             entries_added=entries_added,
-            entries_added_prev=previous_pending.get(entries_key),
+            entries_added_prev=previous_state.get(entries_key),
             length=length,
-            length_prev=previous_pending.get(length_key),
+            length_prev=previous_state.get(length_key),
         )
     )
     pending[entries_key] = entries_added
@@ -871,7 +871,7 @@ async def _collect_stream(
                 evaluate_pending(
                     check,
                     pending_now=pending_now,
-                    pending_prev=previous_pending.get(key, 0),
+                    pending_prev=previous_state.get(key, 0),
                 )
             )
     return findings, pending
@@ -901,32 +901,123 @@ async def _collect_persistence(client: Redis) -> list[Finding]:
     return evaluate_persistence(info, now=datetime.now(UTC))
 
 
-async def _collect_dlqs(client: Redis, *, evidence_dir: Path | None = None) -> list[Finding]:
-    """Scan is filtered to stream keys, and each XLEN is guarded anyway: a stray
+async def _collect_dlqs(
+    client: Redis,
+    *,
+    evidence_dir: Path | None = None,
+    previous_state: dict[str, int] | None = None,
+) -> tuple[list[Finding], dict[str, int]]:
+    """Depth, and what the depth cannot see.
+
+    Scan is filtered to stream keys, and each call is guarded anyway: a stray
     non-stream ``*.dlq`` key must not raise WRONGTYPE out of this function,
     where it would be reported as "broker unreachable" and discard every other
     finding on the tick.
 
     ``evidence_dir`` of ``None`` reports without capturing, which is what a
     caller holding no writable state directory wants.
+
+    **An empty queue is no longer skipped, and that is the point**
+    (CannObserv/broker#13). Evidence capture happens on the tick that first sees
+    a non-resting queue, so with a 10-minute timer an entry written and deleted
+    inside one interval used to leave nothing anywhere - and depth cannot see it,
+    because the queue is empty at both observations. ``entries-added`` can: it is
+    monotonic, unaffected by XDEL and XTRIM, and already this repo's authority on
+    trim-versus-wipe. The cost is one ``XINFO STREAM`` per dead-letter key per
+    tick on a scan that was happening anyway.
+
+    This **extends** ``evaluate_stream_continuity`` rather than paralleling it -
+    same ``@entries-added/<topic>`` state key, same ``stream-reset`` finding when
+    the counter falls. What could not be shared is the entry point: that check
+    runs over ``STREAM_CHECKS``, a declared tuple, and a dead-letter queue is
+    found by ``SCAN`` precisely so the probe notices one nobody declared. The
+    genuinely new judgement here is ``dlq-unobserved``, which has no analogue for
+    a fact stream - no other stream has a per-entry record on disk that a drain
+    can outrun.
     """
+    previous = previous_state or {}
     findings: list[Finding] = []
+    totals: dict[str, int] = {}
     async for key in client.scan_iter(match="*.dlq", _type="stream"):
         topic = _decode(key)
         try:
             depth = await client.xlen(topic)
-        except ResponseError:
+            added = int((await client.xinfo_stream(topic))["entries-added"])
+        except (ResponseError, KeyError, TypeError, ValueError):
             continue
-        if depth == 0:
-            continue
+        totals[CONTINUITY_ENTRIES_KEY.format(topic=topic)] = added
         drainer = DLQ_DRAINERS.get(topic)
         owner = f"{drainer}'s to triage" if drainer else DLQ_UNASSIGNED
-        parts = [f"depth {depth} - {owner}"]
-        if evidence_dir is not None:
-            parts.append(await _capture_dlq_evidence(client, topic, evidence_dir))
-        parts.append('resting state is 0; see docs/STREAMS.md, "Who drains a DLQ"')
-        findings.append(Finding(check="dlq", subject=topic, message="; ".join(parts)))
-    return findings
+
+        if depth:
+            parts = [f"depth {depth} - {owner}"]
+            if evidence_dir is not None:
+                parts.append(await _capture_dlq_evidence(client, topic, evidence_dir))
+            parts.append('resting state is 0; see docs/STREAMS.md, "Who drains a DLQ"')
+            findings.append(Finding(check="dlq", subject=topic, message="; ".join(parts)))
+
+        findings.extend(
+            _evaluate_dlq_continuity(
+                topic,
+                owner=owner,
+                depth=depth,
+                added=added,
+                before=previous.get(CONTINUITY_ENTRIES_KEY.format(topic=topic)),
+            )
+        )
+    return findings, totals
+
+
+def _evaluate_dlq_continuity(
+    topic: str, *, owner: str, depth: int, added: int, before: int | None
+) -> list[Finding]:
+    """What ``entries-added`` says happened to this queue between two ticks.
+
+    ``before`` of ``None`` is the first sighting - no baseline, so nothing is
+    claimed. Inventing one would report every queue's entire history on the
+    first tick after a deploy, which is the kind of noise that teaches people to
+    ignore a check.
+    """
+    if before is None:
+        return []
+    if added < before:
+        # Deliberately the SAME check name `evaluate_stream_continuity` uses for
+        # the declared streams. It is the same condition with the same diagnosis
+        # - the counter is monotonic for the life of a stream object, so it can
+        # only fall if the object was destroyed - and an alert rule should not
+        # need two names for it. Only the consequence differs, so only the
+        # consequence is said here.
+        return [
+            Finding(
+                check="stream-reset",
+                subject=topic,
+                message=(
+                    f"entries-added went BACKWARDS, {before} -> {added}, on a dead-letter "
+                    f"queue - the stream was destroyed and recreated, not drained, so any "
+                    f"evidence dump on disk for it describes a queue that no longer exists "
+                    f"({owner})"
+                ),
+            )
+        ]
+    # A lower bound, not a count. `depth` can include entries added before the
+    # last tick - those were captured then - so subtracting it can only
+    # understate what vanished unseen. Understating is the right direction for a
+    # check that must not cry wolf, and "at least" is the honest word for it.
+    unobserved = added - before - depth
+    if unobserved <= 0:
+        return []
+    return [
+        Finding(
+            check="dlq-unobserved",
+            subject=topic,
+            message=(
+                f"at least {unobserved} entries were added and removed between ticks with no "
+                f"evidence captured - entries-added {before} -> {added} against depth {depth} "
+                f"({owner}); capture only runs on a tick that sees a non-resting queue, so "
+                f'these payloads are gone. See docs/STREAMS.md, "Who drains a DLQ"'
+            ),
+        )
+    ]
 
 
 def _checkin_url(monitor_id: str) -> str:
@@ -1002,20 +1093,30 @@ async def post_checkin(findings: list[Finding]) -> None:
 
 
 async def collect_broker_findings(
-    client: Redis, *, previous_pending: dict[str, int], evidence_dir: Path | None = None
+    client: Redis, *, previous_state: dict[str, int], evidence_dir: Path | None = None
 ) -> tuple[list[Finding], dict[str, int]]:
-    """All Redis-side probes. An unreachable broker is itself the finding, and
-    ``previous_pending`` passes through untouched so an outage does not reset
-    the two-tick grace window."""
+    """All Redis-side probes, and the memory the next tick needs.
+
+    The returned mapping is the whole of what carries between ticks: per-group
+    pending counts for the two-tick grace rule, and per-queue ``entries-added``
+    for the DLQ continuity check. ``previous_state`` passes through **untouched**
+    on an unreachable broker, so an outage resets neither - a grace window that
+    restarted on every blip would never warn, and a dropped DLQ baseline would
+    report the outage as a drain.
+    """
     try:
         findings = await _collect_memory(client)
         findings.extend(await _collect_persistence(client))
-        pending: dict[str, int] = {}
+        state: dict[str, int] = {}
         for check in STREAM_CHECKS:
-            stream_findings, stream_pending = await _collect_stream(client, check, previous_pending)
+            stream_findings, stream_pending = await _collect_stream(client, check, previous_state)
             findings.extend(stream_findings)
-            pending.update(stream_pending)
-        findings.extend(await _collect_dlqs(client, evidence_dir=evidence_dir))
+            state.update(stream_pending)
+        dlq_findings, dlq_totals = await _collect_dlqs(
+            client, evidence_dir=evidence_dir, previous_state=previous_state
+        )
+        findings.extend(dlq_findings)
+        state.update(dlq_totals)
     except (RedisError, OSError) as e:  # ConnectionError is an OSError subclass
         return (
             [
@@ -1025,12 +1126,12 @@ async def collect_broker_findings(
                     message=f"broker unreachable or probe failed: {e!r}",
                 )
             ],
-            dict(previous_pending),
+            dict(previous_state),
         )
-    return findings, pending
+    return findings, state
 
 
-# --- state file (two-tick pending memory across oneshot runs) ---
+# --- state file (what one oneshot run tells the next) ---
 
 
 def load_state(path: Path) -> dict[str, int]:
@@ -1043,8 +1144,8 @@ def load_state(path: Path) -> dict[str, int]:
     return {str(k): int(v) for k, v in raw.items() if isinstance(v, int)}
 
 
-def save_state(path: Path, pending: dict[str, int]) -> None:
-    path.write_text(json.dumps(pending))
+def save_state(path: Path, state: dict[str, int]) -> None:
+    path.write_text(json.dumps(state))
 
 
 def read_backup_state(path: Path) -> dict | None:
@@ -1077,10 +1178,10 @@ async def run_once(
     ``backup_state_path`` is the backup job's record; ``None`` skips the check,
     which is what dev and CI want and what only the deployed unit overrides.
     """
-    previous_pending = load_state(state_path)
-    findings, pending = await collect_broker_findings(
+    previous_state = load_state(state_path)
+    findings, state = await collect_broker_findings(
         client,
-        previous_pending=previous_pending,
+        previous_state=previous_state,
         evidence_dir=evidence_dir or state_path.parent / DLQ_EVIDENCE_DIRNAME,
     )
 
@@ -1096,7 +1197,7 @@ async def run_once(
             )
         )
 
-    save_state(state_path, pending)
+    save_state(state_path, state)
 
     for finding in findings:
         logger.warning(

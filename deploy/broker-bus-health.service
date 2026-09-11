@@ -1,5 +1,5 @@
 [Unit]
-Description=Broker bus health probe - memory and eviction policy, streams, groups, DLQs, disk, persistence, backup freshness; WARN-only (CannObserv/broker#1)
+Description=Broker bus health probe - memory and eviction policy, streams, groups, DLQ depth and continuity, disk, persistence, backup freshness; WARN-only (CannObserv/broker#1)
 # Deliberately NOT bound to redis-server.service: the probe exists precisely to
 # report while the broker is down. An unreachable broker is a finding it logs,
 # never a dependency failure.

@@ -40,6 +40,7 @@ from src.broker import bus_health
 from src.broker.bus_health import (
     BACKUP_WARN_MAX_AGE_SECONDS,
     BROKER_EVICTION_POLICY,
+    CONTINUITY_ENTRIES_KEY,
     DISK_WARN_MIN_FREE_BYTES,
     FACT_PRODUCER_MAXLEN,
     FACT_WARN_LENGTH,
@@ -339,14 +340,14 @@ def test_trimmed_stream_still_names_the_broken_cap() -> None:
 async def test_collect_reports_stale_lww_stream(fake_redis) -> None:
     """An entry older than the age threshold on a groupless LWW stream warns."""
     await fake_redis.xadd(CONTENT_FETCH_POLICY, {"k": "v"}, id="1000-0")
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     assert any(f.check == "stream-age" and f.subject == CONTENT_FETCH_POLICY for f in findings)
 
 
 async def test_collect_reports_nonempty_dlq(fake_redis) -> None:
     """Resting state is depth 0 on every *.dlq key (CannObserv/archiver#162)."""
     await fake_redis.xadd("content.revisions.dlq", {"k": "v"})
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     assert any(f.check == "dlq" and f.subject == "content.revisions.dlq" for f in findings)
 
 
@@ -354,7 +355,7 @@ async def test_collect_missing_group_is_a_finding(fake_redis) -> None:
     """A consumer group that should exist but does not means the consumer never
     provisioned - silent, so the probe must say it."""
     await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     assert any(f.check == "group-missing" and f.subject == CONTENT_REVISIONS for f in findings)
 
 
@@ -365,17 +366,17 @@ async def test_collect_pending_carries_state_between_ticks(fake_redis) -> None:
         "archiver.revisions", "c1", {CONTENT_REVISIONS: ">"}, count=10
     )  # deliver without ack -> pending=1
 
-    findings, pending = await collect_broker_findings(fake_redis, previous_pending={})
+    findings, pending = await collect_broker_findings(fake_redis, previous_state={})
     key = f"{CONTENT_REVISIONS}/archiver.revisions"
     assert pending[key] == 1
     assert not any(f.check == "pending" for f in findings)  # first tick: grace
 
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending=pending)
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=pending)
     assert any(f.check == "pending" for f in findings)  # second tick: warn
 
 
 async def test_collect_fresh_registry_is_healthy(fake_redis) -> None:
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     assert not any(f.subject == INFO_REGISTRY for f in findings)
 
 
@@ -387,9 +388,133 @@ async def test_collect_unreachable_broker_is_a_finding() -> None:
 
             return _raise
 
-    findings, pending = await collect_broker_findings(DownRedis(), previous_pending={"x": 1})
+    findings, pending = await collect_broker_findings(DownRedis(), previous_state={"x": 1})
     assert [f.check for f in findings] == ["broker"]
     assert pending == {"x": 1}  # state preserved so the grace tick is not reset
+
+
+async def test_a_dlq_drained_between_ticks_is_reported_although_it_is_empty(
+    fake_redis,
+) -> None:
+    """The blind spot CannObserv/broker#13 exists for.
+
+    Evidence capture runs on the tick that first sees a non-resting queue, and
+    the timer is every 10 minutes, so an entry written and deleted inside one
+    interval left no dump, no finding and no trace. Depth alone cannot see it -
+    the queue is empty at both observations. ``entries-added`` can: it is
+    monotonic, it survives XDEL and XTRIM, and this repo already treats it as
+    the authority on whether a stream was trimmed or wiped.
+    """
+    dlq = "content.fetch.dlq"
+    for _ in range(3):
+        entry = await fake_redis.xadd(dlq, {"k": "v"})
+        await fake_redis.xdel(dlq, entry)
+    assert await fake_redis.xlen(dlq) == 0
+
+    findings, _ = await collect_broker_findings(
+        fake_redis, previous_state={CONTINUITY_ENTRIES_KEY.format(topic=dlq): 1}
+    )
+    drained = [f for f in findings if f.check == "dlq-unobserved" and f.subject == dlq]
+    assert drained, "an emptied queue that grew since the last tick must be reported"
+    assert "2" in drained[0].message, drained[0].message
+
+
+async def test_a_dlq_entry_removed_after_being_seen_is_not_reported(fake_redis) -> None:
+    """The ordinary, healthy drain must stay silent, or the check is noise.
+
+    An entry that was present for a tick was captured to the evidence directory
+    on that tick, so its later removal loses nothing. The counter was already
+    advanced when it was observed, which is exactly why comparing against the
+    stored total gets this right without needing to know what was deleted.
+    """
+    dlq = "content.fetch.dlq"
+    entry = await fake_redis.xadd(dlq, {"k": "v"})
+    _findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    await fake_redis.xdel(dlq, entry)
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
+    assert not [f for f in findings if f.check == "dlq-unobserved"]
+
+
+async def test_the_unobserved_count_is_a_floor_rather_than_a_guess(fake_redis) -> None:
+    """Three added, one still present: at least two went unseen, and the finding
+    must not claim to know it was exactly two.
+
+    Depth can include entries added *before* the last tick, which were captured
+    then, so ``added - depth`` is a lower bound on what passed through unseen
+    rather than an exact count. Stated as a floor because the alternative is a
+    number that is sometimes wrong in the direction of crying wolf.
+    """
+    dlq = "content.replicate.dlq"
+    for _ in range(2):
+        entry = await fake_redis.xadd(dlq, {"k": "v"})
+        await fake_redis.xdel(dlq, entry)
+    await fake_redis.xadd(dlq, {"k": "survivor"})
+
+    findings, _ = await collect_broker_findings(
+        fake_redis, previous_state={CONTINUITY_ENTRIES_KEY.format(topic=dlq): 0}
+    )
+    unobserved = [f for f in findings if f.check == "dlq-unobserved"]
+    assert unobserved, "a non-empty queue does not excuse the entries that vanished"
+    assert "at least 2" in unobserved[0].message, unobserved[0].message
+    # And the depth finding still fires: they are independent facts about the queue.
+    assert [f for f in findings if f.check == "dlq" and f.subject == dlq]
+
+
+async def test_a_first_sighting_of_an_empty_dlq_says_nothing(fake_redis) -> None:
+    """No stored total means no baseline, and inventing one would report every
+    queue's whole history on the first tick after a deploy."""
+    await fake_redis.xadd("content.blobs.dlq", {"k": "v"})
+    await fake_redis.xtrim("content.blobs.dlq", maxlen=0)
+
+    findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    assert not [f for f in findings if f.check == "dlq-unobserved"]
+    assert state[CONTINUITY_ENTRIES_KEY.format(topic="content.blobs.dlq")] == 1, (
+        "but it must record the baseline"
+    )
+
+
+async def test_entries_added_going_backwards_on_a_dlq_is_a_worse_finding(fake_redis) -> None:
+    """A counter that fell means the KEY was deleted, not the entries drained.
+
+    ``entries-added`` only resets when the stream itself goes, so this is the
+    queue's identity being reset - and any evidence dump still on disk now
+    belongs to a stream that no longer exists. Reported apart from the drain
+    case because the response is different: the drain is triage, this is
+    "something deleted a dead-letter queue".
+    """
+    dlq = "content.revisions.dlq"
+    await fake_redis.xadd(dlq, {"k": "v"})
+
+    findings, _ = await collect_broker_findings(
+        fake_redis, previous_state={CONTINUITY_ENTRIES_KEY.format(topic=dlq): 5}
+    )
+    reset = [f for f in findings if f.check == "stream-reset" and f.subject == dlq]
+    assert reset, "entries-added 5 -> 1 is a deleted stream, not a drain"
+
+
+async def test_the_state_file_keeps_pending_and_dlq_totals_apart(fake_redis, tmp_path) -> None:
+    """One flat file, and a dead-letter queue's baseline uses the key convention
+    the declared streams already use.
+
+    `@entries-added/<topic>` was already there for `evaluate_stream_continuity`;
+    the `@` namespaces it away from the pending counters, which are keyed
+    `<topic>/<group>`. Adding a second convention for DLQs would have meant two
+    spellings of one idea in one file, and this test is what pins that it did
+    not happen.
+    """
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+    await fake_redis.xreadgroup("archiver.revisions", "c1", {CONTENT_REVISIONS: ">"}, count=10)
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+
+    state_path = tmp_path / "state.json"
+    await bus_health.run_once(fake_redis, state_path=state_path, disk_usage=_healthy_disk)
+    stored = json.loads(state_path.read_text())
+
+    assert stored[f"{CONTENT_REVISIONS}/archiver.revisions"] == 1
+    assert stored[CONTINUITY_ENTRIES_KEY.format(topic="content.fetch.dlq")] == 1
+    assert all(isinstance(v, int) for v in stored.values())
 
 
 async def test_collect_tolerates_a_non_stream_dlq_key(fake_redis) -> None:
@@ -399,7 +524,7 @@ async def test_collect_tolerates_a_non_stream_dlq_key(fake_redis) -> None:
     await fake_redis.set("stray.dlq", "not-a-stream")
     await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
 
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
 
     assert not any(f.check == "broker" for f in findings)
     assert [f.subject for f in findings if f.check == "dlq"] == ["content.fetch.dlq"]
@@ -433,7 +558,7 @@ async def test_dlq_finding_names_its_drainer(fake_redis) -> None:
     (CannObserv/archiver#162). The journald line is the only artifact anyone
     sees, so the owner has to be in it."""
     await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     assert "replicator" in _dlq_finding(findings, "content.fetch.dlq").message
 
 
@@ -446,7 +571,7 @@ async def test_dlq_with_no_named_drainer_falls_to_the_broker(fake_redis) -> None
     unassigned rather than skipped.
     """
     await fake_redis.xadd("unknown.topic.dlq", {"k": "v"})
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     message = _dlq_finding(findings, "unknown.topic.dlq").message
     assert "no drainer assigned" in message
     assert "backstop" in message
@@ -459,7 +584,7 @@ async def test_dlq_evidence_is_captured_before_anyone_can_trim(fake_redis, tmp_p
     sees the depth."""
     await fake_redis.xadd("content.fetch.dlq", {"k": "v"}, id="5-0")
     findings, _ = await collect_broker_findings(
-        fake_redis, previous_pending={}, evidence_dir=tmp_path
+        fake_redis, previous_state={}, evidence_dir=tmp_path
     )
 
     captured = sorted((tmp_path / "content.fetch.dlq").iterdir())
@@ -478,7 +603,7 @@ async def test_dlq_evidence_is_not_recaptured_while_the_queue_is_unchanged(
     await fake_redis.xadd("content.fetch.dlq", {"k": "v"}, id="5-0")
     for _ in range(3):
         findings, _ = await collect_broker_findings(
-            fake_redis, previous_pending={}, evidence_dir=tmp_path
+            fake_redis, previous_state={}, evidence_dir=tmp_path
         )
 
     assert [p.name for p in (tmp_path / "content.fetch.dlq").iterdir()] == ["5-0.json"]
@@ -490,9 +615,9 @@ async def test_dlq_evidence_capture_is_incremental(fake_redis, tmp_path) -> None
     new. Capturing the whole queue again on every growth turns a queue that
     fills one entry at a time into a quadratic pile of dumps."""
     await fake_redis.xadd("content.fetch.dlq", {"n": "1"}, id="5-0")
-    await collect_broker_findings(fake_redis, previous_pending={}, evidence_dir=tmp_path)
+    await collect_broker_findings(fake_redis, previous_state={}, evidence_dir=tmp_path)
     await fake_redis.xadd("content.fetch.dlq", {"n": "2"}, id="6-0")
-    await collect_broker_findings(fake_redis, previous_pending={}, evidence_dir=tmp_path)
+    await collect_broker_findings(fake_redis, previous_state={}, evidence_dir=tmp_path)
 
     topic_dir = tmp_path / "content.fetch.dlq"
     assert sorted(p.name for p in topic_dir.iterdir()) == ["5-0.json", "6-0.json"]
@@ -508,9 +633,9 @@ async def test_dlq_evidence_high_water_compares_ids_numerically(fake_redis, tmp_
     in exactly the direction that loses evidence.
     """
     await fake_redis.xadd("content.fetch.dlq", {"n": "9"}, id="9-0")
-    await collect_broker_findings(fake_redis, previous_pending={}, evidence_dir=tmp_path)
+    await collect_broker_findings(fake_redis, previous_state={}, evidence_dir=tmp_path)
     await fake_redis.xadd("content.fetch.dlq", {"n": "10"}, id="10-0")
-    await collect_broker_findings(fake_redis, previous_pending={}, evidence_dir=tmp_path)
+    await collect_broker_findings(fake_redis, previous_state={}, evidence_dir=tmp_path)
 
     assert (tmp_path / "content.fetch.dlq" / "10-0.json").exists()
 
@@ -524,9 +649,7 @@ async def test_dlq_evidence_failure_still_reports_the_depth(fake_redis, tmp_path
     blocked.write_text("not a directory")
     await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
 
-    findings, _ = await collect_broker_findings(
-        fake_redis, previous_pending={}, evidence_dir=blocked
-    )
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={}, evidence_dir=blocked)
 
     message = _dlq_finding(findings, "content.fetch.dlq").message
     assert "capture FAILED" in message
@@ -1105,12 +1228,12 @@ async def test_collect_detects_a_wiped_stream_across_ticks(fake_redis, tmp_path)
     what `XINFO STREAM` reports for `entries-added` after a recreate."""
     for _ in range(5):
         await fake_redis.xadd(CONTENT_FETCH, {"k": "v"})
-    _, state = await collect_broker_findings(fake_redis, previous_pending={})
+    _, state = await collect_broker_findings(fake_redis, previous_state={})
 
     await fake_redis.delete(CONTENT_FETCH)  # the wipe
     await fake_redis.xadd(CONTENT_FETCH, {"k": "v"})
 
-    findings, _ = await collect_broker_findings(fake_redis, previous_pending=state)
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
     assert any(f.check == "stream-reset" and f.subject == CONTENT_FETCH for f in findings)
 
 
@@ -1128,10 +1251,10 @@ async def test_continuity_state_survives_a_broker_outage(fake_redis, tmp_path) -
 
     for _ in range(5):
         await fake_redis.xadd(CONTENT_FETCH, {"k": "v"})
-    _, state = await collect_broker_findings(fake_redis, previous_pending={})
+    _, state = await collect_broker_findings(fake_redis, previous_state={})
     assert any(k.startswith("@") for k in state)
 
-    _, after_outage = await collect_broker_findings(DownRedis(), previous_pending=state)
+    _, after_outage = await collect_broker_findings(DownRedis(), previous_state=state)
     assert after_outage == state
 
 

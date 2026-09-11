@@ -8,7 +8,7 @@ the health probe's, two are the backup's.
 | `redis.conf.broker` | appended to `/etc/redis/redis.conf` | The tuning: bind, `requirepass`, AOF `everysec`, `maxmemory-policy noeviction`, explicit `maxmemory`. `__REQUIREPASS__` is substituted at install time from `/etc/redis/broker-password` |
 | `redis-server.service.d/broker.conf` | `/etc/systemd/system/redis-server.service.d/broker.conf` | Unit **ordering only**: `After=tailscaled.service`, widened restart limits, and the `ExecStartPre=+` wait |
 | `wait-for-tailnet-addr.sh` | `/usr/local/sbin/` | R1's boot-race insurance. Probes `/proc/net/fib_trie`, never `ip addr` |
-| `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory and eviction policy, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth + evidence capture, disk, persistence status, backup freshness. Never blocks anything |
+| `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory and eviction policy, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth + evidence capture + `entries-added` continuity, disk, persistence status, backup freshness. Never blocks anything |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
 | `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day. Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
 | `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
@@ -414,11 +414,17 @@ nobody claimed. Before that the only tool was `XTRIM MAXLEN 0`, which empties
 the queue: on one that has reached 110 entries, removing a single triaged frame
 took the other 109 with it.
 
-**Capture and disposal have one gap between them, and it is worth knowing
-before trusting the evidence directory as a complete record.** Capture happens
-on a probe tick, every 10 minutes, and `_collect_dlqs` returns early on
-`depth == 0` - so an entry written and deleted inside one interval leaves no
-dump and no finding. Nothing exploits that today (no service drains
-automatically), and broker#13 closes it by recording each queue's
-`entries-added`, which is monotonic: a counter that climbed while depth stayed 0
-proves entries passed through unseen.
+**Capture and disposal have a 10-minute gap between them, and what closes it is
+a counter rather than a faster tick** (broker#13). Capture happens on a probe
+tick, so an entry written and deleted inside one interval leaves no dump - and
+depth cannot see it either, because the queue is empty at both observations. The
+probe therefore records each queue's `entries-added`, which is monotonic and
+survives `XDEL`: a counter that advanced by more than the depth accounts for
+means entries passed through unseen, and the probe says so (`dlq-unobserved`).
+It reports a **floor**, `added - depth`, not a count - depth can include entries
+captured on an earlier tick, so subtracting it can only understate.
+
+The payloads are still gone; what the check buys is that their *existence*
+cannot be. A counter that goes **backwards** is a different and worse finding
+(`dlq-reset`): `entries-added` only resets when the stream itself is deleted, so
+any evidence dump still on disk describes a queue that no longer exists.
