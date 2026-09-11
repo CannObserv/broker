@@ -46,6 +46,28 @@ The first session in a fresh clone or new worktree fails the hook with exit 127:
 it is a vendor symlink, and Claude Code runs hooks in parallel, so nothing can
 initialise the submodule before it. `bash .skills/doctor.sh` once fixes it.
 
+## Context cadence
+
+`.github/workflows/context-cadence.yml` measures the agent-context surface
+(`AGENTS.md` and the docs it links) every Thursday at 15:51 UTC, a slot derived
+from the repo name to stagger the cohort. It appends one `baseline:scheduled`
+row to `.skills/context-metrics.jsonl` and **pushes it to `main` itself**, so a
+local `main` can fall behind by a `chore: weekly context measurement` commit.
+It measures and never curates; a budget warning in its run means someone runs
+`curate context` here.
+
+- **It needs the `ANTHROPIC_API_KEY` repository secret.** It checks the
+  credential first and fails the run without it. An estimated count can't be
+  appended to a ledger of exact counts, so without a key nothing is recorded.
+- **The merge drivers are per clone.** `.gitattributes` names two drivers git
+  does not have built in, and git config isn't versioned. Without them the
+  calibration files conflict on merge as if unprotected. Every new checkout runs
+  `bash skills/curating-context/scripts/install-cadence.sh` once;
+  `--check` reports all seven guarantees.
+- **The workflow is generated.** Re-run the installer rather than editing it.
+  That includes the em dashes in upstream's text, which the no-em-dash rule
+  doesn't cover here.
+
 ## Selection
 
 Ten of upstream's nineteen skills: the `gregoryfoster/skills` set archiver,
