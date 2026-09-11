@@ -47,7 +47,7 @@ and the dashboard's group-lag collector. Both query archiver's database or
 serve archiver's UI, and both stay in that repo (archiver#193 D6). This process
 holds no database credential at all.
 
-Outbox monitoring is therefore archiver's; see `docs/STREAMS.md` for the
+Outbox monitoring is therefore archiver's; see `docs/BUS-HEALTH.md` for the
 per-stream division of who watches what.
 
 **The DLQ split (CannObserv/broker#1 Phase 5).** "Drainer" used to name one
@@ -115,7 +115,7 @@ MEMORY_WARN_FRACTION = 0.75
 # the protection silently becomes inert, both arrive as a live `CONFIG SET` that
 # no file records, and a policy is the one an operator is most likely to reach
 # for under memory pressure - "evict something" reads safer than "refuse
-# writes" and is the opposite. See docs/STREAMS.md, "`noeviction` is
+# writes" and is the opposite. See docs/BUS-HEALTH.md, "`noeviction` is
 # load-bearing beyond refusing writes" (CannObserv/broker#9).
 BROKER_EVICTION_POLICY = "noeviction"
 
@@ -161,7 +161,7 @@ def with_margin(cap: int) -> int:
 # That is a real cost of CannObserv/archiver#193 D6 and it is recorded rather
 # than hidden: a cap raised in its home repo and not here turns this probe's
 # WARN into a false alarm (never a missed one - a stale-low threshold fires
-# early, it does not go quiet). See docs/STREAMS.md, "Mirrored constants".
+# early, it does not go quiet). See docs/BUS-HEALTH.md, "Mirrored constants".
 #
 # Three different caps apply on this broker, and they are not interchangeable:
 # - fact streams archiver's outbox publishes ride its operator-side periodic
@@ -430,7 +430,7 @@ def _evaluate_eviction_policy(policy: str | None) -> list[Finding]:
             check="eviction-policy",
             subject="redis",
             message=f"maxmemory-policy is {policy!r}, not {BROKER_EVICTION_POLICY!r} - "
-            f"{consequence}; see docs/STREAMS.md, "
+            f"{consequence}; see docs/BUS-HEALTH.md, "
             '"noeviction is load-bearing beyond refusing writes"',
         )
     ]

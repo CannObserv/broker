@@ -17,8 +17,10 @@ imported by any service; the services reach the broker over the network, by URL.
 | [`deploy/broker-backup.service`](deploy/broker-backup.service) / [`.timer`](deploy/broker-backup.timer) | The hourly RDB backup - root confined to read-only everything but its own state directory, holding no Redis credential (broker#4) |
 | [`src/broker/backup.py`](src/broker/backup.py) / [`restore.py`](src/broker/restore.py) | The job: verify `dump.rdb`, gzip, create-only upload named by the snapshot's time. And the restore: stage a snapshot as the AOF base, which is the only way Redis 7 will load it under `appendonly yes` |
 | [`docs/STREAMS.md`](docs/STREAMS.md) | The cluster stream inventory - who produces, who consumes, which health primitive applies, and who drains each DLQ |
+| [`docs/BUS-HEALTH.md`](docs/BUS-HEALTH.md) | What the probe watches and why: the per-stream monitoring contracts, every check it runs, the `noeviction` contract, loss detection, and the constants it mirrors |
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Losing the node: what is exposed, the backup's design and its grant, the rebuild runbook, the rehearsal record |
 | [`docs/RESTART-WINDOW.md`](docs/RESTART-WINDOW.md) | The cohort restart window: the identities, the steps as run, and the 2026-09-10 `databases 1` incident |
+| [`docs/ACL-CUTOVER.md`](docs/ACL-CUTOVER.md) | The per-service credential cutover around that window: the passwords, the dry run, each service onto its own user, retiring `default`, and the `nopass` trap |
 
 ## Provenance
 

@@ -300,7 +300,8 @@ def test_default_is_declared_disabled_and_still_carries_a_password(users) -> Non
     `default:` at the restart that enables `aclfile`: there this line must read
     `on` for that first load and go `off` live at the end, or the restart locks
     all three services out. That sequence is recorded in docs/RESTART-WINDOW.md
-    and is history on this one.
+    (the `on` load) and docs/ACL-CUTOVER.md step 4 (the `off`), and is history
+    on this one.
     """
     assert "default" in users, "omitting default from an aclfile makes it nopass"
     rules = users["default"]

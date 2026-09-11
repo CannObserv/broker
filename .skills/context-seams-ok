@@ -1,0 +1,58 @@
+# Cross-references check-seams.sh reported and a person judged legitimate.
+# A hit is wrong only if what it points at moved; each entry below points at
+# something that did not. Grammar: check-seams.sh --help.
+
+# --- the policy file (AGENTS.md has not moved) --------------------------------
+docs/SKILLS.md :: (`AGENTS.md` and the docs it links)
+docs/SKILLS.md :: | `curating-context` | curate context, context budget, trim AGENTS.md |
+
+# --- 2026-09-11 split of docs/STREAMS.md into STREAMS.md + BUS-HEALTH.md ------
+# BUS-HEALTH.md pointing back at what stayed in STREAMS.md: the table, its
+# columns, and *Who drains a DLQ*.
+docs/BUS-HEALTH.md :: and who drains its DLQ is [STREAMS.md](STREAMS.md)
+docs/BUS-HEALTH.md :: Split out of STREAMS.md on 2026-09-11
+docs/BUS-HEALTH.md :: see *Who drains a DLQ* in [STREAMS.md](STREAMS.md);
+docs/BUS-HEALTH.md :: retention trims in the [STREAMS.md](STREAMS.md) table.
+docs/BUS-HEALTH.md :: `Producer durability under OOM` column of [STREAMS.md](STREAMS.md).
+docs/BUS-HEALTH.md :: *Who drains a DLQ* in [STREAMS.md](STREAMS.md) - an assignment
+# Mentions of the probe inside the doc the probe's section now lives in.
+docs/BUS-HEALTH.md :: What the bus-health probe watches, the per-stream contracts
+docs/BUS-HEALTH.md :: (badge + journald line) and the bus-health probe
+# Non-stream keys stayed in STREAMS.md.
+docs/RECOVERY.md :: [STREAMS.md](STREAMS.md), *Non-stream keys on `db0`*.
+# Source pointing at STREAMS.md content that stayed: the inventory rows, the
+# content.replicate no-trim carve-out, non-stream keys, Who drains a DLQ.
+deploy/redis-acl.conf :: hazard ../docs/STREAMS.md carves that stream out of the trim set for.
+deploy/redis-acl.conf :: inventoried in ../docs/STREAMS.md,
+deploy/redis.conf.broker :: # ../docs/STREAMS.md grows.
+src/broker/bus_health.py :: ``docs/STREAMS.md`` orders the drain
+src/broker/bus_health.py :: # docs/STREAMS.md, "Who drains a DLQ", and mirrored here
+src/broker/bus_health.py :: mirroring the ``docs/STREAMS.md`` inventory.
+src/broker/bus_health.py :: resting state is 0; see docs/STREAMS.md, "Who drains a DLQ"
+src/broker/bus_health.py :: these payloads are gone. See docs/STREAMS.md, "Who drains a DLQ"
+tests/deploy/test_live_broker_matches_tracked_config.py :: eviction candidate set; see docs/STREAMS.md,
+tests/deploy/test_redis_acl.py :: the inventory row is in ../docs/STREAMS.md.
+tests/deploy/test_redis_acl.py :: which is the exact hazard `docs/STREAMS.md` carves
+# The probe named as a thing, not as a pointer into a doc.
+deploy/redis-acl.conf :: # The bus-health probe and the backstop DLQ drainer.
+pyproject.toml :: Operational code for the Cannabis Observer change-bus broker
+
+# --- 2026-09-11 split of docs/RESTART-WINDOW.md into + ACL-CUTOVER.md ---------
+# ACL-CUTOVER.md pointing back at what stayed: the window, the identities
+# block at the top, step 1d.
+docs/ACL-CUTOVER.md :: ([RESTART-WINDOW.md](RESTART-WINDOW.md)): the work done before the window
+docs/ACL-CUTOVER.md :: stay in RESTART-WINDOW.md.
+docs/ACL-CUTOVER.md :: RESTART-WINDOW.md; `$U` (`default:`) authenticates only
+docs/ACL-CUTOVER.md :: Split out of RESTART-WINDOW.md on 2026-09-11
+docs/ACL-CUTOVER.md :: and after the restart in [RESTART-WINDOW.md](RESTART-WINDOW.md) step 1d.
+# The `nopass` trap named where it now lives, or linked to it.
+docs/ACL-CUTOVER.md :: plus the `nopass` trap the dry run exists to catch
+docs/RESTART-WINDOW.md :: window, and the `nopass` trap - are [ACL-CUTOVER.md](ACL-CUTOVER.md)
+docs/RESTART-WINDOW.md :: the `nopass` trap ([ACL-CUTOVER.md](ACL-CUTOVER.md))
+# The incident and step 1a-bis / step 1d stayed in RESTART-WINDOW.md.
+docs/RECOVERY.md :: the incident in `docs/RESTART-WINDOW.md` was
+docs/SKILLS.md :: [RESTART-WINDOW.md](RESTART-WINDOW.md), never a ship step.
+deploy/redis.conf.broker :: docs/RESTART-WINDOW.md step 1a-bis is the runbook
+tests/deploy/test_live_acl_matches_tracked_acl.py :: ``docs/RESTART-WINDOW.md`` step 1d runs
+tests/deploy/test_live_acl_matches_tracked_acl.py :: docs/RESTART-WINDOW.md step 1d runs this suite
+tests/deploy/test_redis_acl.py :: That sequence is recorded in docs/RESTART-WINDOW.md
