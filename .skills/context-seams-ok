@@ -35,6 +35,9 @@ src/broker/bus_health.py :: these payloads are gone. See docs/STREAMS.md, "Who d
 tests/deploy/test_live_broker_matches_tracked_config.py :: eviction candidate set; see docs/STREAMS.md,
 tests/deploy/test_redis_acl.py :: the inventory row is in ../docs/STREAMS.md.
 tests/deploy/test_redis_acl.py :: which is the exact hazard `docs/STREAMS.md` carves
+# The group-missing finding (CR 1) pointing at the probe's section where it now
+# lives; tests/test_bus_health.py resolves it against the heading every run.
+src/broker/bus_health.py :: stream was recreated; see docs/BUS-HEALTH.md, "The bus-health probe"
 # The probe named as a thing, not as a pointer into a doc.
 deploy/redis-acl.conf :: # The bus-health probe and the backstop DLQ drainer.
 pyproject.toml :: Operational code for the Cannabis Observer change-bus broker
