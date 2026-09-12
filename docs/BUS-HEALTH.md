@@ -103,6 +103,32 @@ Per tick it probes:
   from a probe running on Archiver's own host, where a downstream service's
   group lag was plausibly its own alerting problem. On a neutral node it is not
   - nobody else watches these, and this is the one place that can;
+- **a consumer group that does not exist** on one of those five streams
+  (`group-missing`) - `XPENDING` answers `NOGROUP`, so that group's lag cannot
+  be read at all, and a stalled or absent consumer is invisible to the rule
+  above. WARN on **every** tick the group is absent, with no two-tick grace:
+  nothing about it is transient. Three causes, in rising order of how much they
+  hide:
+  - the consumer has never run against this broker, so it never created the
+    group (co-core's `ensure_group`, when the consumer starts) - the reading
+    the finding's own message gives;
+  - the consumer runs its group under a name other than the one co-core's
+    `group_name()` derives, which is the name the probe asks for
+    (cannobserv#384). The consumer looks healthy, and its real group is probed
+    by nobody;
+  - the group was lost while the stream was not: a stream deleted or flushed
+    and then recreated by its producer's next `XADD` comes back without its
+    groups. That case follows a `stream-reset` finding on the same stream - on
+    the same tick if the stream was recreated between two ticks, on an earlier
+    one if a tick caught it absent - and the two together are the signature
+    (*Detecting loss* below).
+
+  Only a stream that exists is checked - one nothing has written yet is
+  dormant, not a fault - and a stream the probe reads without a group cannot
+  trip it: `info.changes` until its consumer exists, and the config/state
+  streams, where `StreamCheck` refuses a group at import time. A missing group
+  records no pending count, so when it comes back its two-tick rule starts
+  again from zero;
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
   named and the entries captured; see *Who drains a DLQ* in [STREAMS.md](STREAMS.md);
 The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
