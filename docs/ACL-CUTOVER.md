@@ -9,7 +9,7 @@ installing the ACL file), the symptom playbook, what not to do and the
 2026-09-10 incident stay in RESTART-WINDOW.md.
 
 This is the record of the cutover, and the order a new cluster repeats. To change
-a grant on this one, see deploy/README.md, *Changing a grant*.
+a grant on this one, see [deploy/README.md](../deploy/README.md), *Changing a grant*.
 
 Steps 2 to 4 below continue from Step 1 (1a to 1d) in RESTART-WINDOW.md; the
 numbered items under *Before the window* are preparation, not steps. Commands use
