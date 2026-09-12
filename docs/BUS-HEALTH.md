@@ -4,13 +4,14 @@ What the bus-health probe watches, the per-stream contracts it holds each stream
 to, and what it cannot see. Which stream is which, who produces and consumes it,
 and who drains its DLQ is [STREAMS.md](STREAMS.md) - including the table whose
 `Health primitive` and `Producer durability under OOM` columns this file expands.
+The probe's `backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s.
 
-Split out of STREAMS.md on 2026-09-11, when the two together ran past the
+Moved out of STREAMS.md on 2026-09-11, when the two together ran past the
 per-doc context budget.
 
 ## Per-stream monitoring contracts
 
-The `info.changes` health row spent a while naming a primitive that did not
+The `info.changes` row's `Health primitive` cell in [STREAMS.md](STREAMS.md) spent a while naming a primitive that did not
 exist; CannObserv/archiver#112 (badge + journald line) and the bus-health probe
 below closed that gap. Left as a reminder of the failure class: a health column an
 operator would assume is wired up must either be real or carry a ⚠️.
@@ -25,7 +26,7 @@ pending entries" as healthy will read this stream as healthy while it is dead.
 Use last-entry age instead - it at least catches a producer that stopped
 republishing.
 
-Note the *permanently* in that row. `info.changes` is groupless today too, but
+Note the *permanently* in `content.fetch-policy`'s STREAMS.md row. `info.changes` is groupless today too, but
 only because its consumer isn't built; it gains a group and becomes
 lag-monitorable, exactly as `content.revisions` just did.
 `content.fetch-policy` does not.

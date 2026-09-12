@@ -37,3 +37,9 @@ docs/RESTART-WINDOW.md :: retarget :: The dry run below has been done
 docs/RESTART-WINDOW.md :: retarget :: | the `nopass` trap | roll back step 1 immediately
 # moved to ACL-CUTOVER.md with the trap; one of its two "above" instances is now step 1d over there
 docs/RESTART-WINDOW.md :: retarget :: It appears twice above, before and after the restart
+# fresh-eyes review: step 4 and the dry run now live in ACL-CUTOVER.md
+docs/RESTART-WINDOW.md :: retarget :: step 4's rollback - and step 4 is repeated to close it
+docs/RESTART-WINDOW.md :: retarget :: | comment out `aclfile`, restart, fix, re-dry-run |
+# fresh-eyes review: moved into BUS-HEALTH.md, these name rows of a table that stayed in STREAMS.md
+docs/STREAMS.md :: retarget :: The `info.changes` health row spent a while naming
+docs/STREAMS.md :: retarget :: Note the *permanently* in that row.

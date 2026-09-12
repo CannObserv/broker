@@ -14,8 +14,8 @@ a row names a service's constant or module, that is a pointer across a repo
 boundary, and the pointer is the only thing keeping the two in step.
 
 How each stream is monitored - the probe and its thresholds, the per-stream
-monitoring contracts, loss detection, the `noeviction` contract - is
-[BUS-HEALTH.md](BUS-HEALTH.md).
+monitoring contracts, loss detection, the `noeviction` contract, *Mirrored
+constants* and *Who watches what* - is [BUS-HEALTH.md](BUS-HEALTH.md).
 
 ## Streams on this broker
 

@@ -1,17 +1,22 @@
 # The ACL cutover
 
-CannObserv/broker#2's half of the cohort restart window
-([RESTART-WINDOW.md](RESTART-WINDOW.md)): the work done before the window -
-minting the passwords, the dry run, where each service lives - and after it -
-each service onto its own credential, the probe onto `brokeradmin`, the shared
-password retired - plus the `nopass` trap the dry run exists to catch. The
-window itself, the symptom playbook, what not to do and the 2026-09-10 incident
-stay in RESTART-WINDOW.md.
+The CannObserv/broker#2 work either side of the cohort restart window
+([RESTART-WINDOW.md](RESTART-WINDOW.md)): before it - minting the passwords, the
+dry run, where each service lives - and after it - each service onto its own
+credential, the probe onto `brokeradmin`, the shared password retired - plus the
+`nopass` trap the dry run exists to catch. The window itself (including step 1a,
+installing the ACL file), the symptom playbook, what not to do and the
+2026-09-10 incident stay in RESTART-WINDOW.md.
 
-Commands below use `$A`, `$B` and `$U` as defined at the top of
+This is the record of the cutover, and the order a new cluster repeats. To change
+a grant on this one, see deploy/README.md, *Changing a grant*.
+
+Steps 2 to 4 below continue from Step 1 (1a to 1d) in RESTART-WINDOW.md; the
+numbered items under *Before the window* are preparation, not steps. Commands use
+the `pw` helper and `$A`, `$B` and `$U`, all defined at the top of
 RESTART-WINDOW.md; `$U` (`default:`) authenticates only while a window is open.
 
-Split out of RESTART-WINDOW.md on 2026-09-11, when the runbook ran past the
+Moved out of RESTART-WINDOW.md on 2026-09-11, when the runbook ran past the
 per-doc context budget.
 
 ## Before the window - no downtime, do this first

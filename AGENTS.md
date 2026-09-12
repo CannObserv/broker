@@ -100,7 +100,7 @@ deploy/          the artifacts the node deploys + the bus-health and backup unit
                  see deploy/README.md
 docs/STREAMS.md  the cluster stream inventory - who produces, consumes, drains
 docs/BUS-HEALTH.md
-                 the probe: per-stream contracts, every check, loss detection
+                 the probe: per-stream contracts, stream and DLQ checks, loss detection
 docs/RECOVERY.md node loss: the backup, the restore, the rehearsal record
 docs/RESTART-WINDOW.md
                  the cohort restart window, its identities, the 2026-09-10 incident
@@ -136,8 +136,8 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 ## Detail Docs
 
 - [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each; non-stream keys
-- [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: every check, its threshold, and why
-- [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup, the restore, the rehearsal record
+- [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
+- [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record
 - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook, symptoms, the 2026-09-10 incident
-- [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - ACL users and credentials: minting, the dry run, retiring `default`, `nopass`
+- [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, deploy/README.md
 - [docs/SKILLS.md](docs/SKILLS.md) - the vendored agent skills, their refresh hook, the context cadence

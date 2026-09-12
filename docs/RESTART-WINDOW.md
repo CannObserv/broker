@@ -2,9 +2,8 @@
 
 Runbook for CannObserv/broker#5, and the CannObserv/broker#2 cutover it enables.
 
-The cutover's own steps - the passwords, the dry run, steps 2 to 4 after the
-window, and the `nopass` trap - are [ACL-CUTOVER.md](ACL-CUTOVER.md). This file
-is the window.
+The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
+`nopass` trap - are [ACL-CUTOVER.md](ACL-CUTOVER.md).
 
 > **Status, 2026-09-10.** The `aclfile` half of the window ran at 00:46 UTC,
 > steps 2 and 3 followed rolling, and **step 4 retired the shared password at
@@ -124,7 +123,7 @@ is gone. Only entries appended *after* the flush survive.
 So the two halves of R4's fix are hostile in this order and safe in the other.
 Purge the history first. `BGREWRITEAOF` belongs to no user but `default`, so
 this is where the window is opened - `ACL SETUSER default on` as `acladmin`,
-step 4's rollback - and step 4 is repeated to close it once the verification in
+step 4's rollback in [ACL-CUTOVER.md](ACL-CUTOVER.md) - and that step is repeated to close it once the verification in
 1d is done.
 
 The rewrite destroys the AOF history, which is what recovered the incident
@@ -322,7 +321,7 @@ data*).
 | Symptom | Means | Do |
 |---|---|---|
 | `redis-cli PING` returns `PONG` unauthenticated | the `nopass` trap ([ACL-CUTOVER.md](ACL-CUTOVER.md)) | roll back step 1 immediately; the broker is open |
-| redis-server will not start, `Aborting Redis startup because of ACL errors` | a bad rule; Redis refuses the **whole file** | comment out `aclfile`, restart, fix, re-dry-run |
+| redis-server will not start, `Aborting Redis startup because of ACL errors` | a bad rule; Redis refuses the **whole file** | comment out `aclfile`, restart, fix, re-dry-run ([ACL-CUTOVER.md](ACL-CUTOVER.md)) |
 | A service logs `NOPERM ... no permissions to run the '<cmd>' command` | missing command grant | `ACL SETUSER <user> +<cmd>` live, then commit it |
 | A service logs `NOPERM ... no permissions to access one of the keys` | missing `~pattern` - the **quieter** mistake | `ACL SETUSER <user> ~<topic>` live, then commit it |
 | `check_redis_floor.sh` says `could not read redis_version` | missing `+info`; warn-only, so nothing else reports it | `ACL SETUSER <user> +info` |

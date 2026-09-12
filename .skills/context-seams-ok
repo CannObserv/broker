@@ -10,7 +10,9 @@ docs/SKILLS.md :: | `curating-context` | curate context, context budget, trim AG
 # BUS-HEALTH.md pointing back at what stayed in STREAMS.md: the table, its
 # columns, and *Who drains a DLQ*.
 docs/BUS-HEALTH.md :: and who drains its DLQ is [STREAMS.md](STREAMS.md)
-docs/BUS-HEALTH.md :: Split out of STREAMS.md on 2026-09-11
+docs/BUS-HEALTH.md :: Moved out of STREAMS.md on 2026-09-11
+docs/BUS-HEALTH.md :: The `info.changes` row's `Health primitive` cell in [STREAMS.md](STREAMS.md)
+docs/BUS-HEALTH.md :: Note the *permanently* in `content.fetch-policy`'s STREAMS.md row.
 docs/BUS-HEALTH.md :: see *Who drains a DLQ* in [STREAMS.md](STREAMS.md);
 docs/BUS-HEALTH.md :: retention trims in the [STREAMS.md](STREAMS.md) table.
 docs/BUS-HEALTH.md :: `Producer durability under OOM` column of [STREAMS.md](STREAMS.md).
@@ -40,14 +42,15 @@ pyproject.toml :: Operational code for the Cannabis Observer change-bus broker
 # --- 2026-09-11 split of docs/RESTART-WINDOW.md into + ACL-CUTOVER.md ---------
 # ACL-CUTOVER.md pointing back at what stayed: the window, the identities
 # block at the top, step 1d.
-docs/ACL-CUTOVER.md :: ([RESTART-WINDOW.md](RESTART-WINDOW.md)): the work done before the window
+docs/ACL-CUTOVER.md :: ([RESTART-WINDOW.md](RESTART-WINDOW.md)): before it - minting the passwords
 docs/ACL-CUTOVER.md :: stay in RESTART-WINDOW.md.
 docs/ACL-CUTOVER.md :: RESTART-WINDOW.md; `$U` (`default:`) authenticates only
-docs/ACL-CUTOVER.md :: Split out of RESTART-WINDOW.md on 2026-09-11
+docs/ACL-CUTOVER.md :: continue from Step 1 (1a to 1d) in RESTART-WINDOW.md
+docs/ACL-CUTOVER.md :: Moved out of RESTART-WINDOW.md on 2026-09-11
 docs/ACL-CUTOVER.md :: and after the restart in [RESTART-WINDOW.md](RESTART-WINDOW.md) step 1d.
 # The `nopass` trap named where it now lives, or linked to it.
 docs/ACL-CUTOVER.md :: plus the `nopass` trap the dry run exists to catch
-docs/RESTART-WINDOW.md :: window, and the `nopass` trap - are [ACL-CUTOVER.md](ACL-CUTOVER.md)
+docs/RESTART-WINDOW.md :: `nopass` trap - are [ACL-CUTOVER.md](ACL-CUTOVER.md).
 docs/RESTART-WINDOW.md :: the `nopass` trap ([ACL-CUTOVER.md](ACL-CUTOVER.md))
 # The incident and step 1a-bis / step 1d stayed in RESTART-WINDOW.md.
 docs/RECOVERY.md :: the incident in `docs/RESTART-WINDOW.md` was
