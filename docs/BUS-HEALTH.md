@@ -107,15 +107,14 @@ Per tick it probes:
   (`group-missing`) - `XPENDING` answers `NOGROUP`, so that group's lag cannot
   be read at all, and a stalled or absent consumer is invisible to the rule
   above. WARN on **every** tick the group is absent, with no two-tick grace:
-  nothing about it is transient. Three causes, in rising order of how much they
-  hide:
+  nothing about it is transient. Three causes, and the finding names all three
+  rather than guessing:
   - the consumer has never run against this broker, so it never created the
-    group (co-core's `ensure_group`, when the consumer starts) - the reading
-    the finding's own message gives;
+    group (co-core's `ensure_group`, when the consumer starts);
   - the consumer runs its group under a name other than the one co-core's
     `group_name()` derives, which is the name the probe asks for
     (cannobserv#384). The consumer looks healthy, and its real group is probed
-    by nobody;
+    by nobody - the one cause no other check reports;
   - the group was lost while the stream was not: a stream deleted or flushed
     and then recreated by its producer's next `XADD` comes back without its
     groups. That case follows a `stream-reset` finding on the same stream - on
