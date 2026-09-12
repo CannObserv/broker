@@ -62,24 +62,24 @@ silently corrupts values.
   `tests/test_backup.py` pin both. A restored snapshot is **ignored** under
   `appendonly yes` unless staged as the AOF base: `src/broker/restore.py`,
   `docs/RECOVERY.md`.
-- **The `OOM` seam spans two repos.** `deploy/redis.conf.broker`'s cap and
+- **The `OOM` seam spans this repo and archiver.** `deploy/redis.conf.broker`'s cap and
   archiver's `_TRANSIENT_PUBLISH_ERRORS` are one decision. Each names the other.
   Do not change either alone (archiver#193 R5). The cap moved out of
-  `deploy/redis-server.dropin.conf` in Phase 5, so **archiver's half still
-  points at the old path** until it is updated - CannObserv/archiver#196.
+  `deploy/redis-server.dropin.conf` in Phase 5, and archiver's half was
+  repointed at the new path by CannObserv/archiver#196.
 - **A non-stream key pattern is inventoried before it is written.**
   `docs/STREAMS.md`, *Non-stream keys on `db0`*. There is exactly one today,
   Replicator's `replicator:cmd:*` dedupe keys, and they are the **only volatile
   keys on the instance** - which is what makes `noeviction` load-bearing beyond
   refusing writes, since any `volatile-*` policy would make that one namespace
   the whole eviction candidate set. Do not change the policy without reading
-  that section; two tests pin it, one on the config and one on the live
-  keyspace.
-- **Mirrored constants.** The three retention caps in `src/broker/bus_health.py`
+  `docs/BUS-HEALTH.md`, *`noeviction` is load-bearing beyond refusing writes*;
+  tests pin it on the config and on the live keyspace.
+- **Mirrored constants.** The retention caps in `src/broker/bus_health.py`
   are copies of numbers owned elsewhere, each with its source named. Group
   names are **derived** via co-core's `group_name()`, never spelled - that is
   the point of cannobserv#384 and the reason this repo depends on co-core at
-  all. See `docs/STREAMS.md`, "Mirrored constants".
+  all. See `docs/BUS-HEALTH.md`, "Mirrored constants".
 - **No em dashes.** ASCII `-`.
 - **No inline module imports.** Ruff `PLC0415`.
 - All UTC, ISO 8601.
@@ -99,9 +99,13 @@ Types: feat, fix, refactor, docs, test, chore.
 deploy/          the artifacts the node deploys + the bus-health and backup units;
                  see deploy/README.md
 docs/STREAMS.md  the cluster stream inventory - who produces, consumes, drains
+docs/BUS-HEALTH.md
+                 the probe: per-stream contracts, stream and DLQ checks, loss detection
 docs/RECOVERY.md node loss: the backup, the restore, the rehearsal record
 docs/RESTART-WINDOW.md
                  the cohort restart window, its identities, the 2026-09-10 incident
+docs/ACL-CUTOVER.md
+                 the per-service credential cutover around that window
 docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
@@ -114,7 +118,7 @@ tests/           mirrors src/; tests/deploy/ asserts installed artifacts match d
 
 Vendored from `gregoryfoster/skills` into `skills/` (agentskills.io) and
 `.claude/skills/` (Claude Code). Symlinks dangle until the submodule is
-initialised: `bash .skills/doctor.sh`. Two things commit to `main` unprompted:
+initialised: `bash .skills/doctor.sh`. Unprompted commits land on `main`:
 a `SessionStart` hook bumping the submodule daily, and a Thursday workflow
 appending a context measurement - pull before pushing. Review/ship are the
 `-python-fastapi` variants - right gate, wrong deploy step: broker has no service
@@ -122,9 +126,18 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Related
 
-- CannObserv/broker#1 - the relocation epic. Phases 1-4 done; remaining work is
-  its sub-issues: #2 ACL users, #3 alerting, #4 backup, #5 restart window,
-  #6 OOM contract, #7 exercise two streams, #8 latency matrix.
+- CannObserv/broker#1 - the relocation epic. Phases 1-4 done; of its sub-issues
+  only #8 latency matrix is still open - #2 ACL users, #3 alerting, #4 backup,
+  #5 restart window, #6 OOM contract and #7 exercise the idle streams are closed.
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
-- CannObserv/archiver#196 - archiver's half of the OOM seam, stale since the
+- CannObserv/archiver#196 - archiver's half of the OOM seam, repointed after the
   cap moved to `deploy/redis.conf.broker`
+
+## Detail Docs
+
+- [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each; non-stream keys
+- [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
+- [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record
+- [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook, symptoms, the 2026-09-10 incident
+- [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, [deploy/README.md](deploy/README.md)
+- [docs/SKILLS.md](docs/SKILLS.md) - the vendored agent skills, their refresh hook, the context cadence

@@ -90,7 +90,7 @@ otherwise enable a `nopass` user with `+@all`. A new cluster repeats the order:
    nobody once `default` is off, freezing every grant on the broker
    permanently. Done 2026-09-10. Reversing it, widening any grant afterwards,
    and re-opening `default` for a restart window are all done the same way.
-   See `docs/RESTART-WINDOW.md` step 4.
+   See `docs/ACL-CUTOVER.md` step 4.
 
 Steps 2 to 4 are reversible and need no restart, which is the point of putting
 the irreversible-feeling step last. And all three participants classify `NOPERM`

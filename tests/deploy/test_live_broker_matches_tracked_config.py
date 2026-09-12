@@ -16,7 +16,7 @@ One assertion here is about the live *keyspace* rather than the live config
 (``test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance``): it sits
 in this module because it needs the same credential and the same "the files
 cannot see this" argument, and because what it pins is the premise of
-``maxmemory-policy`` being worth pinning at all - see ``docs/STREAMS.md``,
+``maxmemory-policy`` being worth pinning at all - see ``docs/BUS-HEALTH.md``,
 "``noeviction`` is load-bearing beyond refusing writes".
 
 Skips unless ``BROKER_REDIS_URL`` is set and the broker answers, so CI and dev
@@ -112,7 +112,7 @@ def test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance(live_client)
     candidate set is exactly one tenant's namespace. That is a property of the
     live keyspace, not of any file, and it stops being true the moment another
     service writes a key with a TTL - at which point the hazard changes shape
-    and the sentence in ``docs/STREAMS.md`` becomes false. This is what goes red.
+    and the sentence in ``docs/BUS-HEALTH.md`` becomes false. This is what goes red.
 
     Counted rather than checked per key, because ``brokeradmin`` holds no
     ``+ttl`` and no ``+type`` and should not: ``INFO keyspace``'s ``expires`` is

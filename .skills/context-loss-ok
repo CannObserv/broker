@@ -1,0 +1,45 @@
+# Lines a curation had to rewrite rather than move - one judged entry per line.
+# Grammar and the closed warrant set: prove-no-loss.sh --help.
+
+# 2026-09-11 curation (STREAMS.md -> + BUS-HEALTH.md, RESTART-WINDOW.md -> + ACL-CUTOVER.md)
+
+# AGENTS.md - counts dropped (check-counts), same claims
+AGENTS.md :: tighten :: - **The `OOM` seam spans two repos.**
+AGENTS.md :: tighten :: keyspace.
+AGENTS.md :: tighten :: - **Mirrored constants.** The three retention caps in
+AGENTS.md :: tighten :: Two things commit to `main` unprompted:
+# AGENTS.md - pointers into sections this change moved to docs/BUS-HEALTH.md
+AGENTS.md :: retarget :: that section; two tests pin it, one on the config and one on the live
+AGENTS.md :: retarget :: all. See `docs/STREAMS.md`, "Mirrored constants".
+# AGENTS.md - refuted by `gh issue view`: archiver#196 closed COMPLETED 2026-09-09,
+# and archiver's publisher.py now cites deploy/redis.conf.broker
+AGENTS.md :: disproven :: in Phase 5, so **archiver's half still
+AGENTS.md :: disproven :: points at the old path** until it is updated - CannObserv/archiver#196.
+AGENTS.md :: disproven :: archiver's half of the OOM seam, stale since the
+# AGENTS.md - refuted by `gh issue view`: broker#2..#7 closed COMPLETED, only #8 open
+AGENTS.md :: disproven :: Phases 1-4 done; remaining work is
+AGENTS.md :: disproven :: its sub-issues: #2 ACL users, #3 alerting, #4 backup
+AGENTS.md :: disproven :: #6 OOM contract, #7 exercise two streams, #8 latency matrix.
+
+# docs/STREAMS.md - provenance moved out of headings (check-seams provenance-heading)
+docs/STREAMS.md :: rename :: ## Non-stream keys on `db0` (CannObserv/broker#9, CannObserv/replicator#80)
+docs/STREAMS.md :: rename :: ## Who drains a DLQ (CannObserv/archiver#162)
+docs/STREAMS.md :: rename :: ## Orphaned consumer registrations, one time only (CannObserv/archiver#156)
+# docs/STREAMS.md - "above" / "in this file" pointers now crossing into BUS-HEALTH.md
+docs/STREAMS.md :: retarget :: see *Who drains a DLQ* above;
+docs/STREAMS.md :: retarget :: retention trims in the table above.
+docs/STREAMS.md :: retarget :: `Producer durability under OOM` column above.
+docs/STREAMS.md :: retarget :: *Who drains a DLQ* above, in this file
+
+# docs/RESTART-WINDOW.md - pointers into sections this change moved to ACL-CUTOVER.md
+docs/RESTART-WINDOW.md :: retarget :: close it by disabling it again - step 4, both directions.
+docs/RESTART-WINDOW.md :: retarget :: The dry run below has been done
+docs/RESTART-WINDOW.md :: retarget :: | the `nopass` trap | roll back step 1 immediately
+# moved to ACL-CUTOVER.md with the trap; one of its two "above" instances is now step 1d over there
+docs/RESTART-WINDOW.md :: retarget :: It appears twice above, before and after the restart
+# fresh-eyes review: step 4 and the dry run now live in ACL-CUTOVER.md
+docs/RESTART-WINDOW.md :: retarget :: step 4's rollback - and step 4 is repeated to close it
+docs/RESTART-WINDOW.md :: retarget :: | comment out `aclfile`, restart, fix, re-dry-run |
+# fresh-eyes review: moved into BUS-HEALTH.md, these name rows of a table that stayed in STREAMS.md
+docs/STREAMS.md :: retarget :: The `info.changes` health row spent a while naming
+docs/STREAMS.md :: retarget :: Note the *permanently* in that row.
