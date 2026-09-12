@@ -1610,3 +1610,58 @@ def test_main_passes_the_backup_state_path_through(stub_main_deps, monkeypatch) 
     argv = ["--state-file", str(stub_main_deps.state_file), "--backup-state-file", "/x/state.json"]
     assert bus_health.main(argv) == 0
     assert seen["backup_state_path"] == Path("/x/state.json")
+
+
+# --- the doc pointer a finding hands its reader ---
+
+_DOC_POINTER = re.compile(r'docs/(?P<doc>[A-Z][A-Z-]*\.md), "(?P<title>[^"]+)"')
+_DOCS = Path(__file__).resolve().parent.parent / "docs"
+
+
+def _headings(doc: Path) -> list[str]:
+    """Markdown headings, backticks dropped, skipping fenced code - whose `#`
+    lines are shell comments, and one could otherwise stand in for a heading."""
+    headings, fenced = [], False
+    for line in doc.read_text().splitlines():
+        if line.startswith("```"):
+            fenced = not fenced
+        elif not fenced and line.startswith("#"):
+            headings.append(line.lstrip("#").strip().replace("`", ""))
+    return headings
+
+
+async def _finding_with_a_doc_pointer(fake_redis, check: str) -> bus_health.Finding:
+    if check == "eviction-policy":
+        (finding,) = evaluate_memory(used_memory=100, maxmemory=1000, policy="volatile-lru")
+        return finding
+    previous_state: dict[str, int] = {}
+    if check == "dlq":
+        await fake_redis.xadd("content.revisions.dlq", {"k": "v"})
+    elif check == "dlq-unobserved":
+        dlq = "content.fetch.dlq"
+        for _ in range(3):
+            await fake_redis.xdel(dlq, await fake_redis.xadd(dlq, {"k": "v"}))
+        previous_state[CONTINUITY_ENTRIES_KEY.format(topic=dlq)] = 1
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=previous_state)
+    return next(f for f in findings if f.check == check)
+
+
+@pytest.mark.parametrize("check", ["eviction-policy", "dlq", "dlq-unobserved"])
+async def test_the_doc_section_a_finding_points_at_exists(fake_redis, check) -> None:
+    """A finding that says ``see docs/X.md, "Title"`` is the operator's first
+    step, and the only one this repo writes for them at the moment it matters.
+
+    These pointers are prose inside f-strings, so nothing else checks them: the
+    2026-09-11 split of STREAMS.md moved the section the eviction-policy finding
+    names, and its message was retargeted by hand. The next split will not
+    necessarily be done by someone who greps for it.
+    """
+    finding = await _finding_with_a_doc_pointer(fake_redis, check)
+    pointers = _DOC_POINTER.findall(finding.message)
+    assert pointers, f"{check} carries no docs pointer: {finding.message}"
+    for doc, title in pointers:
+        path = _DOCS / doc
+        assert path.is_file(), f"{check} points at docs/{doc}, which does not exist"
+        assert any(h.startswith(title) for h in _headings(path)), (
+            f"{check} points at docs/{doc}, {title!r} - no heading there starts that way"
+        )
