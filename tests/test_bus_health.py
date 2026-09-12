@@ -369,11 +369,18 @@ async def test_collect_reports_nonempty_dlq(fake_redis) -> None:
 
 
 async def test_collect_missing_group_is_a_finding(fake_redis) -> None:
-    """A consumer group that should exist but does not means the consumer never
-    provisioned - silent, so the probe must say it."""
+    """A consumer group that should exist but does not is silent, so the probe
+    must say it - without guessing why. A consumer that never ran is one of
+    three causes (docs/BUS-HEALTH.md), and a message asserting it would send
+    whoever reads the alert after a wipe to the consumer's deployment instead of
+    to the group that was lost with its stream."""
     await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
     findings, _ = await collect_broker_findings(fake_redis, previous_state={})
-    assert any(f.check == "group-missing" and f.subject == CONTENT_REVISIONS for f in findings)
+    (finding,) = [
+        f for f in findings if f.check == "group-missing" and f.subject == CONTENT_REVISIONS
+    ]
+    assert "never provisioned" not in finding.message, finding.message
+    assert "recreated" in finding.message, finding.message
 
 
 async def test_collect_pending_carries_state_between_ticks(fake_redis) -> None:
@@ -1642,11 +1649,13 @@ async def _finding_with_a_doc_pointer(fake_redis, check: str) -> bus_health.Find
         for _ in range(3):
             await fake_redis.xdel(dlq, await fake_redis.xadd(dlq, {"k": "v"}))
         previous_state[CONTINUITY_ENTRIES_KEY.format(topic=dlq)] = 1
+    elif check == "group-missing":
+        await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
     findings, _ = await collect_broker_findings(fake_redis, previous_state=previous_state)
     return next(f for f in findings if f.check == check)
 
 
-@pytest.mark.parametrize("check", ["eviction-policy", "dlq", "dlq-unobserved"])
+@pytest.mark.parametrize("check", ["eviction-policy", "dlq", "dlq-unobserved", "group-missing"])
 async def test_the_doc_section_a_finding_points_at_exists(fake_redis, check) -> None:
     """A finding that says ``see docs/X.md, "Title"`` is the operator's first
     step, and the only one this repo writes for them at the moment it matters.

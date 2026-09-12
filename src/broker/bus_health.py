@@ -908,8 +908,13 @@ async def _collect_stream(
                 Finding(
                     check="group-missing",
                     subject=check.topic,
-                    message=f"consumer group {check.pending_group!r} does not "
-                    "exist - the consumer never provisioned itself",
+                    # Three causes, and the message must not pick one: after a
+                    # wipe the group was lost with its stream, and "never
+                    # provisioned" would send the reader to the wrong service.
+                    message=f"consumer group {check.pending_group!r} does not exist on a "
+                    "stream that does, so its lag cannot be read - the consumer never "
+                    "created it, runs it under another name, or it was lost when the "
+                    'stream was recreated; see docs/BUS-HEALTH.md, "The bus-health probe"',
                 )
             )
         else:
