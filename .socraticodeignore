@@ -1,0 +1,15 @@
+# Semantic-index exclusions (CannObserv/broker#17), layered on SocratiCode's
+# built-in defaults and .gitignore. Pinned by tests/deploy/test_socraticode_config.py.
+
+# Vendored gregoryfoster/skills. skills/ and .claude/skills/ are symlinks into
+# skills-vendor/; broker authors no skill of its own, so all three go whole.
+# Unexcluded they outnumber broker's own files and every sibling's includeLinked
+# search would serve them as broker.
+skills-vendor/
+skills/
+.claude/skills/
+
+# Worktrees: using-git-worktrees' fallback root and the harness's, both inside
+# this tree.
+.worktrees/
+.claude/worktrees/

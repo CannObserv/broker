@@ -7,6 +7,11 @@ __pycache__/
 .coverage
 *.egg-info/
 
+# Claude Code's machine-local settings. Holds the cohort's single shared Qdrant
+# API key once broker#17 lands, and this repo is public: a commit is a rotation
+# on every cohort VM. Pinned by tests/deploy/test_socraticode_config.py.
+.claude/settings.local.json
+
 # cannobserv package index mirror - populated by scripts/sync_wheelhouse.py.
 # Track an empty .gitkeep so the `[tool.uv] find-links` dir always exists at
 # checkout: uv reads that config on *every* invocation and errors if the dir is
