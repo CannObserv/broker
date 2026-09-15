@@ -58,8 +58,9 @@ PROJECT_ID_OVERRIDE = "SOCRATICODE_PROJECT_ID"
 QDRANT_HOST = "QDRANT_HOST"
 
 #: gregoryfoster/skills content: ``skills/`` and ``.claude/skills/`` are symlinks
-#: into ``skills-vendor/``.
-VENDORED = {"skills-vendor/", "skills/", ".claude/skills/"}
+#: into ``skills-vendor/``, and ``.skills/`` holds managing-skills' installed
+#: ``doctor.sh`` copy and curating-context's telemetry.
+VENDORED = {"skills-vendor/", "skills/", ".claude/skills/", ".skills/"}
 
 #: using-git-worktrees' fallback root (no ``.skills/worktree_root`` here) and the
 #: harness's. Both sit inside this tree.
