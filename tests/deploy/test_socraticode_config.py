@@ -62,6 +62,9 @@ QDRANT_HOST = "QDRANT_HOST"
 #: ``doctor.sh`` copy and curating-context's telemetry.
 VENDORED = {"skills-vendor/", "skills/", ".claude/skills/", ".skills/"}
 
+#: The two of those holding one link per skill, and where every link must point.
+SKILL_LINK_DIRS = {"skills": "../skills-vendor/", ".claude/skills": "../../skills/"}
+
 #: using-git-worktrees' fallback root (no ``.skills/worktree_root`` here) and the
 #: harness's. Both sit inside this tree.
 NESTED_CHECKOUTS = {".worktrees/", ".claude/worktrees/"}
@@ -189,16 +192,21 @@ def test_the_index_excludes_nested_checkouts() -> None:
     assert NESTED_CHECKOUTS <= _index_ignore_entries()
 
 
-def test_every_excluded_skill_is_vendored() -> None:
-    """``skills/`` is excluded whole only because nothing in it is broker's.
+@pytest.mark.parametrize(
+    ("directory", "prefix"), list(SKILL_LINK_DIRS.items()), ids=list(SKILL_LINK_DIRS)
+)
+def test_every_excluded_skill_is_vendored(directory: str, prefix: str) -> None:
+    """Both skill directories are excluded whole only because nothing in them is broker's.
 
-    A first-party skill added there would drop out of the index without a word.
-    Narrow the exclusion to ``skills-vendor/`` and ``.claude/skills/`` first, as
-    notifier's ``.socraticodeignore`` does for its own overrides.
+    ``.claude/skills/`` is where Claude Code looks for a project's own skills, so a
+    first-party one is likelier there than in ``skills/``. Either way it would drop
+    out of the index without a word: replace that directory's entry in
+    ``.socraticodeignore`` with narrower ones before adding it.
     """
-    entries = sorted((REPO_ROOT / "skills").iterdir())
-    assert entries, "skills/ is empty"
+    entries = sorted((REPO_ROOT / directory).iterdir())
+    assert entries, f"{directory}/ is empty"
     for entry in entries:
-        assert entry.is_symlink(), f"skills/{entry.name} is not a symlink - a first-party skill?"
+        name = f"{directory}/{entry.name}"
+        assert entry.is_symlink(), f"{name} is not a symlink - a first-party skill?"
         target = os.readlink(entry)
-        assert target.startswith("../skills-vendor/"), f"skills/{entry.name} -> {target}"
+        assert target.startswith(prefix), f"{name} -> {target}"
