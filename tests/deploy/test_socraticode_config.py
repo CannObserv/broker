@@ -119,6 +119,11 @@ def test_the_shared_store_is_never_addressed_without_a_project_id() -> None:
     that can reach the store with no config file writes into that set: two hosts,
     one collection, the concurrent write D11 forbids, and nothing reports it. The
     ids #17 says differ differ only once the config exists.
+
+    And the name must be broker's. A verbatim copy of notifier's config - #17's
+    reference implementation - or the hash id itself satisfies "a config exists"
+    and writes into another set all the same. A literal, not ``REPO_ROOT.name``:
+    inside a worktree that is the worktree's directory.
     """
     addressing = []
     for label, path in ENV_SOURCES.items():
@@ -131,7 +136,8 @@ def test_the_shared_store_is_never_addressed_without_a_project_id() -> None:
     if not addressing:
         return
     assert CONFIG.exists(), f"{addressing} address the shared store, but {CONFIG.name} is missing"
-    assert json.loads(CONFIG.read_text()).get("projectId"), f"{CONFIG.name} names no projectId"
+    project_id = json.loads(CONFIG.read_text()).get("projectId")
+    assert project_id == "broker", f"{CONFIG.name} names {project_id!r}, not broker"
 
 
 def test_local_settings_are_ignored_by_the_tracked_gitignore() -> None:
