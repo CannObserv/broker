@@ -43,6 +43,10 @@ RENDER_SCRIPT = DEPLOY / "render-acl.sh"
 # Throwaway, for the spawned server below. Never a real credential.
 PASSWORD = "throwaway-password"
 
+# The three participants. Each holds its own ACL user of the same name, and each
+# is a peer on the tailnet; both facts are asserted from this one tuple.
+SERVICE_USERS = ("archiver", "watcher", "replicator")
+
 
 def parse_users(text: str) -> dict[str, list[str]]:
     """`user <name> <rule> <rule> ...`, one per line.

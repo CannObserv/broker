@@ -126,16 +126,16 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Related
 
-- CannObserv/broker#1 - the relocation epic. Phases 1-4 done; of its sub-issues
-  only #8 latency matrix is still open - #2 ACL users, #3 alerting, #4 backup,
-  #5 restart window, #6 OOM contract and #7 exercise the idle streams are closed.
+- CannObserv/broker#1 - the relocation epic. Closed 2026-09-15, every sub-issue
+  with it. Open follow-on, not under it: #14 (confine each service's `+xadd`/
+  `+xtrim` to the streams it produces - every consumer can write its own inbox).
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
 - CannObserv/archiver#196 - archiver's half of the OOM seam, repointed after the
   cap moved to `deploy/redis.conf.broker`
 
 ## Detail Docs
 
-- [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each; non-stream keys
+- [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each; non-stream keys; where each participant runs, its measured path to the broker, the DERP risk
 - [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
 - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record
 - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook, symptoms, the 2026-09-10 incident

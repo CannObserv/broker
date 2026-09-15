@@ -71,19 +71,25 @@ since step 4, still carrying its password hash.
 
 ### 3. Note where each service lives
 
-The rolling steps happen on each service's host, not here.
+The rolling steps happen on each service's host, not here. **Current hosts are
+in [STREAMS.md](STREAMS.md), *Participants, hosts and paths*** - that table is
+checked against `CLIENT LIST` on the live broker, so it cannot drift the way
+this section's own table did. The env files are each service's:
 
-| Service | Host | Env file |
-|---|---|---|
-| archiver | tailnet `archiver` (VM `co-registrar`, pdx) | `/etc/archiver/.env` |
-| watcher | tailnet `watcher` (lax) | `/etc/watcher/.env` |
-| replicator | the `watcher` VM - it has no tailnet node of its own | `/etc/replicator/.env` |
+| Service | Env file |
+|---|---|
+| archiver | `/etc/archiver/.env` |
+| watcher | `/etc/watcher/.env` |
+| replicator | `/etc/replicator/.env` |
 
-Replicator's placement is inferred from two facts rather than read off a
-manifest: there is no `replicator` peer in `tailscale status`, and broker#1
-Phase 3's Gap 1 found replicator's unit pulling the shared VM's local
-`redis-server` back up after the cutover. **Confirm it before step 2** rather
-than trusting this table.
+**As of the 2026-09-10 cutover, and no longer true:** watcher ran in `lax` on its
+own VM, and replicator shared that VM with no tailnet node of its own - inferred
+from there being no `replicator` peer in `tailscale status`, and from broker#1
+Phase 3's Gap 1 finding replicator's unit pulling the shared VM's local
+`redis-server` back up after the cutover. Both moved to their own `pdx` VMs by
+2026-09-15 (CannObserv/broker#8). This section still placed them in `lax` days
+afterwards, and nothing noticed, because nothing compared it with anything - the
+reason the host table now lives where a test reads it.
 
 ---
 

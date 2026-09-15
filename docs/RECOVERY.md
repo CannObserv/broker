@@ -400,3 +400,6 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
   the operator's, listed in step 0 so they are a checklist rather than a
   discovery.
 - The participants' own state. Their databases and stores are theirs.
+- Losing the *path* to the node rather than the node. The tailnet relay (DERP)
+  is a third-party dependency, measured as a boot-time transient and accepted:
+  [STREAMS.md](STREAMS.md), *Risk: the tailnet relay (DERP) - accepted*.

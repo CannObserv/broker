@@ -41,9 +41,7 @@ from co_core.pure.adapters.bus.streams import (
 )
 
 from src.broker.bus_health import DLQ_DRAINERS
-from tests.deploy.conftest import ACL_FILE, PASSWORD, parse_users, split_rules
-
-SERVICE_USERS = ("archiver", "watcher", "replicator")
+from tests.deploy.conftest import ACL_FILE, PASSWORD, SERVICE_USERS, parse_users, split_rules
 
 CANONICAL_STREAMS = frozenset(
     {

@@ -25,10 +25,13 @@ clones pass. On the broker node, source the env first - and as
 which silently corrupts values.
 """
 
+import re
 import time
+from pathlib import Path
 
 import pytest
 
+from tests.deploy.conftest import SERVICE_USERS
 from tests.deploy.test_installed_redis_config_matches_repo import (
     REPO_REDIS_CONF,
     REQUIREPASS_PLACEHOLDER,
@@ -151,4 +154,68 @@ def test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance(live_client)
         "another tenant now writes a key with a TTL, so replicator's namespace "
         "is no longer the whole eviction candidate set; see docs/STREAMS.md, "
         '"Non-stream keys on db0"'
+    )
+
+
+# --- where the participants are --------------------------------------------
+
+STREAMS_MD = Path(__file__).resolve().parents[2] / "docs" / "STREAMS.md"
+PARTICIPANTS_HEADING = "## Participants, hosts and paths"
+_TAILNET_ADDR = re.compile(r"`(100\.\d{1,3}\.\d{1,3}\.\d{1,3})`")
+
+
+def documented_addresses() -> dict[str, str]:
+    """``service -> tailnet address``, read off the participants table.
+
+    One row per service, its first cell the backticked service name and exactly
+    one ``100.x.y.z`` address in backticks somewhere in the row. Parsed rather
+    than mirrored in a constant, because the table is what an operator reads
+    and a constant beside it would be a second copy to go stale.
+    """
+    text = STREAMS_MD.read_text()
+    assert PARTICIPANTS_HEADING in text, f"{STREAMS_MD.name} has no {PARTICIPANTS_HEADING!r}"
+    section = text.split(PARTICIPANTS_HEADING, 1)[1].split("\n## ", 1)[0]
+    found: dict[str, str] = {}
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        name = cells[0].strip("`") if cells else ""
+        if name in SERVICE_USERS and name not in found:
+            addresses = _TAILNET_ADDR.findall(line)
+            assert len(addresses) == 1, f"{name}'s row needs exactly one tailnet address: {line}"
+            found[name] = addresses[0]
+    return found
+
+
+def test_the_participant_table_places_every_service() -> None:
+    """Static, so a malformed table fails CI rather than only the node."""
+    assert set(documented_addresses()) == set(SERVICE_USERS)
+
+
+def test_every_connected_participant_is_where_the_docs_say(live_client) -> None:
+    """The topology table must describe the cluster that is actually connected.
+
+    A host table in this repo has gone stale silently before, and in the doc
+    whose job is to be repeated: ``docs/ACL-CUTOVER.md`` still placed watcher in
+    ``lax`` and replicator on watcher's VM days after both had moved to their
+    own ``pdx`` VMs (CannObserv/broker#8). Nothing noticed, because nothing
+    compared it with anything.
+
+    ``CLIENT LIST`` reports each connection's peer address and ``user=``, and
+    ``brokeradmin`` already holds ``+client|list``. So a participant that moves
+    reconnects from a new address and this goes red until the table follows.
+    It asserts only on participants that ARE connected: a service restarting
+    during a run is not a topology fact.
+    """
+    documented = documented_addresses()
+    wrong = set()
+    for client in live_client.client_list():
+        user = client.get("user")
+        if user not in documented:
+            continue
+        peer = client.get("addr", "").rsplit(":", 1)[0]
+        if peer != documented[user]:
+            wrong.add(f"{user} connects from {peer}, documented at {documented[user]}")
+    assert not wrong, (
+        f"{STREAMS_MD.name}, {PARTICIPANTS_HEADING[3:]!r}, no longer describes the cluster: "
+        + "; ".join(sorted(wrong))
     )
