@@ -182,10 +182,10 @@ def test_the_committed_settings_hold_no_qdrant_key() -> None:
 def test_the_index_excludes_the_vendored_skills() -> None:
     """Vendored skill prose outnumbers broker's own files and would outrank them.
 
-    At adoption (2026-09-15), 360 files under ``skills-vendor/`` against 57 of
-    broker's own. Every sibling's ``includeLinked`` search reads broker's
-    collection too, so unexcluded it would serve gregoryfoster/skills as broker
-    across the cohort.
+    Measured 2026-09-15, before adoption: 360 files under ``skills-vendor/``
+    against 57 of broker's own. Every sibling's ``includeLinked`` search reads
+    broker's collection too, so unexcluded it would serve gregoryfoster/skills as
+    broker across the cohort.
     """
     assert VENDORED <= _index_ignore_entries()
 
