@@ -29,9 +29,12 @@ INDEX_IGNORE = REPO_ROOT / ".socraticodeignore"
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 SETTINGS_LOCAL = REPO_ROOT / ".claude" / "settings.local.json"
 
-#: Everywhere a variable can reach the MCP server's environment on this host: the
+#: Where a file on this host puts a variable in the MCP server's environment: the
 #: two env files a shell here sources, and the three settings scopes Claude Code
-#: merges into a session.
+#: merges into a session. That server is the socraticode@socraticode plugin, which
+#: inherits the session's environment. Not read: an ``env`` block on a standalone
+#: server entry in ``.mcp.json`` or ``~/.claude.json`` - init-socraticode's
+#: duplicate-config trap, which is removed on sight rather than guarded.
 ENV_SOURCES = {
     "etc-broker-env": Path("/etc/broker/.env"),
     "repo-env": REPO_ROOT / ".env",
