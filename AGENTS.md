@@ -110,8 +110,9 @@ docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  logging.py (service-local, not a mirror)
-tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/
-                 and rehearses the restore against a real redis-server
+tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/,
+                 rehearses the restore against a real redis-server, and guards the
+                 SocratiCode config (#17)
 ```
 
 ## Agent Skills
