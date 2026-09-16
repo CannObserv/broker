@@ -207,10 +207,13 @@ def test_live_memory_low_is_the_tracked_value(tracked: Path) -> None:
     assert int(CGROUPS[tracked].read_text()) == memory_low(tracked)
 
 
-def test_earlyoom_is_running() -> None:
+@pytest.mark.parametrize(("verb", "expected"), [("is-active", "active"), ("is-enabled", "enabled")])
+def test_earlyoom_is_running_and_survives_a_boot(verb: str, expected: str) -> None:
+    """Enabled as well as active: exe.dev restarts are hard stops, and a unit that
+    is only running protects nothing after the next one."""
     if _read_if_installed(INSTALLED[EARLYOOM]) is None:
         pytest.skip("earlyoom not configured on this host")
     if not shutil.which("systemctl"):
         pytest.skip("no systemctl")
-    state = subprocess.run(["systemctl", "is-active", "earlyoom"], capture_output=True, text=True)
-    assert state.stdout.strip() == "active"
+    state = subprocess.run(["systemctl", verb, "earlyoom"], capture_output=True, text=True)
+    assert state.stdout.strip() == expected
