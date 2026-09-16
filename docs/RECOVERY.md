@@ -157,7 +157,7 @@ sudo ls -la /var/lib/redis        # a default-config dump.rdb is fine; no append
 Everything in `deploy/README.md`'s *Install* section, in order: restore the
 secrets at the paths and modes above, append `redis.conf.broker` with the
 password substituted, render and install the ACL file, the drop-in and the
-wait script, the units. Then:
+wait script, the units, then the memory protection (broker#21). Then:
 
 ```bash
 set -a; . /etc/broker/.env; set +a
