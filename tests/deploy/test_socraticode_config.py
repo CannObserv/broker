@@ -1,10 +1,9 @@
-"""SocratiCode guards that hold before broker joins the shared index
-(CannObserv/broker#17).
+"""SocratiCode's config, and the guards around it (CannObserv/broker#17).
 
-Landed ahead of the config itself: none of these needs ``.socraticode.json`` to
-exist, and one of them exists to stop the rest of #17 landing in the wrong order.
-The config's own tests - ``projectId``, ``linkedProjects``, the client ``env``
-block - arrive with the config.
+The guards landed first, ahead of the config: none of them needs
+``.socraticode.json`` to exist, and one exists to stop the rest of #17 landing in
+the wrong order. The config's own tests - ``projectId``, ``linkedProjects``, the
+client ``env`` block, the manifest, the two hooks - arrived with it.
 
 The namespace guards mirror notifier's ``tests/deploy/test_socraticode_config.py``.
 The key and project-id guards are broker's own, because what they pin is sharper
@@ -20,6 +19,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -213,3 +213,158 @@ def test_every_excluded_skill_is_vendored(directory: str, prefix: str) -> None:
         assert entry.is_symlink(), f"{name} is not a symlink - a first-party skill?"
         target = os.readlink(entry)
         assert target.startswith(prefix), f"{name} -> {target}"
+
+
+# ── The config itself ────────────────────────────────────────────────────────
+
+MANIFEST = REPO_ROOT / ".socraticodecontextartifacts.json"
+
+#: Upstream's own validator: config.js assertValidProjectId rejects anything else.
+PROJECT_ID_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+
+#: The store on co-index, as every other client of it spells the same values. A
+#: collection holds vectors from one model at one dimension, so a client that
+#: differs does not fail - it poisons the collection every sibling searches.
+CLIENT_ENV = {
+    "QDRANT_MODE": "external",
+    "QDRANT_URL": "https://index.taild0fb76.ts.net:6333",
+    "OLLAMA_MODE": "external",
+    "OLLAMA_URL": "http://index:11434",
+    "EMBEDDING_MODEL": "nomic-embed-text",
+    "EMBEDDING_DIMENSIONS": "768",
+}
+
+#: Each SessionStart hook, and the dedupe marker its entry carries. Distinct per
+#: hook so one hook's strip cannot evict the other's entry from the array.
+HOOKS = {
+    "socraticode-reminder.sh": "socraticode-prefetch",
+    "socraticode-health.sh": "socraticode-health",
+}
+
+
+@pytest.fixture(scope="module")
+def config() -> dict:
+    return json.loads(CONFIG.read_text())
+
+
+@pytest.fixture(scope="module")
+def client_env() -> dict[str, str]:
+    return _variables(SETTINGS, SETTINGS.read_text())
+
+
+def test_config_exists_and_parses() -> None:
+    """A malformed file is ignored by upstream, not reported.
+
+    ``loadSocratiCodeConfig`` catches every parse error and returns null, so a
+    typo here degrades to the path-hash id with no message - the same silence
+    class as the linked-project skip.
+    """
+    assert CONFIG.exists(), f"{CONFIG.name} is missing"
+    json.loads(CONFIG.read_text())
+
+
+def test_project_id_is_this_repo(config: dict) -> None:
+    """``broker``, so the collections read as ``codebase_broker`` in a shared store."""
+    assert config["projectId"] == "broker"
+
+
+def test_project_id_is_qdrant_safe(config: dict) -> None:
+    """Upstream throws on anything outside [a-zA-Z0-9_-] rather than sanitizing."""
+    assert set(config["projectId"]) <= PROJECT_ID_CHARS
+
+
+def test_linked_projects_are_relative_siblings(config: dict) -> None:
+    """An absolute entry names one host's layout; relative works on every clone."""
+    linked = config["linkedProjects"]
+    assert linked, "linkedProjects is empty"
+    for entry in linked:
+        assert not Path(entry).is_absolute(), f"{entry} is absolute"
+        assert entry.startswith("../"), f"{entry} does not name a sibling"
+
+
+def test_linked_projects_name_the_cohort(config: dict) -> None:
+    assert set(config["linkedProjects"]) == {
+        "../archiver",
+        "../notifier",
+        "../replicator",
+        "../watcher",
+    }
+
+
+def test_linked_projects_exclude_this_repo(config: dict) -> None:
+    """Upstream drops a self-link, but a self-link in the file is still a mistake."""
+    assert "../broker" not in config["linkedProjects"]
+
+
+def test_the_client_env_is_the_cohort_store(client_env: dict[str, str]) -> None:
+    """Every value the other clients of co-index use, including the embedder's.
+
+    ``EMBEDDING_MODEL`` and ``EMBEDDING_DIMENSIONS`` are not local preferences:
+    they describe the vectors already in the shared collections.
+    """
+    assert {k: client_env.get(k) for k in CLIENT_ENV} == CLIENT_ENV
+
+
+def test_qdrant_is_addressed_by_a_full_https_url(client_env: dict[str, str]) -> None:
+    """#17 traps 3 and 4, which present as network faults rather than config errors.
+
+    The full MagicDNS name because that is what the certificate names; https
+    because upstream refuses to send the key over plain http to anything but
+    loopback; the port spelled out because a URL built from ``QDRANT_HOST``
+    instead defaults to 16333, not Qdrant's 6333.
+    """
+    url = urlparse(client_env["QDRANT_URL"])
+    assert url.scheme == "https", "a key is refused over plain http"
+    assert url.port == 6333
+    assert url.hostname is not None and url.hostname.endswith(".ts.net")
+    assert url.hostname.count(".") >= 2, f"{url.hostname} is not the full MagicDNS name"
+    assert url.path in ("", "/"), "upstream's client drops a path"
+
+
+def test_the_manifest_is_an_object_whose_paths_resolve() -> None:
+    """A rejected manifest is silent: ``codebase_status`` omits the artifact line
+    and the repo indexes 'successfully' with no context search at all.
+
+    A bare top-level array is refused outright; a path that does not resolve is
+    skipped one at a time, so ``artifacts N/N`` never reaches parity.
+    """
+    manifest = json.loads(MANIFEST.read_text())
+    assert isinstance(manifest, dict), "a top-level array is rejected outright"
+    artifacts = manifest["artifacts"]
+    assert artifacts, "no artifacts configured"
+    names = [a["name"] for a in artifacts]
+    assert len(names) == len({n.lower() for n in names}), f"duplicate names in {names}"
+    for artifact in artifacts:
+        assert set(artifact) == {"name", "path", "description"}, artifact
+        path = artifact["path"]
+        assert not any(c in path for c in "*?["), f"{path} is a glob - the server stat()s it"
+        assert (REPO_ROOT / path).exists(), f"{path} does not resolve"
+
+
+@pytest.mark.parametrize("hook", list(HOOKS), ids=list(HOOKS))
+def test_each_hook_is_a_symlink_into_the_vendored_tree(hook: str) -> None:
+    """A copy freezes at install day while reading as a healthy install.
+
+    The health hook is the worst candidate for one: it is silent when clean, so a
+    stale copy that has stopped detecting something looks exactly like a working
+    one. Shape, not resolution - both dangle wherever the submodule is not
+    checked out, which includes CI and every fresh worktree.
+    """
+    path = REPO_ROOT / ".claude" / "hooks" / hook
+    assert path.is_symlink(), f"{hook} is not a symlink"
+    target = os.readlink(path)
+    assert not Path(target).is_absolute(), f"{hook} -> {target} is absolute"
+    assert "skills-vendor/" in target, f"{hook} -> {target} leaves the vendored tree"
+
+
+@pytest.mark.parametrize(("hook", "marker"), list(HOOKS.items()), ids=list(HOOKS))
+def test_each_hook_is_registered_exactly_once(hook: str, marker: str) -> None:
+    """Registered, or the hook is a file that never runs; once, or it runs twice."""
+    entries = [
+        h
+        for group in json.loads(SETTINGS.read_text())["hooks"]["SessionStart"]
+        for h in group["hooks"]
+        if h["command"].endswith(f"# {marker}")
+    ]
+    assert len(entries) == 1, f"{marker}: {len(entries)} SessionStart entries"
+    assert hook in entries[0]["command"], f"{marker} does not run {hook}"

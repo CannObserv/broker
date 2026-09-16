@@ -1,0 +1,59 @@
+{
+  "artifacts": [
+    {
+      "name": "agent-guidelines",
+      "path": "./AGENTS.md",
+      "description": "Agent working agreements for this repo: the rules that hold the cross-repo seams (content.blobs retention, DLQ split, the probe's and backup's least privilege, the OOM seam with archiver, mirrored constants), commit format, layout map."
+    },
+    {
+      "name": "socraticode-doc",
+      "path": "./docs/SOCRATICODE.md",
+      "description": "Semantic search reference: tool table, the prefetch hook, per-tool notes, graph health and index scope, plus this repo's link stubs, one-host-per-projectId rule and measured index scope."
+    },
+    {
+      "name": "stream-inventory",
+      "path": "./docs/STREAMS.md",
+      "description": "The cluster stream inventory: every stream on db0, who produces, consumes and drains each, the DLQ suffixes, and the non-stream key patterns (replicator's volatile dedupe keys). Authoritative for stream ownership across the cohort."
+    },
+    {
+      "name": "bus-health-contract",
+      "path": "./docs/BUS-HEALTH.md",
+      "description": "The WARN-only health probe: per-stream retention contracts and their mirrored constants, stream, group, DLQ, loss, memory, disk and backup-freshness checks, and why noeviction is load-bearing beyond refusing writes."
+    },
+    {
+      "name": "recovery-runbook",
+      "path": "./docs/RECOVERY.md",
+      "description": "Node or data loss: the hourly RDB backup to GCS and its findings, the restore staged as the AOF base under appendonly yes, and the rehearsal record."
+    },
+    {
+      "name": "restart-runbook",
+      "path": "./docs/RESTART-WINDOW.md",
+      "description": "Restarting redis-server: the cohort restart window, the service identities that must come back, the tailnet bind race and its boot-race insurance, symptoms, and the 2026-09-10 incident."
+    },
+    {
+      "name": "acl-cutover",
+      "path": "./docs/ACL-CUTOVER.md",
+      "description": "How the cluster moved onto per-service Redis ACL users, the order a new credential repeats, and which user each service holds."
+    },
+    {
+      "name": "skills-doc",
+      "path": "./docs/SKILLS.md",
+      "description": "The vendored agent skills: inventory, selection, the daily refresh hook and the weekly context measurement cadence."
+    },
+    {
+      "name": "systemd-unit",
+      "path": "./deploy",
+      "description": "The artifacts this node deploys: redis.conf.broker (the OOM cap and noeviction policy), redis-acl.conf and its render script, the bus-health and backup units and timers, the tailnet-address wait, and deploy/README.md as the routing target for changing a grant."
+    },
+    {
+      "name": "architecture",
+      "path": "./README.md",
+      "description": "Why this repo exists: the relocation out of archiver under archiver#193 D6, the seam that created, and what a neutral broker node does and does not own."
+    },
+    {
+      "name": "project-config",
+      "path": "./pyproject.toml",
+      "description": "Dependency and tool contract: Python floor, the co-core wheelhouse find-links, ruff rule set including the no-inline-imports convention, and pytest config."
+    }
+  ]
+}
