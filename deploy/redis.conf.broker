@@ -68,6 +68,10 @@ appendfsync everysec
 # nothing else; live usage on the source broker is 20.68MB. 512mb is ~27% of
 # RAM, leaving room for the fork and copy-on-write of an AOF rewrite, and is
 # still ~25x current usage. Same number, arrived at independently.
+#
+# Stale since 2026-09-16 (broker#21): the node is 8 GB (7.75 GiB, so 512mb is
+# ~6.5%) and dev tooling does run here. The number is unchanged and still bounds
+# the fork; re-deriving it is owed jointly with archiver, per the seam above.
 maxmemory 512mb
 maxmemory-policy noeviction
 

@@ -68,6 +68,11 @@ Also decided in this window and requiring no change: **`maxmemory` stays at
 ~19x current usage. Recorded so a future window does not re-litigate it. It is
 live-settable via `CONFIG SET` anyway, so it never needs a window.
 
+**That rationale is stale.** Since 2026-09-16 (broker#21) the node is 8 GB -
+512 MB is ~6.5% of 7.75 GiB - and dev tooling runs beside it. The number stands
+until re-derived, and that is a joint decision with archiver
+(`deploy/redis.conf.broker`, *the OOM seam*), not one to make here.
+
 ---
 
 ## Preconditions
