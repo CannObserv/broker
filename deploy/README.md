@@ -15,8 +15,8 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
 | `sysctl.d/60-broker-memory.conf` | `/etc/sysctl.d/` | `vm.min_free_kbytes` 64 MiB: the reserve atomic allocations draw on (broker#21) |
 | `system.slice.d/broker-memory.conf` | `/etc/systemd/system/system.slice.d/` | `MemoryLow=` for the slice - without it the two below protect nothing, because this node has no `memory_recursiveprot` |
-| `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `broker.conf` beside it stays ordering-only |
-| `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` for the network path |
+| `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`, below dev tooling. `broker.conf` beside it stays ordering-only |
+| `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` and `OOMScoreAdjust=-900` for the network path |
 | `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300) and toward dev tooling (`--prefer`) - a ranking, not an exclusion |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
@@ -194,6 +194,10 @@ for d in system.slice.d/broker-memory.conf redis-server.service.d/memory.conf ta
     sudo install -m 0644 -D "deploy/$d" "/etc/systemd/system/$d"
 done
 sudo systemctl daemon-reload
+# OOMScoreAdjust= applies at exec; take it live rather than restarting the bus.
+for u in redis-server tailscaled; do
+    sudo choom -n -900 -p "$(systemctl show -p MainPID --value "$u")"
+done
 sudo apt-get install -y earlyoom
 sudo install -m 0644 deploy/earlyoom.default /etc/default/earlyoom
 sudo systemctl restart earlyoom
@@ -228,6 +232,19 @@ things about this node shaped them:
   its slice's, and `system.slice` defaults to 0. Check
   `/sys/fs/cgroup/system.slice/redis-server.service/memory.low`, not
   `systemctl show`, which reports the configured value either way.
+- **Everything exe.dev starts is at `oom_score_adj` -1000.** `exe-init` and
+  `sshd` run there, and every session process inherits it, so dev tooling reads
+  `oom_score` 0. earlyoom 1.7 floors a `--prefer` match at 300 and an unmatched
+  one (`claude`, anything run from a shell) stays at 0, while a unit at the
+  default adj 0 reads ~667 and `--avoid` only takes it to ~367. As first
+  installed, earlyoom's dry run would have killed tailscaled and redis-server
+  before any of it. Both units now run at -900: below every dev process, above
+  -1000 so the kernel's own OOM killer - which cannot touch dev tooling at all -
+  still has a restartable last resort instead of a panic that `kernel.panic = 0`
+  turns into a hung node. What still ranks **above** dev tooling is small
+  adj-0 system daemons (polkitd, cron, logind): collateral earlyoom works through
+  first, freeing little. Check the order with
+  `earlyoom --dryrun -d -m 99,99 -s 100,100 <the regexes>`, which kills nothing.
 - **earlyoom's regexes are unquoted.** The unit runs `earlyoom $EARLYOOM_ARGS`,
   which systemd splits on whitespace without interpreting quotes; the package's
   own quoted example would never match. `journalctl -u earlyoom -b` prints both
@@ -239,8 +256,9 @@ updates, close the old window rather than leaving both connected.
 
 `tests/deploy/test_memory_protection.py` pins all of it: the reserve's floor,
 redis's protection against twice the tracked cap, the slice covering its
-children, both regexes against the real process names, and - on this node -
-installed parity, the live kernel values, and earlyoom running.
+children, the bus's score below dev tooling's, both regexes against the real
+process names, and - on this node - installed parity, the live kernel values,
+and earlyoom running and enabled.
 
 ## Changing the cap
 

@@ -8,7 +8,10 @@
 #             There is no swap, so earlyoom's swap condition always holds and
 #             memory alone decides.
 #   --avoid   the bus and the way in: redis-server, tailscaled, systemd*,
-#             dbus-daemon, and exe.dev's own exe-init and sshd
+#             dbus-daemon, and exe.dev's own exe-init and sshd. Only -300, not
+#             an exclusion: dev tooling inherits exe.dev's oom_score_adj -1000,
+#             so the bus also needs the drop-ins' OOMScoreAdjust=-900 to rank
+#             below it
 #   --prefer  dev tooling: node, npx (titled `npm exec <pkg>`), and VSCode
 #             Server's node processes, whose comm is MainThread
 #
