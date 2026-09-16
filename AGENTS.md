@@ -107,6 +107,8 @@ docs/RESTART-WINDOW.md
 docs/ACL-CUTOVER.md
                  the per-service credential cutover around that window
 docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
+docs/SOCRATICODE.md
+                 semantic search: tools, prefetch, graph health, index scope
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  logging.py (service-local, not a mirror)
@@ -142,3 +144,28 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook, symptoms, the 2026-09-10 incident
 - [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, [deploy/README.md](deploy/README.md)
 - [docs/SKILLS.md](docs/SKILLS.md) - the vendored agent skills, their refresh hook, the context cadence
+- [docs/SOCRATICODE.md](docs/SOCRATICODE.md) - semantic search over this repo and its four siblings: the tool table, the prefetch, graph health, index scope
+
+<!-- BEGIN socraticode-policy -->
+## Code Exploration Policy
+
+SocratiCode is the preferred semantic-search tool here once indexed (the
+cohort's shared Qdrant on `co-index` + on-disk graph; manifest
+`.socraticodecontextartifacts.json`). Its MCP tools are **deferred** - schemas
+load only after the `ToolSearch` prefetch that
+`.claude/hooks/socraticode-reminder.sh` prints each session.
+
+**Negative rule.** Use SocratiCode MCP tools first for semantic questions
+("where is X", "how does Y work", "what depends on Z"). Reach for `grep`/`rg`
+only on exact strings (error messages, log lines, known symbols). Reserve the
+Explore subagent for path-pattern walks (`*.py` under `src/broker/`), not
+semantic search.
+
+| Goal | Tool |
+|------|------|
+| Where is X defined / how does Y work / what touches Z | `codebase_search` |
+| Exact string or regex (errors, log lines, known symbols) | `grep` / `rg` |
+| Imports/dependents of a file - blast radius of a change | `codebase_graph_query` / `codebase_impact` |
+
+Full tool table, prefetch query, per-tool guidance: [`docs/SOCRATICODE.md`](docs/SOCRATICODE.md).
+<!-- END socraticode-policy -->
