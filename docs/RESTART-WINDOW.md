@@ -231,8 +231,11 @@ sudo systemctl restart redis-server
 **A restart from exe.dev is not this one.** `ssh exe.dev resize` (and a VM
 restart) stopped the node **hard** on 2026-09-16: Redis logged no shutdown and
 journald lost its unflushed tail. The AOF's `appendfsync everysec` is then the
-only copy of Redis's last second, and step 1d's comparison against the
-pre-window snapshot is what shows whether that second held anything.
+only copy of Redis's last second. Before a **planned** one (a resize), capture
+step 1d's `XLEN` / `entries-added` / `XINFO GROUPS` loop first, so there is a
+before to compare against. After an **unplanned** one there is no before: check
+each group's `last-delivered-id` against its stream's `last-generated-id` and
+that every consumer has reconnected, per step 1d and `docs/RECOVERY.md` §5.
 
 ### Step 1d - verify, in this order
 
