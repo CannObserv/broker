@@ -256,6 +256,17 @@ sed -i 's/^maxmemory .*/maxmemory <value>/' deploy/redis.conf.broker
 Pass the value **exactly as the config file spells it** - `CONFIG SET` accepts
 the same unit suffixes, so there is no byte conversion to get wrong.
 
+**Raising it moves two more files.** `redis-server.service.d/memory.conf` holds
+`MemoryLow=` at twice the cap, and `system.slice.d/broker-memory.conf` at least
+that plus tailscaled's; `test_memory_protection.py` fails until both follow.
+Both apply live:
+
+```bash
+sudo install -m 0644 deploy/redis-server.service.d/memory.conf /etc/systemd/system/redis-server.service.d/memory.conf
+sudo install -m 0644 deploy/system.slice.d/broker-memory.conf /etc/systemd/system/system.slice.d/broker-memory.conf
+sudo systemctl daemon-reload                     # no restart; read back /sys/fs/cgroup/.../memory.low
+```
+
 `CONFIG SET` is not persisted (no `CONFIG REWRITE`), which is what keeps the
 tracked file authoritative, and it can drift the running broker from that file
 in either direction. Three checks cover the gap from different sides:
