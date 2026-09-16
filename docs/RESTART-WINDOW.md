@@ -223,6 +223,12 @@ that test fail, which is the point.
 sudo systemctl restart redis-server
 ```
 
+**A restart from exe.dev is not this one.** `ssh exe.dev resize` (and a VM
+restart) stopped the node **hard** on 2026-09-16: Redis logged no shutdown and
+journald lost its unflushed tail. The AOF's `appendfsync everysec` is then the
+only copy of Redis's last second, and step 1d's comparison against the
+pre-window snapshot is what shows whether that second held anything.
+
 ### Step 1d - verify, in this order
 
 **`redis-server` does not log to journald on this node.** `logfile` is

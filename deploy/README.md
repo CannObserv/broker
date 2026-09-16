@@ -1,7 +1,7 @@
 # deploy/
 
 Everything the broker node runs, tracked. Three of these are Redis's, two are
-the health probe's, two are the backup's.
+the health probe's, two are the backup's, and five protect the node's memory.
 
 | File | Installs as | Purpose |
 |---|---|---|
@@ -13,6 +13,11 @@ the health probe's, two are the backup's.
 | `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day. Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
 | `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
+| `sysctl.d/60-broker-memory.conf` | `/etc/sysctl.d/` | `vm.min_free_kbytes` 64 MiB: the reserve atomic allocations draw on (broker#21) |
+| `system.slice.d/broker-memory.conf` | `/etc/systemd/system/system.slice.d/` | `MemoryLow=` for the slice - without it the two below protect nothing, because this node has no `memory_recursiveprot` |
+| `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `broker.conf` beside it stays ordering-only |
+| `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` for the network path |
+| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer that never picks the bus or the way in, and prefers dev tooling |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
 (skipping when absent, so CI and dev clones pass), and
@@ -180,6 +185,18 @@ printf 'BROKER_BACKUP_BUCKET=co-gcs-broker-backup\nGOOGLE_APPLICATION_CREDENTIAL
     | sudo tee /etc/broker/backup.env >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now broker-backup.timer      # after the key exists
+
+# Memory protection (broker#21). All live - nothing on the bus restarts:
+# daemon-reload applies MemoryLow= to running units (checked on a scratch unit).
+sudo install -m 0644 -D deploy/sysctl.d/60-broker-memory.conf /etc/sysctl.d/60-broker-memory.conf
+sudo sysctl -p /etc/sysctl.d/60-broker-memory.conf
+for d in system.slice.d/broker-memory.conf redis-server.service.d/memory.conf tailscaled.service.d/memory.conf; do
+    sudo install -m 0644 -D "deploy/$d" "/etc/systemd/system/$d"
+done
+sudo systemctl daemon-reload
+sudo apt-get install -y earlyoom
+sudo install -m 0644 deploy/earlyoom.default /etc/default/earlyoom
+sudo systemctl restart earlyoom
 ```
 
 Then verify against the running broker rather than against the files:
@@ -192,6 +209,38 @@ uv run pytest tests/deploy            # every skip becomes a real assertion here
 **Restarting `redis-server` is a cohort-wide event.** All three services connect
 to this instance, so anything needing a restart waits for a window rather than
 being applied in passing.
+
+## Memory protection (broker#21)
+
+On 2026-09-16 the then-2 GB node ran out of memory under dev tooling (broker#17).
+Nothing was OOM-killed. The kernel failed **atomic** allocations in `kswapd0`,
+`tailscaled` and `ksoftirqd`, so the bus's network path degraded while every
+process stayed alive, and the probe was silent for most of an hour. The VM is 8
+GB now; these defences are the part that does not depend on size, and three
+things about this node shaped them:
+
+- **Dev tooling runs in `init.scope`, not `user.slice`.** exe.dev's agent starts
+  sessions itself, so VSCode Server and Claude Code are outside any slice
+  systemd can cap. A `user.slice` `MemoryMax=` contains nothing here - which is
+  why the containment is a per-process killer (earlyoom) plus protection for
+  what matters (`MemoryLow=`), not a limit on what does not.
+- **cgroup2 has no `memory_recursiveprot`.** A service's protection is capped by
+  its slice's, and `system.slice` defaults to 0. Check
+  `/sys/fs/cgroup/system.slice/redis-server.service/memory.low`, not
+  `systemctl show`, which reports the configured value either way.
+- **earlyoom's regexes are unquoted.** The unit runs `earlyoom $EARLYOOM_ARGS`,
+  which systemd splits on whitespace without interpreting quotes; the package's
+  own quoted example would never match. `journalctl -u earlyoom -b` prints both
+  regexes at start - read them there.
+
+**One VSCode Server build at a time.** After the 2026-09-16 reboot two builds
+ran side by side, about 300 MiB of dev baseline for nothing. When the client
+updates, close the old window rather than leaving both connected.
+
+`tests/deploy/test_memory_protection.py` pins all of it: the reserve's floor,
+redis's protection against twice the tracked cap, the slice covering its
+children, both regexes against the real process names, and - on this node -
+installed parity, the live kernel values, and earlyoom running.
 
 ## Changing the cap
 
