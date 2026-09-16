@@ -58,7 +58,7 @@ CGROUPS = {
 }
 
 #: ``comm`` of what carries the bus, and of how anyone reaches the node at all -
-#: ``sshd`` and ``exe-init`` are exe.dev's own. Never an earlyoom victim.
+#: ``sshd`` and ``exe-init`` are exe.dev's own. Ranked last by earlyoom, not exempt.
 PROTECTED = [
     "redis-server",
     "tailscaled",
@@ -158,7 +158,11 @@ def test_earlyoom_args_survive_systemd_word_splitting() -> None:
 
 
 @pytest.mark.parametrize("name", PROTECTED)
-def test_earlyoom_never_picks_the_bus(name: str) -> None:
+def test_earlyoom_ranks_the_bus_last(name: str) -> None:
+    """A ranking, not an exclusion: earlyoom 1.7 has no ``--ignore``, and ``--avoid``
+    only subtracts 300 from ``oom_score``. The regex is half of it; where that
+    leaves the bus relative to dev tooling depends on ``oom_score`` itself.
+    """
     args = earlyoom_args()
     assert re.search(flag(args, "--avoid"), name), f"--avoid does not cover {name}"
     assert not re.search(flag(args, "--prefer"), name), f"--prefer matches {name}"

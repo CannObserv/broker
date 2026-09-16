@@ -17,7 +17,7 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `system.slice.d/broker-memory.conf` | `/etc/systemd/system/system.slice.d/` | `MemoryLow=` for the slice - without it the two below protect nothing, because this node has no `memory_recursiveprot` |
 | `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `broker.conf` beside it stays ordering-only |
 | `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` for the network path |
-| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer that never picks the bus or the way in, and prefers dev tooling |
+| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300) and toward dev tooling (`--prefer`) - a ranking, not an exclusion |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
 (skipping when absent, so CI and dev clones pass), and
