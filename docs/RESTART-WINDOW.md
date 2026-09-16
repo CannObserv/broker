@@ -292,10 +292,28 @@ own - `info.watch-status` grows on the `*/5` republish and
 changed is not a finding. `entries-added` going **backwards** is, on any stream;
 so is a group's `last-delivered-id` moving backwards.
 
-Then confirm each service reconnected: `CLIENT LIST` grouped by `user=` should
-show all three, and `ACL LOG` should be empty (a restart clears it). They
-recover on their own retry loops without intervention - all three classify a
-broker outage as transient.
+Then confirm each service is back **and consuming**. `CLIENT LIST` grouped by
+`user=` should show all three, and `ACL LOG` should be empty (a restart clears
+it). Each group's `last-delivered-id` should reach its stream's
+`last-generated-id` once a new entry arrives. Read positions, not counters: after
+the 2026-09-16 restart `XINFO GROUPS` `lag` read ~150 on groups that were caught
+up, and consumer `idle` was reset for every consumer at AOF load (#20).
+
+**Recovery is bounded, not unconditional.** All three classify a broker outage as
+transient, but each rides one out only so far:
+
+| Consumer | Absorbs a sustained outage of | Past that | Source |
+|---|---|---|---|
+| replicator | ~60 min: exits after 20 failed cycles (~10 min), restarted up to 6 times in 7200 s | unit `failed`; `OnFailure=` logs `journalctl -t replicator-failure` on its host; restart it by hand | CannObserv/replicator#94, rehearsed against real systemd |
+| archiver, watcher | not established | unknown | both came back unaided from 2026-09-16's 57 m 48 s, the worst on record |
+
+A planned window is minutes and sits well inside every bound. An unplanned
+outage or a node restore (`docs/RECOVERY.md`) may not: replicator's margin over
+the worst on record is 2 m 12 s. And a bound is not a guarantee. On 2026-09-16
+replicator's unit failed *inside* its bound, because a start guard refused the
+restarts. **A `user=` missing after the broker is back means check that unit
+now, whatever the outage length** - waiting is how that one took an hour to
+find.
 
 **Do not start a second `redis-server` against this config to "test" it.** It
 inherits `dir /var/lib/redis` and `appendonly yes`, so it opens the live AOF for
@@ -331,6 +349,8 @@ data*).
 | Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u redis-server` |
 | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
 | `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
+| A service's `user=` is missing from `CLIENT LIST` after the broker is back | its unit gave up or refused to restart - past its outage bound, or a start guard (step 1d's table) | check the unit on its host now: `systemctl status <unit>`. `ExecMainStatus` there reports the last `ExecStartPre`, not the worker |
+| `XINFO GROUPS` shows non-zero `lag` on a group after a restart | usually nothing: on 7.0 the counter misreads after a restart | compare the group's `last-delivered-id` with the stream's `last-generated-id`; only a difference is a backlog |
 
 ---
 

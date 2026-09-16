@@ -221,8 +221,13 @@ means. The checks that must be exact are the `XLEN` and `XINFO GROUPS` lines.
 
 ### 5. What the participants see
 
-They reconnect on their own; all three classify a broker outage as transient.
-Then:
+Whether they reconnect on their own depends on how long the node was gone. All
+three classify a broker outage as transient, but replicator absorbs about 60
+minutes and then leaves its unit `failed` for an operator. Archiver and watcher
+have no established bound (`docs/RESTART-WINDOW.md`, *Step 1d*). A restore is
+exactly the unplanned outage that can outlast that. So before calling it done,
+confirm each `user=` in `CLIENT LIST` and each group's `last-delivered-id`
+against its stream's `last-generated-id`. Once they are back:
 
 - **Entries published after the snapshot are gone from the bus.** Archiver's
   outbox has already marked them published, so nothing re-emits them; the
