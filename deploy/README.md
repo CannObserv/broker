@@ -1,6 +1,6 @@
 # deploy/
 
-Everything the broker node runs, tracked. Three of these are Redis's, two are
+Everything the broker node runs, tracked. Four of these are Redis's, two are
 the health probe's, two are the backup's, and five protect the node's memory.
 
 | File | Installs as | Purpose |
