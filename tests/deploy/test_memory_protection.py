@@ -87,6 +87,15 @@ def _read_if_installed(path: Path) -> str | None:
         return None
 
 
+def sysctl_settings() -> dict[str, str]:
+    """``key = value`` lines of the tracked sysctl drop-in, comments skipped."""
+    return {
+        k.strip(): v.strip()
+        for k, _, v in (ln.partition("=") for ln in SYSCTL.read_text().splitlines())
+        if k.strip() and not k.strip().startswith(("#", ";"))
+    }
+
+
 def memory_low(path: Path) -> int:
     """Bytes from the drop-in's single ``MemoryLow=`` (systemd's base-1024 suffixes)."""
     values = [
@@ -122,12 +131,7 @@ def test_min_free_kbytes_reserves_memory_for_atomic_allocations() -> None:
     draw on. The kernel derived 5,663 kB at 2 GB and 11,399 kB at 8 GB; 32 MiB is
     the floor this repo holds it to.
     """
-    settings = dict(
-        (k.strip(), v.strip())
-        for k, _, v in (ln.partition("=") for ln in SYSCTL.read_text().splitlines())
-        if k.strip() and not k.strip().startswith("#")
-    )
-    assert int(settings["vm.min_free_kbytes"]) >= 32 * 1024
+    assert int(sysctl_settings()["vm.min_free_kbytes"]) >= 32 * 1024
 
 
 def test_redis_protection_covers_the_cap_and_a_forks_copy_on_write() -> None:
@@ -195,7 +199,7 @@ def test_installed_copy_matches_tracked(tracked: Path) -> None:
 def test_live_min_free_kbytes_is_the_tracked_value() -> None:
     if _read_if_installed(INSTALLED[SYSCTL]) is None:
         pytest.skip("sysctl drop-in not installed on this host")
-    tracked = SYSCTL.read_text().split("vm.min_free_kbytes", 1)[1].split("=", 1)[1].split()[0]
+    tracked = sysctl_settings()["vm.min_free_kbytes"]
     assert Path("/proc/sys/vm/min_free_kbytes").read_text().strip() == tracked
 
 
