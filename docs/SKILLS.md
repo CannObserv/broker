@@ -22,10 +22,13 @@ Adding a skill means both entries, `skills/<name>` and `.claude/skills/<name>`.
 ## Refresh
 
 A `SessionStart` hook advances the submodule pointer. At most once per UTC day,
-on `main` only, it pulls upstream and **commits the bump itself** - staging only
-`skills-vendor/` and `.skills/doctor.sh` - so a session can open with a
-`chore: update skills submodules` commit waiting to be pushed. It never blocks a
-session. Log: `.git/skills-update.log`.
+on `main` only, it fetches upstream, **commits the bump itself** - staging only
+`skills-vendor/` and `.skills/doctor.sh` - and **pushes it**
+(gregoryfoster/skills#293). A rejected push is rolled back rather than left
+waiting, so this checkout never sits ahead of `origin/main` on the hook's
+account: an unpushed bump is what stranded replicator's service (replicator#94).
+It never pulls `main`, never force-pushes, never pushes a commit it did not
+write, and never blocks a session. Log: `.git/skills-update.log`.
 
 The install is two artifacts, and only the second makes it run:
 `.claude/hooks/skills-submodule-update.sh` (a symlink into the vendored
