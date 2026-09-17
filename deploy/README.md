@@ -250,15 +250,37 @@ things about this node shaped them:
   own quoted example would never match. `journalctl -u earlyoom -b` prints both
   regexes at start - read them there.
 
+**`vm.overcommit_memory = 1`, and the warning it answers (broker#26).** Redis
+logs `WARNING Memory overcommit must be enabled!` at every start on any value
+but 1 - `checkOvercommit`, `src/syscheck.c` - and step 1d of the restart runbook
+walks a reader straight into it. On this kernel that warning is **inert**, which
+is the whole reason the setting is cheap: measured with untouched private
+anonymous mappings on 6.12.93, mode 0 granted 7.29 GiB (more than
+`MemAvailable`, ~6.3 GiB) and refused only 8.75 GiB (`MemTotal` + 1 GiB). Mode 0
+here does not consider free memory at all, there is no swap, and a fork commits
+at most redis's own private memory, which `maxmemory` bounds - so it could not
+have refused a save or an AOF rewrite at any dataset size the cap allows. The
+jemalloc issue the warning cites is about mode **2**; jemalloc's own
+`os_overcommits_proc` treats 0 and 1 alike.
+
+What the change costs is where a too-large allocation fails: at first touch,
+as an earlyoom or kernel OOM kill in the order above, rather than up front with
+`ENOMEM`. That only reaches a process asking for more than the whole machine at
+once. **The running server keeps its warning** - it is logged at start, so the
+log goes quiet at the next restart, not now. And **re-measure after a kernel
+change**: "mode 0 ignores free memory" is this kernel's behaviour, not a
+guarantee.
+
 **One VSCode Server build at a time.** After the 2026-09-16 reboot two builds
 ran side by side, about 300 MiB of dev baseline for nothing. When the client
 updates, close the old window rather than leaving both connected.
 
 `tests/deploy/test_memory_protection.py` pins all of it: the reserve's floor,
-redis's protection against twice the tracked cap, the slice covering its
-children, the bus's score below dev tooling's, both regexes against the real
-process names, and - on this node - installed parity, the live kernel values,
-and earlyoom running and enabled.
+overcommit at the value redis asks for, redis's protection against twice the
+tracked cap, the slice covering its children, the bus's score below dev
+tooling's, both regexes against the real process names, and - on this node -
+installed parity, every tracked sysctl key read back from `/proc/sys`, and
+earlyoom running and enabled.
 
 ## Changing the cap
 

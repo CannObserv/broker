@@ -151,6 +151,38 @@ def test_min_free_kbytes_reserves_memory_for_atomic_allocations() -> None:
     assert int(sysctl_settings()["vm.min_free_kbytes"]) >= 32 * 1024
 
 
+def test_overcommit_is_enabled_as_redis_asks() -> None:
+    """Redis warns at every start on anything but 1, and here the warning is inert -
+    so the setting that silences it costs nothing this node can measure (broker#26).
+
+    ``checkOvercommit`` (redis 7.0, ``src/syscheck.c``) warns for every value
+    except 1, describing the risk as the kernel refusing a save's fork "if we
+    don't have enough free memory to satisfy double the current memory usage".
+    **On this kernel mode 0 does not consider free memory.** Measured on the node
+    (6.12.93) with private anonymous mappings that were never touched: 7.29 GiB -
+    more than ``MemAvailable`` (~6.3 GiB) - was granted, and 8.75 GiB, ``MemTotal``
+    + 1 GiB, was refused. So mode 0 refuses only a single request larger than RAM
+    plus swap, there is no swap, and a fork commits at most redis's own private
+    memory, which ``maxmemory`` bounds. The two modes differ for nothing the cap
+    allows.
+
+    What the change does cost: an allocation larger than the whole machine now
+    fails at first touch - an earlyoom or kernel OOM kill, in the order the tests
+    above pin - instead of up front with ``ENOMEM``. That is the trade, taken
+    because a WARNING at every start, which step 1d of the restart runbook walks
+    a reader straight into, is worse than a setting whose two modes are
+    indistinguishable at any size ``maxmemory`` permits.
+
+    ``jemalloc#1328``, which the warning cites, is about mode **2**:
+    ``os_overcommits_proc`` (``src/pages.c``) treats 0 and 1 alike as overcommit
+    enabled.
+
+    **Re-measure after a kernel change.** "Mode 0 ignores free memory" is this
+    kernel's behaviour, not a guarantee.
+    """
+    assert sysctl_settings()["vm.overcommit_memory"] == "1"
+
+
 def test_redis_protection_covers_the_cap_and_a_forks_copy_on_write() -> None:
     """Read from the tracked cap, so raising ``maxmemory`` without this fails here.
 
@@ -234,11 +266,20 @@ def test_installed_copy_matches_tracked(tracked: Path) -> None:
     assert installed == tracked.read_text()
 
 
-def test_live_min_free_kbytes_is_the_tracked_value() -> None:
+@pytest.mark.parametrize("key", sorted(sysctl_settings()))
+def test_live_sysctl_is_the_tracked_value(key: str) -> None:
+    """Every key the drop-in sets, not the one that happened to be first.
+
+    A line in ``/etc/sysctl.d`` is not a value in the kernel until ``sysctl -p``
+    runs, and the install step that writes the file is a separate line from the
+    one that applies it - so a key added to the tracked copy and never applied
+    is exactly the drift this reads back. Derived from the file rather than
+    named, so the next key gets the check without an edit here.
+    """
     if _read_if_installed(INSTALLED[SYSCTL]) is None:
         pytest.skip("sysctl drop-in not installed on this host")
-    tracked = sysctl_settings()["vm.min_free_kbytes"]
-    assert Path("/proc/sys/vm/min_free_kbytes").read_text().strip() == tracked
+    live = Path("/proc/sys", *key.split(".")).read_text().strip()
+    assert live == sysctl_settings()[key]
 
 
 @pytest.mark.parametrize("tracked", list(CGROUPS), ids=lambda p: p.parent.name)
