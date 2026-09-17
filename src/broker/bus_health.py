@@ -31,6 +31,12 @@ The checks, per tick:
 - ``XPENDING`` on every consumer group on this node, warning only on two
   consecutive non-zero ticks - a healthy steady state is pending 0, and one
   tick of in-flight delivery is normal.
+- the age of the oldest entry each group has **not been delivered**, by
+  comparing its ``last-delivered-id`` with the stream's ``last-generated-id``.
+  ``XPENDING`` starts counting at delivery, so a consumer that has stopped
+  calling ``XREADGROUP`` holds it at the healthy 0 forever - which is what
+  reported a broker with a command stuck on it as having zero findings for
+  hours on 2026-09-16 (CannObserv/broker#20).
 - ``XLEN > 0`` on every ``*.dlq`` key - resting state is depth 0, and every
   entry is operator-actionable. The entries are dumped to local storage on
   first sight and the finding names the service that owes it triage; see
@@ -142,6 +148,22 @@ LWW_WARN_LAST_ENTRY_AGE_SECONDS = 900.0
 # empty stream skips the age check entirely - the corpus-size guard
 # (CannObserv/archiver#147).
 REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
+
+# How long the oldest entry a consumer group has NOT been delivered may sit
+# there before the consumer is judged gone (CannObserv/broker#20).
+#
+# **Not a mirrored constant.** The caps below are copies of numbers owned in
+# another repo; this one is owned here, because it is a property of the read
+# loop as this node can observe it rather than a threshold any participant
+# declares. Every group on this broker is a blocking XREADGROUP, so delivery is
+# immediate - `replicator.fetch` answered the 14:18:00Z command at 14:18:01Z -
+# and five minutes is two orders of magnitude of slack over that, comfortably
+# clear of normal batching.
+#
+# A consumer that ever moves to a schedule rather than a blocking read needs its
+# own value on its row: that schedule's period plus margin, with the source
+# named the way a mirrored constant names its owner.
+GROUP_WARN_UNDELIVERED_AGE_SECONDS = 300.0
 
 # Every length threshold is its stream's retention cap plus this margin, so a
 # warning means the retention mechanism itself broke rather than that traffic
@@ -297,6 +319,11 @@ class StreamCheck:
     warn_length: int | None = None
     warn_last_entry_age_seconds: float | None = None
     pending_group: str | None = None
+    # How stale the oldest entry this group has not been delivered may be. The
+    # contract is the consumer's read loop, not this stream's retention - which
+    # is why `content.blobs` carries one while stating no opinion on its length
+    # or its age (CannObserv/broker#20).
+    warn_undelivered_age_seconds: float | None = None
     # Carved out of archiver's drain loop's trim set: capping a command stream
     # would delete commands the consumer group has not delivered and orphan the
     # PEL entries naming them. Growth is therefore expected, and a breach is a
@@ -351,22 +378,30 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         warn_length=REGISTRY_WARN_LENGTH,
         warn_last_entry_age_seconds=REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS,
     ),
-    StreamCheck(CONTENT_FETCH, warn_length=FACT_WARN_LENGTH, pending_group=FETCH_GROUP),
+    StreamCheck(
+        CONTENT_FETCH,
+        warn_length=FACT_WARN_LENGTH,
+        pending_group=FETCH_GROUP,
+        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    ),
     StreamCheck(
         CONTENT_REVISIONS,
         warn_length=FACT_WARN_LENGTH,
         pending_group=REVISIONS_GROUP,
+        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
     ),
     StreamCheck(
         CONTENT_ARTIFACTS,
         warn_length=FACT_WARN_LENGTH,
         pending_group=ARTIFACTS_GROUP,
+        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
     ),
     StreamCheck(
         CONTENT_REPLICATE,
         warn_length=FACT_WARN_LENGTH,
         never_trimmed=True,
         pending_group=REPLICATE_GROUP,
+        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
     ),
     StreamCheck(
         CONTENT_FETCH_POLICY,
@@ -378,7 +413,7 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         warn_length=LWW_WARN_LENGTH,
         warn_last_entry_age_seconds=LWW_WARN_LAST_ENTRY_AGE_SECONDS,
     ),
-    # content.blobs: a group row, and deliberately nothing else.
+    # content.blobs: its group's two contracts, and deliberately nothing else.
     #
     # The old "never content.blobs" rule was Archiver's *role* boundary, and a
     # neutral node has no role to be out of bounds of - so the group is probed
@@ -386,8 +421,44 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # roles: this repo owns no retention cap for this stream, so it states no
     # opinion on its length or its age. Neither the fact cap nor the LWW cap
     # governs it, and inventing one here would be a threshold with no owner.
-    StreamCheck(CONTENT_BLOBS, pending_group=BLOBS_GROUP),
+    #
+    # The undelivered threshold is not a retention opinion and does not breach
+    # that rule. It is a statement about `watcher.blobs`'s read loop, which this
+    # node measures directly, and its owner is this repo - the same owner every
+    # other group row's is.
+    StreamCheck(
+        CONTENT_BLOBS,
+        pending_group=BLOBS_GROUP,
+        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    ),
 )
+
+
+# --- stream ids, which both halves below read ---
+
+
+def _decode(value: str | bytes) -> str:
+    return value.decode(errors="replace") if isinstance(value, bytes) else str(value)
+
+
+def _entry_ms(entry_id: str | bytes) -> int:
+    return int(_decode(entry_id).split("-", 1)[0])
+
+
+def _id_sort_key(entry_id: str | bytes) -> tuple[int, int]:
+    """Order a stream id the way Redis does, as ``(ms, seq)``.
+
+    Never compare these as strings: ``"9-0" > "10-0"`` lexicographically while
+    ``9 < 10``. CannObserv/broker#1 recorded that against the watcher#285 group
+    rename and it bites the same way here - a string comparison reads a 9-0
+    capture as ahead of the queue and then never captures 10-0, which is wrong
+    in exactly the direction that loses evidence. ``evaluate_undelivered``
+    compares a group's position with the stream's last id through this for the
+    same reason, and there the quiet direction is calling a group that is behind
+    caught up.
+    """
+    ms, _, seq = _decode(entry_id).partition("-")
+    return int(ms), int(seq or 0)
 
 
 # --- pure evaluators ---
@@ -592,6 +663,100 @@ def evaluate_stream_continuity(
     return findings
 
 
+def group_is_behind(*, last_generated_id: str | None, last_delivered_id: str | None) -> bool:
+    """Whether a group has entries it has not been delivered - by *position*.
+
+    The whole of CannObserv/broker#20 is in the word position. The three
+    counters that look like they answer this do not:
+
+    - ``XPENDING`` counts entries **delivered and not acked**. A consumer that
+      has stopped calling ``XREADGROUP`` is delivered nothing, so it holds the
+      healthy value, 0, forever. That is what reported a broker with a command
+      stuck on it as having zero findings for hours on 2026-09-16.
+    - ``XINFO GROUPS`` ``lag`` is wrong in both directions on this Redis
+      (7.0.15). Measured after that reboot: ``watcher.blobs`` 152,
+      ``archiver.revisions`` 147 and ``replicator.fetch`` 153, while the first
+      two were at the stream's ``last-generated-id`` and the third was behind by
+      exactly **one**. A lag-based check would have raised three findings, two
+      false, and misstated the real one.
+    - consumer ``idle`` read 869 s for every consumer on every group at the same
+      moment - the time since the AOF load, not since each consumer's last read.
+      So it is blind in the window right after a restart, which is when a
+      consumer is likeliest not to have come back.
+
+    Two ids and an inequality have none of those failure modes. ``None`` on
+    either side is a reply that did not carry the field, which is a probe
+    limitation and not a fault, and ``>=`` rather than ``!=`` is deliberate: the
+    two ids come from two replies, so a delivery of an entry added between them
+    puts the group *ahead* of the last id the probe read.
+    """
+    if last_generated_id is None or last_delivered_id is None:
+        return False
+    return _id_sort_key(last_delivered_id) < _id_sort_key(last_generated_id)
+
+
+def evaluate_undelivered(
+    check: StreamCheck,
+    *,
+    last_generated_id: str | None,
+    last_delivered_id: str | None,
+    oldest_undelivered_id: str | None,
+    now_ms: int,
+) -> list[Finding]:
+    """How long the group's oldest undelivered entry has been waiting.
+
+    ``oldest_undelivered_id`` is the id of the first entry after the group's
+    position, or ``None`` where there is none - which means two different things
+    and the caller cannot tell them apart, so this does:
+
+    - the group is not behind, and nothing was looked for: healthy;
+    - the group **is** behind and the entries it is behind by no longer exist:
+      they were trimmed or deleted before delivery, so there is nothing to date
+      and nothing that will ever arrive. Its own finding, because reporting it
+      as an age would send the reader after a stopped consumer instead of after
+      whatever removed undelivered entries - which is the hazard
+      ``content.replicate`` is carved out of every trim path for, happening on a
+      stream that is not carved out.
+
+    A row with no threshold says nothing at all: the consumer contract is what
+    the threshold *is*, and a stream whose group nobody has sized a threshold
+    for is one this repo has no opinion about yet.
+    """
+    if check.warn_undelivered_age_seconds is None:
+        return []
+    if not group_is_behind(
+        last_generated_id=last_generated_id, last_delivered_id=last_delivered_id
+    ):
+        return []
+    subject = f"{check.topic}/{check.pending_group}"
+    if oldest_undelivered_id is None:
+        return [
+            Finding(
+                check="group-undelivered-lost",
+                subject=subject,
+                message=f"the group is at {last_delivered_id} on a stream whose last id is "
+                f"{last_generated_id}, and NOTHING remains after its position - the entries "
+                "it had not been delivered were trimmed or deleted rather than consumed, so "
+                "they reached this group's consumer never and will not",
+            )
+        ]
+    age = (now_ms - _entry_ms(oldest_undelivered_id)) / 1000.0
+    if age <= check.warn_undelivered_age_seconds:
+        return []
+    return [
+        Finding(
+            check="group-undelivered",
+            subject=subject,
+            message=f"oldest UNDELIVERED entry {oldest_undelivered_id} is {age:.0f}s old "
+            f"(warn over {check.warn_undelivered_age_seconds:.0f}s) - the group is at "
+            f"{last_delivered_id}, the stream at {last_generated_id}. Nothing was delivered, "
+            "so XPENDING reads the healthy 0: this is a consumer that has stopped READING, "
+            "not one that is slow to ack. Check it is running and connected "
+            '(CLIENT LIST, `user=`); see docs/BUS-HEALTH.md, "A consumer that stopped reading"',
+        )
+    ]
+
+
 def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int) -> list[Finding]:
     """Two-tick rule: one tick of non-zero pending is in-flight delivery;
     non-zero across two consecutive ticks means the consumer is wedged or its
@@ -755,27 +920,6 @@ def evaluate_persistence(info: dict, *, now: datetime) -> list[Finding]:
 # --- collectors ---
 
 
-def _decode(value: str | bytes) -> str:
-    return value.decode(errors="replace") if isinstance(value, bytes) else str(value)
-
-
-def _entry_ms(entry_id: str | bytes) -> int:
-    return int(_decode(entry_id).split("-", 1)[0])
-
-
-def _id_sort_key(entry_id: str | bytes) -> tuple[int, int]:
-    """Order a stream id the way Redis does, as ``(ms, seq)``.
-
-    Never compare these as strings: ``"9-0" > "10-0"`` lexicographically while
-    ``9 < 10``. CannObserv/broker#1 recorded that against the watcher#285 group
-    rename and it bites the same way here - a string comparison reads a 9-0
-    capture as ahead of the queue and then never captures 10-0, which is wrong
-    in exactly the direction that loses evidence.
-    """
-    ms, _, seq = _decode(entry_id).partition("-")
-    return int(ms), int(seq or 0)
-
-
 def _evidence_high_water(topic_dir: Path) -> tuple[int, int] | None:
     """The newest id already captured for this queue, read back from the dump
     filenames rather than from the state file.
@@ -927,7 +1071,59 @@ async def _collect_stream(
                     pending_prev=previous_state.get(key, 0),
                 )
             )
+            findings.extend(
+                await _collect_undelivered(
+                    client, check, last_generated_id=info.get("last-generated-id")
+                )
+            )
     return findings, pending
+
+
+async def _collect_undelivered(
+    client: Redis, check: StreamCheck, *, last_generated_id: str | bytes | None
+) -> list[Finding]:
+    """Where the group stands against the end of its stream (broker#20).
+
+    ``last-generated-id`` rides the ``XINFO STREAM`` reply the length and
+    continuity checks already pay for. Only the group's own position costs a
+    call, and the ``XRANGE`` after it is skipped entirely unless the group is
+    behind - so a healthy tick adds one read per grouped stream and no more.
+
+    **No new privilege, and no group membership.** ``XINFO GROUPS`` and
+    ``XRANGE`` are both read-only introspection this probe's ``brokeradmin``
+    credential already holds; nothing here joins a group, which would silently
+    take delivery of another service's messages. Pinned by
+    ``tests/deploy/test_bus_health_units.py`` and, on the ACL itself, by
+    ``test_the_probe_can_read_a_groups_position_without_joining_it``.
+
+    Runs only where ``XPENDING`` already found the group: a missing one is
+    ``group-missing``, and saying so twice in two vocabularies helps nobody.
+    """
+    if check.warn_undelivered_age_seconds is None:
+        return []
+    groups = await client.xinfo_groups(check.topic)
+    position = next((g for g in groups if _decode(g.get("name", "")) == check.pending_group), None)
+    if position is None or position.get("last-delivered-id") is None:
+        return []
+    last_delivered_id = _decode(position["last-delivered-id"])
+    generated = None if last_generated_id is None else _decode(last_generated_id)
+
+    oldest_undelivered_id = None
+    if group_is_behind(last_generated_id=generated, last_delivered_id=last_delivered_id):
+        # Exclusive range: the oldest entry the group has NOT been delivered is
+        # the first one after its position. COUNT 1 because its id is the whole
+        # answer - the payload is the consumer's business, not the probe's.
+        entries = await client.xrange(check.topic, min=f"({last_delivered_id}", count=1)
+        if entries:
+            oldest_undelivered_id = _decode(entries[0][0])
+
+    return evaluate_undelivered(
+        check,
+        last_generated_id=generated,
+        last_delivered_id=last_delivered_id,
+        oldest_undelivered_id=oldest_undelivered_id,
+        now_ms=int(time.time() * 1000),
+    )
 
 
 async def _collect_memory(client: Redis) -> list[Finding]:

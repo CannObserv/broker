@@ -575,7 +575,7 @@ def test_replicator_can_dedupe_a_command_on_every_command_stream(tracked_acl_bro
 
 
 @contextlib.contextmanager
-def _seeder(tracked_acl_broker):
+def _seeder(tracked_acl_broker, *extra_rules: str):
     """A throwaway publisher, because no tracked user can write everywhere.
 
     These tests need bait on a stream the user under test cannot publish to -
@@ -583,9 +583,17 @@ def _seeder(tracked_acl_broker):
     `+ping` only. Created with the same throwaway password the fixture connects
     with, and deleted in a `finally` so the module-scoped server is left as the
     tracked file describes it.
+
+    ``extra_rules`` for the caller that needs bait it cannot make with `XADD`
+    alone - a consumer group, whose creation is a grant no tracked user holds
+    on an arbitrary stream. Kept opt-in rather than folded into the default:
+    every rule this user holds is a rule the assertions around it are not
+    testing.
     """
     admin = tracked_acl_broker("acladmin")
-    admin.execute_command("ACL", "SETUSER", "seed", "on", f">{PASSWORD}", "~*", "+xadd")
+    admin.execute_command(
+        "ACL", "SETUSER", "seed", "on", f">{PASSWORD}", "~*", "+xadd", *extra_rules
+    )
     try:
         yield tracked_acl_broker("seed")
     finally:
@@ -620,6 +628,42 @@ def test_a_drainer_can_empty_its_own_queue_and_not_the_stream_it_copies(
         assert client.xdel(dlq, dlq_id) == 1, f"{drainer} cannot drain {dlq}"
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             client.xdel(topic, topic_id)
+
+
+def test_the_probe_can_read_a_groups_position_without_joining_it(tracked_acl_broker) -> None:
+    """CannObserv/broker#20's claim that its check costs no grant, made to redis.
+
+    The undelivered-age check reads a group's ``last-delivered-id`` from
+    ``XINFO GROUPS`` and dates the first entry after it with an exclusive
+    ``XRANGE``. Both are introspection ``brokeradmin`` already holds, so the
+    check shipped without touching this file - and that is worth an assertion
+    rather than a sentence, because the cheapest way to make such a check work
+    is to widen the probe's credential, and the second cheapest is to join the
+    group.
+
+    **Joining is the one that must stay impossible.** ``XREADGROUP`` from a
+    probe silently takes delivery of another service's messages - the messages
+    would be marked delivered, to a consumer that will never ack them - which is
+    the rule ``tests/deploy/test_bus_health_units.py`` pins at the unit level
+    and this pins at the credential level. ``XGROUP CREATE`` is refused for the
+    neighbouring reason: a probe that can create a group can create it under the
+    wrong name and then report it healthy.
+    """
+    probe = tracked_acl_broker("brokeradmin")
+    with _seeder(tracked_acl_broker, "+xgroup") as seeder:
+        seeder.xadd(CONTENT_REVISIONS, {"k": "v"})
+        seeder.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+
+        (group,) = probe.xinfo_groups(CONTENT_REVISIONS)
+        assert group["last-delivered-id"] == "0-0"
+        assert probe.xrange(CONTENT_REVISIONS, min="(0-0", count=1), "the exclusive range is read"
+
+        for refused in (
+            lambda: probe.xreadgroup("archiver.revisions", "probe", {CONTENT_REVISIONS: ">"}),
+            lambda: probe.xgroup_create(CONTENT_REVISIONS, "brokeradmin.revisions", id="0"),
+        ):
+            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+                refused()
 
 
 def test_the_probe_can_dispose_of_one_dlq_entry_and_nothing_else(tracked_acl_broker) -> None:

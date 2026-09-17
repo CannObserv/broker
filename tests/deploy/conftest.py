@@ -214,6 +214,14 @@ def tracked_acl_broker(tmp_path_factory):
             **kwargs,
         )
 
+    # The port, for the one caller that cannot use the closure: the probe's
+    # collectors take an *async* client, and running them against this server is
+    # what proves a new check needs no grant the tracked ACL does not already
+    # give ``brokeradmin`` (CannObserv/broker#20). Published as an attribute
+    # rather than by widening the fixture's return, so every existing caller
+    # keeps the shape it has.
+    connect.port = port
+
     yield connect
     _stop(proc)
 

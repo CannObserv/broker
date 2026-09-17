@@ -55,6 +55,7 @@ from src.broker.bus_health import (
     evaluate_pending,
     evaluate_persistence,
     evaluate_stream,
+    evaluate_undelivered,
     load_state,
     save_state,
     with_margin,
@@ -250,7 +251,153 @@ def test_pending_message_names_no_specific_stream() -> None:
     assert "revision" not in finding.message.lower()
 
 
+# --- undelivered age: the consumer that stopped reading ---
+#
+# CannObserv/broker#20. After the 2026-09-16 reboot replicator never
+# reconnected, `replicator.fetch` held one undelivered command for hours, and
+# the probe reported 0 findings on every tick. Each existing signal is blind to
+# a consumer that has stopped *reading*: XPENDING counts what was delivered, so
+# a consumer that never calls XREADGROUP keeps it at the healthy 0; last-entry
+# age catches a stopped producer and exists only for the groupless streams; and
+# `lag` is wrong in both directions on this Redis.
+
+_GROUPED = StreamCheck(topic="t", pending_group="g", warn_undelivered_age_seconds=300.0)
+
+
+def test_a_group_at_the_streams_last_id_is_caught_up() -> None:
+    """Positions equal is the whole healthy case, and it is checked before
+    anything is read: no XRANGE, no age, nothing to be wrong about."""
+    assert (
+        evaluate_undelivered(
+            _GROUPED,
+            last_generated_id="1000-0",
+            last_delivered_id="1000-0",
+            oldest_undelivered_id=None,
+            now_ms=10_000_000,
+        )
+        == []
+    )
+
+
+def test_a_group_behind_by_a_fresh_entry_is_healthy() -> None:
+    """Being behind is not the finding - every delivery is momentarily behind.
+    The finding is being behind *for longer than a delivery takes*."""
+    now_ms = 10_000_000
+    assert (
+        evaluate_undelivered(
+            _GROUPED,
+            last_generated_id="9999999-0",
+            last_delivered_id="9000000-0",
+            oldest_undelivered_id=f"{now_ms - 1000}-0",
+            now_ms=now_ms,
+        )
+        == []
+    )
+
+
+def test_a_group_behind_by_a_stale_entry_warns() -> None:
+    now_ms = 10_000_000
+    (finding,) = evaluate_undelivered(
+        _GROUPED,
+        last_generated_id="9999999-0",
+        last_delivered_id="9000000-0",
+        oldest_undelivered_id=f"{now_ms - 301_000}-0",
+        now_ms=now_ms,
+    )
+    assert finding.check == "group-undelivered"
+    assert finding.subject == "t/g"
+
+
+def test_undelivered_entries_that_no_longer_exist_are_their_own_condition() -> None:
+    """A stream trimmed past its group's position is not an age.
+
+    The group is behind and the entries it is behind by are gone, so there is
+    nothing to date and nothing that will ever be delivered. Reporting that as
+    "0 seconds old" would read as healthy, and reporting it as an age at all
+    would send the reader looking for a stopped consumer rather than for what
+    deleted undelivered entries.
+    """
+    (finding,) = evaluate_undelivered(
+        _GROUPED,
+        last_generated_id="9999999-0",
+        last_delivered_id="1000-0",
+        oldest_undelivered_id=None,
+        now_ms=10_000_000,
+    )
+    assert finding.check == "group-undelivered-lost"
+
+
+def test_a_group_row_without_a_threshold_says_nothing() -> None:
+    check = StreamCheck(topic="t", pending_group="g")
+    assert (
+        evaluate_undelivered(
+            check,
+            last_generated_id="9999999-0",
+            last_delivered_id="1000-0",
+            oldest_undelivered_id=None,
+            now_ms=10_000_000,
+        )
+        == []
+    )
+
+
+def test_a_group_ahead_of_the_last_id_the_probe_read_is_caught_up() -> None:
+    """The two ids come from two replies, so an XADD can land between them.
+
+    ``XINFO STREAM`` is read first, then ``XINFO GROUPS``: a group that took
+    delivery of an entry added in that window reports a position *newer* than
+    the ``last-generated-id`` the probe holds. Compared for inequality that
+    reads as behind, and the XRANGE after it finds nothing - which would be
+    reported as entries deleted before delivery, on the healthiest possible
+    broker.
+    """
+    assert (
+        evaluate_undelivered(
+            _GROUPED,
+            last_generated_id="1000-0",
+            last_delivered_id="1001-0",
+            oldest_undelivered_id=None,
+            now_ms=10_000_000,
+        )
+        == []
+    )
+
+
+def test_positions_are_compared_as_numbers_not_strings() -> None:
+    """``"9-0" > "10-0"`` lexicographically while ``9 < 10``.
+
+    The same hazard CannObserv/broker#1 recorded against the watcher#285 group
+    rename, and it bites here in the direction that goes quiet: a group at
+    ``9-0`` on a stream whose last id is ``10-0`` is behind, and a string
+    comparison calls it caught up.
+    """
+    now_ms = 10_000_000
+    (finding,) = evaluate_undelivered(
+        _GROUPED,
+        last_generated_id="10-0",
+        last_delivered_id="9-0",
+        oldest_undelivered_id=f"{now_ms - 301_000}-0",
+        now_ms=now_ms,
+    )
+    assert finding.check == "group-undelivered"
+
+
 # --- inventory ---
+
+
+def test_every_probed_group_carries_an_undelivered_threshold() -> None:
+    """A group row without one is a group nobody watches for a stopped reader.
+
+    Asserted over the declared tuple rather than per row, so a sixth group
+    arrives with the threshold or fails here - which is the half of broker#20
+    that outlives the five groups on the node today.
+    """
+    missing = [
+        c.topic
+        for c in STREAM_CHECKS
+        if c.pending_group is not None and c.warn_undelivered_age_seconds is None
+    ]
+    assert not missing, f"grouped streams with no undelivered threshold: {missing}"
 
 
 def test_content_blobs_carries_no_retention_opinion() -> None:
@@ -397,6 +544,50 @@ async def test_collect_pending_carries_state_between_ticks(fake_redis) -> None:
 
     findings, _ = await collect_broker_findings(fake_redis, previous_state=pending)
     assert any(f.check == "pending" for f in findings)  # second tick: warn
+
+
+async def test_collect_warns_when_a_group_stopped_reading(fake_redis) -> None:
+    """The 2026-09-16 state, reproduced: a group that exists, has a stream with
+    entries, and never calls XREADGROUP.
+
+    Every other signal reads healthy here - nothing was delivered, so XPENDING
+    is 0 - which is why this is the check the event asked for.
+    """
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    (finding,) = [f for f in findings if f.check == "group-undelivered"]
+    assert finding.subject == f"{CONTENT_REVISIONS}/archiver.revisions"
+    assert not any(f.check == "pending" for f in findings)
+
+
+async def test_collect_says_nothing_once_the_group_has_read(fake_redis) -> None:
+    """A read clears it, and nothing about an ack is required: this check is
+    about *delivery*, which is the half XPENDING starts counting at."""
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+    await fake_redis.xreadgroup("archiver.revisions", "c1", {CONTENT_REVISIONS: ">"}, count=10)
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    assert not any(f.check.startswith("group-undelivered") for f in findings)
+
+
+async def test_collect_reports_undelivered_entries_that_were_trimmed_away(fake_redis) -> None:
+    """The group is behind and what it is behind by is gone.
+
+    Its own condition, not an age: there is nothing left to date, and the
+    entries will never be delivered to anyone. This is the hazard
+    ``content.replicate`` is carved out of every trim path for, arriving on a
+    stream that is not carved out.
+    """
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+    await fake_redis.xtrim(CONTENT_REVISIONS, maxlen=0)
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    (finding,) = [f for f in findings if f.check == "group-undelivered-lost"]
+    assert finding.subject == f"{CONTENT_REVISIONS}/archiver.revisions"
 
 
 async def test_collect_fresh_registry_is_healthy(fake_redis) -> None:

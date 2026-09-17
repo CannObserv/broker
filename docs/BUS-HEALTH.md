@@ -128,6 +128,10 @@ Per tick it probes:
   streams, where `StreamCheck` refuses a group at import time. A missing group
   records no pending count, so when it comes back its two-tick rule starts
   again from zero;
+- **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
+  minutes on each of the five groups. The check `XPENDING` cannot make, and the
+  one the 2026-09-16 event asked for; see *A consumer that stopped reading*
+  below;
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
   named and the entries captured; see *Who drains a DLQ* in [STREAMS.md](STREAMS.md);
 The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
@@ -170,6 +174,90 @@ The unit holds **no** database credential: the `changes_outbox` half of the
 old combined probe stayed in archiver with the table it queries.
 `tests/deploy/test_bus_health_units.py` pins that, the consumer-group
 abstention, and installed-copy parity.
+
+## A consumer that stopped reading (CannObserv/broker#20)
+
+**A group whose consumer is gone was invisible to every other check here**, and
+the probe said so out loud: after the node's reboot on 2026-09-16
+(redis-server up 15:26:34Z, AOF intact) replicator never reconnected,
+`replicator.fetch` held one undelivered command from 15:27:00Z onwards, and the
+tick at 15:38 and every tick after it reported **0 findings**. It was found by
+hand.
+
+Each existing signal is blind to a consumer that has stopped *reading*:
+
+- **`XPENDING` counts what was delivered and not acked.** A consumer that never
+  calls `XREADGROUP` is delivered nothing, so its pending count sits at `0` -
+  which is the healthy value. The two-tick rule above catches a consumer wedged
+  *after* delivery; this is the half before it.
+- **Last-entry age catches a stopped producer**, and exists only for the
+  permanently-groupless streams.
+- **Consumer `idle` is useless right after a restart** - exactly when it is most
+  wanted. It read 869 s for every consumer on every group at 15:41: the time
+  since the AOF load, not since each consumer's last read.
+
+### Positions, not counters - and why not `lag`
+
+`XINFO GROUPS` reports a `lag` per group, which looks like the answer and is
+not. Measured that morning:
+
+| Group | `lag` | Where it actually stood |
+|---|---|---|
+| `watcher.blobs` | 152 | at the stream's `last-generated-id` - caught up |
+| `archiver.revisions` | 147 | at the stream's `last-generated-id` - caught up |
+| `replicator.fetch` | 153 | behind by **one** entry - the real fault |
+
+A lag-based check would have raised three findings, two of them false, and
+misstated the third. The cause is structural rather than a quirk: `lag` is
+`entries-added` minus the group's `entries-read`, and **`entries-read` does not
+survive a reload** - `test_a_reload_keeps_the_position_and_loses_lags_input`
+restarts a server to show it. `last-delivered-id` does survive, because it is
+what the consumer's next read resumes from.
+
+So the check compares positions and dates one entry:
+
+1. `XINFO STREAM <stream>` -> `last-generated-id`, which the length and
+   continuity checks already read;
+2. `XINFO GROUPS <stream>` -> that group's `last-delivered-id`;
+3. equal - or the group *ahead*, which happens when an `XADD` lands between the
+   two replies - and the group is caught up, whatever `lag` says. Nothing
+   further is read;
+4. behind, and `XRANGE <stream> (<last-delivered-id> + COUNT 1` gives the oldest
+   entry it has not been offered. The timestamp in that id is its age.
+
+**The threshold is 5 minutes on every group, and it is not a mirrored
+constant.** Every other threshold in this probe copies a retention cap owned in
+another repo; this one is owned here, because it describes the consumer's read
+loop as this node can observe it. All five groups are blocking `XREADGROUP`
+readers, so delivery is immediate - `replicator.fetch` answered the 14:18:00Z
+command at 14:18:01Z - and five minutes is two orders of magnitude of slack over
+that. A consumer that ever moves to a schedule rather than a blocking read needs
+its own value on its row: that schedule's period plus margin, with the source
+named the way a mirrored constant names its owner.
+`test_every_probed_group_carries_an_undelivered_threshold` fails if a sixth
+group arrives without one.
+
+**A stream trimmed past its group's position is its own finding**
+(`group-undelivered-lost`), not an age. The group is behind and the entries it
+is behind by are gone - trimmed or deleted before delivery - so there is nothing
+to date and nothing that will ever arrive. Reported as an age it would read as
+either healthy or as a stopped consumer, and the remedy is neither: it is the
+hazard `content.replicate` is carved out of every trim path for, happening on a
+stream that is not carved out.
+
+**It costs no grant and joins nothing.** `XINFO STREAM`, `XINFO GROUPS` and
+`XRANGE` are all read-only introspection `brokeradmin` already held, so the
+check shipped without touching `deploy/redis-acl.conf`;
+`test_the_probe_can_read_a_groups_position_without_joining_it` asserts both
+halves - that the reads are permitted, and that `XREADGROUP` and `XGROUP CREATE`
+are still refused. A probe that joined a group would take delivery of another
+service's messages, which is the rule it exists on the other side of.
+
+**Corroboration, not contract.** Zero `user=replicator` connections in
+`CLIENT LIST` was the first visible sign on the day, and it is the right thing
+to check next when this finding fires. It is not the check itself: a connection
+count is not what a consumer promises, and a connected process that has stopped
+reading looks identical to a healthy one.
 
 ## Behaviour under the `noeviction` cap - verified for all three producers
 
@@ -321,7 +409,7 @@ stopped being trimmed at all, which is the condition the check exists for.
 
 | Signal | Lives in | Why there |
 |---|---|---|
-| Broker memory and eviction policy, per-stream `XLEN`, last-entry age, `XPENDING`, DLQ depth and `entries-added` continuity, disk, persistence status, backup freshness | **this repo** (`broker-bus-health.timer`) | Every one of them measures the broker's host |
+| Broker memory and eviction policy, per-stream `XLEN`, last-entry age, `XPENDING`, undelivered age per group, DLQ depth and `entries-added` continuity, disk, persistence status, backup freshness | **this repo** (`broker-bus-health.timer`) | Every one of them measures the broker's host |
 | `information.changes_outbox` depth / age / dead-lettered | **archiver** (`archiver-bus-health.timer`) | Queries archiver's database |
 | The dashboard bus panel's group lag | **archiver** (`collect_group_lag`) | `XPENDING` from a client is an ordinary call, and the panel is archiver's UI |
 | Redis >= 7.0 floor at service start | **each participant** (`check_redis_floor.sh`) | A client-side assertion about the broker it is about to talk to |
