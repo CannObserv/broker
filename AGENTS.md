@@ -58,6 +58,13 @@ silently corrupts values.
   are pinned by `tests/deploy/test_bus_health_units.py`. `XINFO GROUPS` is
   read-only introspection; joining a group would silently swallow another
   service's messages.
+- **A `brokeradmin` grant nothing issues names its caller.** That credential is
+  three callers - the probe, an operator at a `redis-cli`, and the deploy tests
+  - so a command `src/broker/` never issues is not residue by default: `+xlen`
+  (broker#13) and `+xpending` (broker#32, after #29) are both kept deliberately.
+  The stanza above the rule in `deploy/redis-acl.conf` has to say which caller,
+  and `tests/deploy/test_redis_acl.py` fails when one does not. Record it or cut
+  it; do not leave it to read as residue.
 - **The backup holds no Redis credential, and its identity cannot delete.**
   `broker-backup.service` reads `dump.rdb` - the server's own atomic snapshot -
   and creates objects under `objectCreator` + `objectViewer`; retention is the
