@@ -72,10 +72,10 @@ COMMAND_STREAMS = tuple(s for s in sorted(CANONICAL_STREAMS) if stream_kind(s) =
 #: The cluster stream inventory, whose producer column says who may publish what.
 STREAMS_MD = Path(__file__).resolve().parents[2] / "docs" / "STREAMS.md"
 
-#: The probe's own source. What `brokeradmin` is USED for is in here; anything
-#: else it holds is for a person at a `redis-cli`, which is a caller no source
-#: tree can show.
-PROBE_SOURCE = Path(__file__).resolve().parents[2] / "src" / "broker"
+#: The units this repo ships. What `brokeradmin` is USED for by a process is in
+#: here; its other two callers - an operator at a `redis-cli`, and the deploy
+#: tests in this directory - are ones no source tree can show.
+BROKER_SOURCE = Path(__file__).resolve().parents[2] / "src" / "broker"
 
 # A stand-in for the ULID replicator puts in the last segment. Any value works -
 # what is under test is the namespace before it.
@@ -201,8 +201,13 @@ def stanza(name: str) -> str:
     return "\n".join(lines[start:index])
 
 
-def issued_by_the_probe(command: str) -> bool:
+def issued_in_src(command: str) -> bool:
     """Whether anything in `src/broker/` calls `command`.
+
+    Every module, not the probe alone: `backup.py` holds no Redis credential at
+    all and `restore.py` talks to files, so naming this for the probe would
+    claim more than it reads. What it supports is the narrower claim the file
+    makes - that nothing this repo RUNS issues the command.
 
     redis-py lowercases a command and replaces the container's `|` with `_`
     (`+config|get` -> `config_get`), and a container granted whole takes a
@@ -218,7 +223,7 @@ def issued_by_the_probe(command: str) -> bool:
     call = re.compile(rf"\.{method}[a-z_]*\(")
     return any(
         call.search(line)
-        for path in PROBE_SOURCE.glob("*.py")
+        for path in BROKER_SOURCE.glob("*.py")
         # `logger.info` is a log line, not the INFO command.
         for line in path.read_text().splitlines()
         if "logger." not in line
@@ -699,14 +704,14 @@ def test_a_probe_grant_nothing_issues_says_why_it_is_kept(users) -> None:
     unexplained = sorted(
         command
         for command in granted_commands(users["brokeradmin"])
-        if not issued_by_the_probe(command)
+        if not issued_in_src(command)
         and command not in prose
         and command.removeprefix("+").upper().replace("|", " ") not in prose
     )
     assert not unexplained, (
         f"nothing in src/broker/ issues {', '.join(unexplained)}, and the brokeradmin stanza "
         f"in {ACL_FILE.name} does not say why it is kept: record the caller that is not the "
-        f"probe, or cut the grant"
+        "probe, or cut the grant"
     )
 
 
