@@ -78,9 +78,16 @@ def seeder(tracked_acl_broker):
     property under test elsewhere; setting up a stream for it needs an identity
     that can. Deleted afterwards, along with the keys it wrote, so the
     module-scoped server is left as the tracked file describes it.
+
+    Granted the five commands these tests use rather than ``+@all``, which is
+    what it held until CR 6: the sibling helper in ``test_redis_acl.py`` says it
+    plainly - every rule this user holds is a rule the assertions around it are
+    not testing - and it matters more here, in the module whose subject is that
+    the *probe's* grants are the real ones.
     """
     admin = tracked_acl_broker("acladmin")
-    admin.execute_command("ACL", "SETUSER", "seed", "on", f">{PASSWORD}", "~*", "+@all")
+    commands = ["+xadd", "+xtrim", "+xgroup", "+xreadgroup", "+del"]
+    admin.execute_command("ACL", "SETUSER", "seed", "on", f">{PASSWORD}", "~*", *commands)
     client = tracked_acl_broker("seed")
     try:
         yield client
