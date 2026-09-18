@@ -331,7 +331,16 @@ class StreamCheck:
     never_trimmed: bool = False
 
     def __post_init__(self) -> None:
-        """Refuse a ``pending_group`` on a config/state stream.
+        """Refuse a ``pending_group`` on a config/state stream, and an
+        undelivered threshold on a row with no group at all.
+
+        The second is the cheaper guard and it is here for the same reason as
+        the first. ``evaluate_undelivered`` builds its subject as
+        ``<topic>/<group>``, so a threshold without a group would put the string
+        ``t/None`` in front of whoever reads the alert. The collector cannot
+        reach that state - it evaluates only where ``XPENDING`` found the group
+        - but the evaluator is public, and an invariant asserted in one
+        direction only is one half-held.
 
         A group on a config/state stream accumulates a PEL nothing drains:
         every worker needs every message, so no reader acks on behalf of the
@@ -359,6 +368,12 @@ class StreamCheck:
         a caught test failure rather than a silently disabled guard.
         """
         if self.pending_group is None:
+            if self.warn_undelivered_age_seconds is not None:
+                raise ValueError(
+                    f"{self.topic} carries an undelivered threshold "
+                    f"({self.warn_undelivered_age_seconds}) with no pending_group - there is "
+                    "no group whose position it could be measured against"
+                )
             return
         try:
             kind = stream_kind(self.topic)

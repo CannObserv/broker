@@ -385,6 +385,20 @@ def test_positions_are_compared_as_numbers_not_strings() -> None:
 # --- inventory ---
 
 
+def test_an_undelivered_threshold_without_a_group_is_refused() -> None:
+    """CR 1. The invariant the test below states, in its other direction.
+
+    A threshold with no group is a row nothing can evaluate: the collector only
+    reaches ``evaluate_undelivered`` where ``XPENDING`` found the group, and the
+    evaluator would render ``subject`` as ``topic/None`` - a string an alert
+    rule would carry. Refused at import time for the reason the config_state
+    guard beside it is: this is a statement about the row, which cannot become
+    true at runtime.
+    """
+    with pytest.raises(ValueError, match="undelivered"):
+        StreamCheck(topic="t", warn_undelivered_age_seconds=300.0)
+
+
 def test_every_probed_group_carries_an_undelivered_threshold() -> None:
     """A group row without one is a group nobody watches for a stopped reader.
 
