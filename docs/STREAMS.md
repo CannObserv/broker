@@ -29,8 +29,10 @@ does not survive a reload - measured on this Redis, three groups reported lags
 of 152, 147 and 153 while two of them stood at their stream's
 `last-generated-id` (CannObserv/broker#20). The broker's primitive is the pair
 of positions instead; `lag` survives as a dashboard number in archiver, where it
-is read rather than alarmed on. [BUS-HEALTH.md](BUS-HEALTH.md), *A consumer that
-stopped reading*.
+is read rather than alarmed on. `XPENDING` in that column names the **signal** -
+a group's pending count - not the command this repo's probe issues: it reads the
+same number out of `XINFO GROUPS`, beside the position (CannObserv/broker#29).
+[BUS-HEALTH.md](BUS-HEALTH.md), *A consumer that stopped reading*.
 
 **The `Producer → consumer` column is enforced, not only documented.** Since
 CannObserv/broker#14 each service holds a `(+xadd +xtrim ~...)` **selector**
