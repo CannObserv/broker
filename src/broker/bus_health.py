@@ -768,7 +768,7 @@ def evaluate_undelivered(
                 message=f"the group is at {last_delivered_id} on a stream whose last id is "
                 f"{last_generated_id}, and NOTHING remains after its position - the entries "
                 "it had not been delivered were trimmed or deleted rather than consumed, so "
-                "they reached this group's consumer never and will not",
+                "this group's consumer never received them and never will",
             )
         ]
     age = (now_ms - _entry_ms(oldest_undelivered_id)) / 1000.0
