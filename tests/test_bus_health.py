@@ -570,6 +570,29 @@ async def test_a_missing_group_names_the_groups_that_are_there_instead(fake_redi
     assert "NO consumer group exists" not in finding.message, finding.message
 
 
+async def test_the_group_list_is_evidence_and_not_an_inference(fake_redis) -> None:
+    """CR 1. A stream carrying one group per consuming service has other names
+    on it by design, so the list must not be read as a rename.
+
+    `content.blobs` broadcasts (docs/STREAMS.md), and there a group beside the
+    missing one is ordinary rather than suspicious - while "the consumer never
+    created its group" is the likeliest cause precisely when other consumers are
+    present, which is the cause the first wording of this branch dropped. Three
+    causes, and the reply narrows them without picking one: the names are the
+    evidence, the inference is the reader's.
+    """
+    await fake_redis.xadd("content.blobs", {"k": "v"})
+    await fake_redis.xgroup_create("content.blobs", "somewhere.blobs", id="0")
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    (finding,) = [
+        f for f in findings if f.check == "group-missing" and f.subject == "content.blobs"
+    ]
+    assert "somewhere.blobs" in finding.message, finding.message
+    assert "never created" in finding.message, finding.message
+    assert "per consuming service" in finding.message, finding.message
+
+
 async def test_the_group_is_read_once_per_stream(fake_redis) -> None:
     """broker#29. Position and pending come out of one reply, not two.
 

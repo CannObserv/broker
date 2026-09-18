@@ -1148,7 +1148,10 @@ def _evaluate_group_missing(check: StreamCheck, groups: list) -> Finding:
       ``group_name()`` derives (cannobserv#384); a consumer running under
       another name looks healthy to itself and is probed by nobody. That is the
       one cause no other check on this node reports, and the names are its
-      evidence rather than a guess.
+      evidence - evidence, not a verdict (CR 1): on the streams carrying one
+      group per consuming service a name beside the missing one is ordinary,
+      and "never created it" is likeliest exactly where other consumers are
+      present. All three causes stay in the message; the list narrows them.
     - **No groups at all.** Then nothing is reading the stream, and the reader
       is not sent hunting for a misnamed group that does not exist. Still two
       causes here - never created, or lost when the stream was recreated - and
@@ -1162,10 +1165,12 @@ def _evaluate_group_missing(check: StreamCheck, groups: list) -> Finding:
     )
     if present:
         body = (
-            f"The groups that DO exist on it: {', '.join(repr(n) for n in present)}. The probe "
-            "asks for the name group_name() derives (cannobserv#384), so a consumer reading "
-            "under one of those is healthy from its own side and watched by nobody; a group is "
-            "also missing after the stream it belonged to was deleted and recreated. "
+            f"The groups that DO exist on it: {', '.join(repr(n) for n in present)}. All three "
+            "causes stay open: one of those may be this consumer under a name group_name() does "
+            "not derive (cannobserv#384), the cause no other check reports; on a stream carrying "
+            "one group per consuming service they may simply be the other services'; and the "
+            "consumer may equally have never created its own, or lost it when the stream was "
+            "recreated. "
         )
     else:
         body = (
