@@ -77,9 +77,9 @@ def test_service_never_joins_a_consumer_group() -> None:
     variable in a comment saying exactly that - only an ``Environment=``
     assignment is the hazard.
 
-    It does not today: the rule above ``StateDirectory`` states the rule without
-    naming ``ARCHIVER_BUS_CONSUMER``, which is why this says *may* rather than
-    the *does* its database sibling can say of its own variable."""
+    It does not today: the unit states the rule in a comment that names no
+    variable at all, which is why this says *may* rather than the *does* its
+    database sibling can say of its own."""
     assert "Environment=ARCHIVER_BUS_CONSUMER" not in REPO_SERVICE.read_text()
 
 
