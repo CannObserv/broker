@@ -235,7 +235,19 @@ that. A consumer that ever moves to a schedule rather than a blocking read needs
 its own value on its row: that schedule's period plus margin, with the source
 named the way a mirrored constant names its owner.
 `test_every_probed_group_carries_an_undelivered_threshold` fails if a sixth
-group arrives without one.
+group arrives without one, and `StreamCheck` refuses the other direction - a
+threshold on a row with no group - at import.
+
+**What this threshold cannot tell apart: a consumer that stopped reading and
+one that is busy inside a handler.** A blocking reader is not reading while it
+processes, so a queued entry ages for as long as the entry before it takes.
+Harmless at the durations measured here - a fetch, a database write - and an
+open question on `content.replicate`, whose handler writes bytes into a
+permanent store and whose per-command duration nobody has measured. It keeps the
+shared 5 minutes rather than a guessed larger one, because a threshold with no
+owner is what the `content.blobs` rule exists against; a false WARN on a stream
+that has carried three entries in its life is the cheap direction, and the
+number moves when replicator measures its own handler.
 
 **A stream trimmed past its group's position is its own finding**
 (`group-undelivered-lost`), not an age. The group is behind and the entries it

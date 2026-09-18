@@ -163,6 +163,22 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # A consumer that ever moves to a schedule rather than a blocking read needs its
 # own value on its row: that schedule's period plus margin, with the source
 # named the way a mirrored constant names its owner.
+#
+# **A LONG-RUNNING HANDLER PRESENTS AS A CONSUMER THAT STOPPED READING, and the
+# measurement behind this number is a `content.fetch` one** (CR 2). A blocking
+# reader is not reading while it is inside a handler, so a queued entry ages for
+# as long as the entry before it takes to process. That is harmless where the
+# handler is a fetch or a database write - seconds - and it is an open question
+# on `content.replicate`, whose handler writes bytes into a permanent store and
+# whose per-command duration this repo has never measured. Sized from the wrong
+# stream, this threshold would report a busy consumer as a gone one, which is
+# the cry-wolf failure every other threshold here is sized to avoid.
+#
+# Not guessed at a larger number instead: a threshold with no owner is what the
+# `content.blobs` rule exists against. The measurement belongs to replicator,
+# and `content.replicate` keeps the shared value until that arrives - the safe
+# direction, since a false WARN on a stream that has carried three entries in
+# its life is cheap and a missed one on a command stream is not.
 GROUP_WARN_UNDELIVERED_AGE_SECONDS = 300.0
 
 # Every length threshold is its stream's retention cap plus this margin, so a
