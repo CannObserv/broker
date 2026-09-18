@@ -38,11 +38,15 @@ silently corrupts values.
 
 ## Rules
 
-- **No retention opinion on `content.blobs`.** No length or age row for that
-  stream: this repo owns no cap for it, and a threshold with no owner cries
-  wolf. Its group *is* probed - the old unqualified "never `content.blobs`" was
-  archiver's role boundary, and broker#1 Phase 5 retired it on the grounds that
-  a neutral node has no role to be out of bounds of.
+- **No retention opinion on `content.blobs`.** No *retention* length or age row
+  for that stream: this repo owns no cap for it, and a threshold with no owner
+  cries wolf. Its group *is* probed - the old unqualified "never
+  `content.blobs`" was archiver's role boundary, and broker#1 Phase 5 retired it
+  on the grounds that a neutral node has no role to be out of bounds of. The
+  group's `warn_undelivered_age_seconds` is not the exception it looks like: an
+  undelivered age is a statement about `watcher.blobs`'s read loop, which this
+  node measures directly and therefore owns, not about how long entries are
+  kept. Retention is the axis with no owner here (broker#20).
 - **DLQs: the broker detects, captures and escalates; the consumer triages.**
   Splitting the old single "drainer" role is broker#1 Phase 5. Anything
   mechanical and suffix-keyed belongs here; reading a payload to tell residue
