@@ -170,9 +170,16 @@ def granted_commands(rules: list[str]) -> set[str]:
     Selector commands count. A selector is the narrower grant - it carries its
     own key patterns - but the question this answers is what the credential can
     ISSUE, and on a `*.dlq` key it can issue both of its selector's commands.
+
+    `allcommands` is `+@all` by another name, the way `allkeys` is `~*` above,
+    and it is the form a rule widened by hand takes. Translated rather than
+    skipped: a `startswith("+")` filter alone returns the empty set for the one
+    rule that grants everything, which would make a caller reading "which
+    commands does this user hold" pass on exactly the rule it exists to catch.
     """
     root, selectors = split_rules(rules)
-    return {
+    commands = {"+@all"} if "allcommands" in rules else set()
+    return commands | {
         rule
         for rule in [*root, *(r for selector in selectors for r in selector)]
         if rule.startswith("+")
