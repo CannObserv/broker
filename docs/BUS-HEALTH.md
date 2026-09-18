@@ -247,7 +247,8 @@ permanent store and whose per-command duration nobody has measured. It keeps the
 shared 5 minutes rather than a guessed larger one, because a threshold with no
 owner is what the `content.blobs` rule exists against; a false WARN on a stream
 that has carried three entries in its life is the cheap direction, and the
-number moves when replicator measures its own handler.
+number moves when replicator measures its own handler - asked for in
+CannObserv/replicator#96.
 
 **A stream trimmed past its group's position is its own finding**
 (`group-undelivered-lost`), not an age. The group is behind and the entries it

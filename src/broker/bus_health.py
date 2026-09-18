@@ -175,10 +175,11 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # the cry-wolf failure every other threshold here is sized to avoid.
 #
 # Not guessed at a larger number instead: a threshold with no owner is what the
-# `content.blobs` rule exists against. The measurement belongs to replicator,
-# and `content.replicate` keeps the shared value until that arrives - the safe
-# direction, since a false WARN on a stream that has carried three entries in
-# its life is cheap and a missed one on a command stream is not.
+# `content.blobs` rule exists against. The measurement belongs to replicator and
+# is asked for in CannObserv/replicator#96; `content.replicate` keeps the shared
+# value until it arrives - the safe direction, since a false WARN on a stream
+# that has carried three entries in its life is cheap and a missed one on a
+# command stream is not.
 GROUP_WARN_UNDELIVERED_AGE_SECONDS = 300.0
 
 # Every length threshold is its stream's retention cap plus this margin, so a
