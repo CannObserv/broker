@@ -48,9 +48,13 @@ def test_service_holds_no_database_opt_in() -> None:
 
 def test_service_never_joins_a_consumer_group() -> None:
     """XINFO GROUPS is read-only group introspection. Joining a group from a probe
-    would silently swallow another service's messages. The unit may (and does)
-    mention the variable in a comment saying exactly that - only an
-    ``Environment=`` assignment is the hazard."""
+    would silently swallow another service's messages. The unit may mention the
+    variable in a comment saying exactly that - only an ``Environment=``
+    assignment is the hazard.
+
+    It does not today: the rule above ``StateDirectory`` states the rule without
+    naming ``ARCHIVER_BUS_CONSUMER``, which is why this says *may* rather than
+    the *does* its database sibling can say of its own variable."""
     assert "Environment=ARCHIVER_BUS_CONSUMER" not in REPO_SERVICE.read_text()
 
 
