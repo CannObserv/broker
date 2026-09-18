@@ -203,6 +203,11 @@ done
 for s in content.fetch content.revisions content.artifacts content.replicate content.blobs; do
     echo "== $s"; redis-cli -u "$B" --no-auth-warning XINFO GROUPS "$s"    # last-delivered-id, pending, lag
 done
+
+# Only where a `pending` count is non-zero and does not fall. The one read that
+# breaks a PEL down per consumer - holder, idle time, delivery count - which
+# XINFO GROUPS cannot (CannObserv/broker#32):
+redis-cli -u "$B" --no-auth-warning XPENDING content.fetch replicator.fetch - + 10
 ```
 
 `DB loaded from base file appendonly.aof.1.base.rdb` in the journal is the

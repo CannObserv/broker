@@ -72,6 +72,11 @@ COMMAND_STREAMS = tuple(s for s in sorted(CANONICAL_STREAMS) if stream_kind(s) =
 #: The cluster stream inventory, whose producer column says who may publish what.
 STREAMS_MD = Path(__file__).resolve().parents[2] / "docs" / "STREAMS.md"
 
+#: The probe's own source. What `brokeradmin` is USED for is in here; anything
+#: else it holds is for a person at a `redis-cli`, which is a caller no source
+#: tree can show.
+PROBE_SOURCE = Path(__file__).resolve().parents[2] / "src" / "broker"
+
 # A stand-in for the ULID replicator puts in the last segment. Any value works -
 # what is under test is the namespace before it.
 SAMPLE_COMMAND_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
@@ -157,6 +162,60 @@ def selector_patterns(rules: list[str], command: str) -> set[str]:
         for rule in selector
         if (match := _KEY_RULE.match(rule))
     }
+
+
+def granted_commands(rules: list[str]) -> set[str]:
+    """Every `+command` a user holds, by any route.
+
+    Selector commands count. A selector is the narrower grant - it carries its
+    own key patterns - but the question this answers is what the credential can
+    ISSUE, and on a `*.dlq` key it can issue both of its selector's commands.
+    """
+    root, selectors = split_rules(rules)
+    return {
+        rule
+        for rule in [*root, *(r for selector in selectors for r in selector)]
+        if rule.startswith("+")
+    }
+
+
+def stanza(name: str) -> str:
+    """The comment block immediately above `user <name>`.
+
+    This file's prose about one user, which is where a grant is explained if it
+    is explained anywhere. Contiguous `#` lines, so a stanza cannot run back
+    past the previous user's rule and borrow its reasons.
+    """
+    lines = ACL_FILE.read_text().splitlines()
+    (index,) = (i for i, line in enumerate(lines) if line.startswith(f"user {name} "))
+    start = index
+    while start and lines[start - 1].startswith("#"):
+        start -= 1
+    return "\n".join(lines[start:index])
+
+
+def issued_by_the_probe(command: str) -> bool:
+    """Whether anything in `src/broker/` calls `command`.
+
+    redis-py lowercases a command and replaces the container's `|` with `_`
+    (`+config|get` -> `config_get`), and a container granted whole takes a
+    suffix per subcommand (`+xinfo` -> `xinfo_stream`, `xinfo_groups`), so the
+    match is on the prefix.
+
+    A text search rather than a call graph, and its imprecision runs one way
+    only: a command name that is also an ordinary Python method (`Path.exists`)
+    reads as issued, so the worst it can do is stop asking a grant to explain
+    itself. It cannot fail a grant the probe really uses.
+    """
+    method = command.removeprefix("+").replace("|", "_")
+    call = re.compile(rf"\.{method}[a-z_]*\(")
+    return any(
+        call.search(line)
+        for path in PROBE_SOURCE.glob("*.py")
+        # `logger.info` is a log line, not the INFO command.
+        for line in path.read_text().splitlines()
+        if "logger." not in line
+    )
 
 
 # --- what the file says ---
@@ -609,6 +668,39 @@ def test_the_probe_cannot_write_to_a_stream(users) -> None:
     # dead-letter queues, so the instance-wide `~*` above cannot carry it onto a
     # fact or a command stream. Publishing remains the thing it cannot do.
     assert selector_patterns(users["brokeradmin"], "+xdel") == {"*.dlq"}
+
+
+def test_a_probe_grant_nothing_issues_says_why_it_is_kept(users) -> None:
+    """The one kind of entry an OBSERVED command list cannot explain by itself.
+
+    This file's header says the lists are observed rather than drafted, which
+    leaves a grant nothing exercises reading as residue from a command that used
+    to be issued - and broker#14's principle is that an identity holds what it
+    uses, precisely so the grant nobody exercises cannot be the one that goes
+    wrong quietly. Twice now a probe change has left one behind: broker#13 took
+    `XLEN` out of the tick, broker#29 took `XPENDING`. Both were kept, for
+    different reasons, and a decision is worth nothing if the next reader cannot
+    tell it from an oversight (broker#32).
+
+    So the rule this asserts is not "cut it". It is that a command
+    `src/broker/` never issues is NAMED in the stanza above the rule, because
+    the reason to keep one is always the caller the source tree cannot show:
+    `brokeradmin` is also the operator's read-only identity, the
+    `redis-cli -u "$B"` of every runbook under `docs/`.
+    """
+    prose = stanza("brokeradmin")
+    unexplained = sorted(
+        command
+        for command in granted_commands(users["brokeradmin"])
+        if not issued_by_the_probe(command)
+        and command not in prose
+        and command.removeprefix("+").upper().replace("|", " ") not in prose
+    )
+    assert not unexplained, (
+        f"nothing in src/broker/ issues {', '.join(unexplained)}, and the brokeradmin stanza "
+        f"in {ACL_FILE.name} does not say why it is kept: record the caller that is not the "
+        f"probe, or cut the grant"
+    )
 
 
 # --- does it actually parse? ---
