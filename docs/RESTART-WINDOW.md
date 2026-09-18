@@ -248,6 +248,13 @@ grepped the journal for `DB index is out of range`, which is the single check
 that would have caught the 2026-09-10 incident, and it would have returned
 "0 occurrences" on an empty journal and read as a pass.
 
+**The memory-overcommit WARNING should be absent, and its presence now means
+something.** Redis logged `WARNING Memory overcommit must be enabled!` at every
+start until broker#26 set `vm.overcommit_memory = 1`, so a reader learned to
+skip it. Seeing it again says the sysctl drop-in is not applied on this node -
+check `/etc/sysctl.d/60-broker-memory.conf` and `sysctl -p` it, rather than
+skipping the line.
+
 ```bash
 # THE CHECK THAT MATTERS MOST, and it is in the file, not the journal.
 sudo grep -c 'DB index is out of range' /var/log/redis/redis-server.log   # -> 0
