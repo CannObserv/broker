@@ -1136,7 +1136,7 @@ async def _collect_stream(
     return findings, pending
 
 
-def _evaluate_group_missing(check: StreamCheck, groups: list) -> Finding:
+def _evaluate_group_missing(check: StreamCheck, groups: list[dict[str, object]]) -> Finding:
     """The group is absent from its stream's group list - and what else is on it.
 
     Three causes, and the old message could pick none of them: it asked
@@ -1183,7 +1183,11 @@ def _evaluate_group_missing(check: StreamCheck, groups: list) -> Finding:
 
 
 async def _collect_undelivered(
-    client: Redis, check: StreamCheck, *, position: dict, last_generated_id: str | bytes | None
+    client: Redis,
+    check: StreamCheck,
+    *,
+    position: dict[str, object],
+    last_generated_id: str | bytes | None,
 ) -> list[Finding]:
     """Where the group stands against the end of its stream (broker#20).
 
