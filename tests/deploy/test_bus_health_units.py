@@ -31,8 +31,8 @@ def _comment_block_holding(text: str, phrase: str) -> str:
 
     A whole-file substring test cannot tell a rule stated from a rule deleted:
     the words would still be somewhere in the unit. Anchoring to the block lets
-    the sentence be rewrapped - #31 moved a word between lines already - while
-    still failing if the sentence itself goes.
+    the sentence be rewrapped - CannObserv/broker#31 moved a word between lines
+    already - while still failing if the sentence itself goes.
     """
     lines = text.splitlines()
     matches = [i for i, line in enumerate(lines) if phrase in line]
@@ -166,9 +166,9 @@ def test_the_units_name_only_reads_the_probe_issues() -> None:
     here and nowhere else. ``deploy/redis-acl.conf`` still says ``XPENDING``
     and keeps every one: two of those sentences narrate the 2026-09 ``EXISTS``
     incident, where the two-tick rule genuinely was an ``XPENDING`` rule, and
-    the third names the triage query ``+xpending`` is held for (broker#32) - a
-    command an operator issues at a ``redis-cli``, which is a caller this unit
-    is not.
+    the third names the triage query ``+xpending`` is held for
+    (CannObserv/broker#32) - a command an operator issues at a ``redis-cli``,
+    which is a caller this unit is not.
     """
     rule = _comment_block_holding(REPO_SERVICE.read_text(), "must never join")
     assert "XINFO GROUPS" in rule, (
@@ -177,5 +177,5 @@ def test_the_units_name_only_reads_the_probe_issues() -> None:
     )
     for path in (REPO_SERVICE, REPO_TIMER):
         assert "XPENDING" not in path.read_text(), (
-            f"{path.name} names a command the probe has not issued since broker#29"
+            f"{path.name} names a command the probe has not issued since CannObserv/broker#29"
         )
