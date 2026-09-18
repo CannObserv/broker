@@ -34,11 +34,11 @@ EnvironmentFile=-/etc/broker/notifier.env
 # it the ARCHIVER_ALLOW_PRODUCTION_DB opt-in that unit needs. Nothing here has a
 # reason to reach a service's database, so nothing here can.
 
-# XPENDING is read-only group introspection; this process must never join a
-# consumer group. It has no group-membership code path at all - the probe
+# XINFO GROUPS is read-only group introspection; this process must never join
+# a consumer group. It has no group-membership code path at all - the probe
 # imports no consumer - but stating it here keeps the rule with the unit.
 
-# Carries the two-tick XPENDING state between oneshot runs
+# Carries the two-tick pending state between oneshot runs
 # (/var/lib/broker-bus-health, owned by User= automatically).
 StateDirectory=broker-bus-health
 

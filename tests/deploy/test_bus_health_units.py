@@ -47,7 +47,7 @@ def test_service_holds_no_database_opt_in() -> None:
 
 
 def test_service_never_joins_a_consumer_group() -> None:
-    """XPENDING is read-only group introspection. Joining a group from a probe
+    """XINFO GROUPS is read-only group introspection. Joining a group from a probe
     would silently swallow another service's messages. The unit may (and does)
     mention the variable in a comment saying exactly that - only an
     ``Environment=`` assignment is the hazard."""
@@ -120,3 +120,27 @@ def test_the_notifier_credential_has_a_file_of_its_own() -> None:
     text = REPO_SERVICE.read_text()
     assert "EnvironmentFile=-/etc/broker/notifier.env" in text
     assert "Environment=NOTIFIER_API_KEY" not in text, "a credential never belongs in the unit"
+
+
+def test_the_units_name_the_group_read_the_probe_issues() -> None:
+    """Both units describe a read the probe stopped issuing.
+
+    Since CannObserv/broker#29 there is no ``XPENDING`` in the tick at all: a
+    group's existence, its ``pending`` count and its ``last-delivered-id`` all
+    come out of one ``XINFO GROUPS`` per grouped stream. The rules the units
+    state are unchanged - the probe joins no consumer group, and the two-tick
+    pending rule still carries a count between oneshot runs - so only the name
+    was wrong, and ``XINFO GROUPS`` is now the read-only introspection the
+    service's sentence is about (CannObserv/broker#31).
+
+    These units state live rules, which is why the bare string is forbidden
+    here and nowhere else. ``deploy/redis-acl.conf`` still says ``XPENDING``
+    twice and keeps it: those sentences narrate the 2026-09 ``EXISTS``
+    incident, where the two-tick rule genuinely was an ``XPENDING`` rule, and a
+    historical account is correct as written.
+    """
+    assert "XINFO GROUPS" in REPO_SERVICE.read_text()
+    for path in (REPO_SERVICE, REPO_TIMER):
+        assert "XPENDING" not in path.read_text(), (
+            f"{path.name} names a command the probe has not issued since broker#29"
+        )
