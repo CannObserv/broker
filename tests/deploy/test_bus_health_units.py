@@ -152,7 +152,7 @@ def test_the_notifier_credential_has_a_file_of_its_own() -> None:
 
 
 def test_the_units_name_only_reads_the_probe_issues() -> None:
-    """Both units describe a read the probe stopped issuing.
+    """Each unit names the group read the probe makes, and no other.
 
     Since CannObserv/broker#29 there is no ``XPENDING`` in the tick at all: a
     group's existence, its ``pending`` count and its ``last-delivered-id`` all
