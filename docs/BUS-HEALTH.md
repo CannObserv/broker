@@ -105,21 +105,21 @@ Per tick it probes:
   its own alerting problem. On a neutral node it is not - nobody else watches
   these, and this is the one place that can;
 - **a consumer group that does not exist** on one of those five streams
-  (`group-missing`) - the group is absent from the stream's `XINFO GROUPS`
-  reply, so its lag cannot be read at all, and a stalled or absent consumer is
-  invisible to the rule above. WARN on **every** tick the
-  group is absent, with no two-tick grace: nothing about it is transient. Three
-  causes, and the finding names those the reply has not already ruled out
-  rather than guessing:
+  (`group-missing`) - absent from the stream's `XINFO GROUPS` reply, so its lag
+  cannot be read at all and a stalled consumer is invisible to the rule above.
+  WARN on **every** tick it is absent, with no two-tick grace: nothing about it
+  is transient. Three causes, and the finding names those the reply has not
+  ruled out rather than guessing:
   - the consumer has never run against this broker, so it never created the
     group (co-core's `ensure_group`, when the consumer starts);
   - the consumer runs its group under a name other than the one co-core's
     `group_name()` derives, which is the name the probe asks for
     (cannobserv#384). The consumer looks healthy, and its real group is probed
     by nobody - the one cause no other check reports. **The finding prints the
-    groups that DO exist on the stream** (CannObserv/broker#29), which is that
-    cause's evidence rather than a hedge; where the list is empty it says so,
-    which rules this cause out and leaves the other two;
+    groups that DO exist on the stream** (CannObserv/broker#29): evidence for
+    this cause, not a verdict - where a stream carries one group per consuming
+    service the other names are ordinary. An empty list rules it out and says
+    so;
   - the group was lost while the stream was not: a stream deleted or flushed
     and then recreated by its producer's next `XADD` comes back without its
     groups. That case follows a `stream-reset` finding on the same stream - on
@@ -225,10 +225,9 @@ So the check compares positions and dates one entry:
 
 1. `XINFO STREAM <stream>` -> `last-generated-id`, which the length and
    continuity checks already read;
-2. `XINFO GROUPS <stream>` -> that group's `last-delivered-id`, and - out of
-   the same reply, one round trip, one observation - the `pending` count the
-   two-tick rule above uses and the list of group names `group-missing` reports
-   (CannObserv/broker#29);
+2. `XINFO GROUPS <stream>` -> that group's `last-delivered-id`, plus the
+   `pending` count and the group names the checks above read out of the same
+   reply - one round trip, one observation (CannObserv/broker#29);
 3. equal - or the group *ahead*, which happens when an `XADD` lands between the
    two replies - and the group is caught up, whatever `lag` says. Nothing
    further is read;
@@ -271,12 +270,10 @@ stream that is not carved out.
 **It costs no grant, no round trip, and joins nothing.** `XINFO STREAM`,
 `XINFO GROUPS` and `XRANGE` are all read-only introspection `brokeradmin`
 already held, so the check shipped without touching `deploy/redis-acl.conf`;
-since CannObserv/broker#29 it costs no extra read either, because the
-`XINFO GROUPS` it needs is the one the pending count is now taken from - and
-the `XRANGE` is reached only where the group is behind;
-`test_the_probe_can_read_a_groups_position_without_joining_it` asserts both
-halves - that the reads are permitted, and that `XREADGROUP` and `XGROUP CREATE`
-are still refused. A probe that joined a group would take delivery of another
+since CannObserv/broker#29 that `XINFO GROUPS` is the one the pending count
+comes from; `test_the_probe_can_read_a_groups_position_without_joining_it`
+asserts both halves - that the reads are permitted, and that `XREADGROUP` and
+`XGROUP CREATE` are still refused. A probe that joined a group would take delivery of another
 service's messages, which is the rule it exists on the other side of.
 
 **Corroboration, not contract.** Zero `user=replicator` connections in
