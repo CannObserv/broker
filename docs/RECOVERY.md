@@ -204,9 +204,9 @@ for s in content.fetch content.revisions content.artifacts content.replicate con
     echo "== $s"; redis-cli -u "$B" --no-auth-warning XINFO GROUPS "$s"    # last-delivered-id, pending, lag
 done
 
-# Only where a `pending` count is non-zero and does not fall. The one read that
-# breaks a PEL down per consumer - holder, idle time, delivery count - which
-# XINFO GROUPS cannot (CannObserv/broker#32):
+# Only where a `pending` count above is non-zero and does not fall - any stream
+# and group from that loop. Per entry: who holds it, its idle time, and how many
+# times it has been delivered, which no XINFO reply carries (CannObserv/broker#32):
 redis-cli -u "$B" --no-auth-warning XPENDING content.fetch replicator.fetch - + 10
 ```
 
