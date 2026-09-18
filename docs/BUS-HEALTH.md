@@ -95,26 +95,31 @@ Per tick it probes:
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
   is empty - the corpus-size guard);
-- `XPENDING` on **all five** consumer groups on the node - `archiver.revisions`,
-  `archiver.artifacts`, `watcher.blobs`, `replicator.fetch`,
-  `replicator.replicate` - WARN on non-zero across two consecutive ticks, with
-  the count carried in `StateDirectory=broker-bus-health`. Widened from
-  Archiver's two by CannObserv/broker#1 Phase 5: the exclusion was inherited
-  from a probe running on Archiver's own host, where a downstream service's
-  group lag was plausibly its own alerting problem. On a neutral node it is not
-  - nobody else watches these, and this is the one place that can;
+- the `pending` count of **all five** consumer groups on the node -
+  `archiver.revisions`, `archiver.artifacts`, `watcher.blobs`,
+  `replicator.fetch`, `replicator.replicate` - WARN on non-zero across two
+  consecutive ticks, with the count carried in
+  `StateDirectory=broker-bus-health`. Widened from Archiver's two by
+  CannObserv/broker#1 Phase 5: the exclusion was inherited from a probe running
+  on Archiver's own host, where a downstream service's group lag was plausibly
+  its own alerting problem. On a neutral node it is not - nobody else watches
+  these, and this is the one place that can;
 - **a consumer group that does not exist** on one of those five streams
-  (`group-missing`) - `XPENDING` answers `NOGROUP`, so that group's lag cannot
-  be read at all, and a stalled or absent consumer is invisible to the rule
-  above. WARN on **every** tick the group is absent, with no two-tick grace:
-  nothing about it is transient. Three causes, and the finding names all three
+  (`group-missing`) - the group is absent from the stream's `XINFO GROUPS`
+  reply, so its lag cannot be read at all, and a stalled or absent consumer is
+  invisible to the rule above. WARN on **every** tick the
+  group is absent, with no two-tick grace: nothing about it is transient. Three
+  causes, and the finding names those the reply has not already ruled out
   rather than guessing:
   - the consumer has never run against this broker, so it never created the
     group (co-core's `ensure_group`, when the consumer starts);
   - the consumer runs its group under a name other than the one co-core's
     `group_name()` derives, which is the name the probe asks for
     (cannobserv#384). The consumer looks healthy, and its real group is probed
-    by nobody - the one cause no other check reports;
+    by nobody - the one cause no other check reports. **The finding prints the
+    groups that DO exist on the stream** (CannObserv/broker#29), which is that
+    cause's evidence rather than a hedge; where the list is empty it says so,
+    which rules this cause out and leaves the other two;
   - the group was lost while the stream was not: a stream deleted or flushed
     and then recreated by its producer's next `XADD` comes back without its
     groups. That case follows a `stream-reset` finding on the same stream - on
@@ -129,9 +134,9 @@ Per tick it probes:
   records no pending count, so when it comes back its two-tick rule starts
   again from zero;
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
-  minutes on each of the five groups. The check `XPENDING` cannot make, and the
-  one the 2026-09-16 event asked for; see *A consumer that stopped reading*
-  below;
+  minutes on each of the five groups. The check a pending count cannot make,
+  and the one the 2026-09-16 event asked for; see *A consumer that stopped
+  reading* below;
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
   named and the entries captured; see *Who drains a DLQ* in [STREAMS.md](STREAMS.md);
 The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
@@ -188,7 +193,7 @@ hand.
 
 Each existing signal is blind to a consumer that has stopped *reading*:
 
-- **`XPENDING` counts what was delivered and not acked.** A consumer that never
+- **`pending` counts what was delivered and not acked.** A consumer that never
   calls `XREADGROUP` is delivered nothing, so its pending count sits at `0` -
   which is the healthy value. The two-tick rule above catches a consumer wedged
   *after* delivery; this is the half before it.
@@ -220,7 +225,10 @@ So the check compares positions and dates one entry:
 
 1. `XINFO STREAM <stream>` -> `last-generated-id`, which the length and
    continuity checks already read;
-2. `XINFO GROUPS <stream>` -> that group's `last-delivered-id`;
+2. `XINFO GROUPS <stream>` -> that group's `last-delivered-id`, and - out of
+   the same reply, one round trip, one observation - the `pending` count the
+   two-tick rule above uses and the list of group names `group-missing` reports
+   (CannObserv/broker#29);
 3. equal - or the group *ahead*, which happens when an `XADD` lands between the
    two replies - and the group is caught up, whatever `lag` says. Nothing
    further is read;
@@ -260,9 +268,12 @@ either healthy or as a stopped consumer, and the remedy is neither: it is the
 hazard `content.replicate` is carved out of every trim path for, happening on a
 stream that is not carved out.
 
-**It costs no grant and joins nothing.** `XINFO STREAM`, `XINFO GROUPS` and
-`XRANGE` are all read-only introspection `brokeradmin` already held, so the
-check shipped without touching `deploy/redis-acl.conf`;
+**It costs no grant, no round trip, and joins nothing.** `XINFO STREAM`,
+`XINFO GROUPS` and `XRANGE` are all read-only introspection `brokeradmin`
+already held, so the check shipped without touching `deploy/redis-acl.conf`;
+since CannObserv/broker#29 it costs no extra read either, because the
+`XINFO GROUPS` it needs is the one the pending count is now taken from - and
+the `XRANGE` is reached only where the group is behind;
 `test_the_probe_can_read_a_groups_position_without_joining_it` asserts both
 halves - that the reads are permitted, and that `XREADGROUP` and `XGROUP CREATE`
 are still refused. A probe that joined a group would take delivery of another
@@ -424,7 +435,7 @@ stopped being trimmed at all, which is the condition the check exists for.
 
 | Signal | Lives in | Why there |
 |---|---|---|
-| Broker memory and eviction policy, per-stream `XLEN`, last-entry age, `XPENDING`, undelivered age per group, DLQ depth and `entries-added` continuity, disk, persistence status, backup freshness | **this repo** (`broker-bus-health.timer`) | Every one of them measures the broker's host |
+| Broker memory and eviction policy, per-stream `XLEN`, last-entry age, group `pending`, undelivered age per group, DLQ depth and `entries-added` continuity, disk, persistence status, backup freshness | **this repo** (`broker-bus-health.timer`) | Every one of them measures the broker's host |
 | `information.changes_outbox` depth / age / dead-lettered | **archiver** (`archiver-bus-health.timer`) | Queries archiver's database |
 | The dashboard bus panel's group lag | **archiver** (`collect_group_lag`) | `XPENDING` from a client is an ordinary call, and the panel is archiver's UI |
 | Redis >= 7.0 floor at service start | **each participant** (`check_redis_floor.sh`) | A client-side assertion about the broker it is about to talk to |

@@ -6,7 +6,7 @@ archiver#193 D6, minus the two collectors that stayed with archiver (the
 
 The pure ``evaluate_*`` functions carry the thresholds; the ``collect_*``
 functions are exercised against fakeredis so the Redis command surface
-(XLEN / XINFO STREAM / XPENDING / SCAN) is real, not mocked. The two-tick
+(XINFO STREAM / XINFO GROUPS / SCAN) is real, not mocked. The two-tick
 pending rule and the state file that carries it between oneshot runs get
 their own coverage because the timer is stateless without them.
 """
@@ -256,7 +256,7 @@ def test_pending_message_names_no_specific_stream() -> None:
 # CannObserv/broker#20. After the 2026-09-16 reboot replicator never
 # reconnected, `replicator.fetch` held one undelivered command for hours, and
 # the probe reported 0 findings on every tick. Each existing signal is blind to
-# a consumer that has stopped *reading*: XPENDING counts what was delivered, so
+# a consumer that has stopped *reading*: pending counts what was delivered, so
 # a consumer that never calls XREADGROUP keeps it at the healthy 0; last-entry
 # age catches a stopped producer and exists only for the groupless streams; and
 # `lag` is wrong in both directions on this Redis.
@@ -389,7 +389,7 @@ def test_an_undelivered_threshold_without_a_group_is_refused() -> None:
     """CR 1. The invariant the test below states, in its other direction.
 
     A threshold with no group is a row nothing can evaluate: the collector only
-    reaches ``evaluate_undelivered`` where ``XPENDING`` found the group, and the
+    reaches ``evaluate_undelivered`` where ``XINFO GROUPS`` found the group, and the
     evaluator would render ``subject`` as ``topic/None`` - a string an alert
     rule would carry. Refused at import time for the reason the config_state
     guard beside it is: this is a statement about the row, which cannot become
@@ -438,7 +438,7 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
     The exclusion was inherited from a probe that ran on Archiver's own host,
     where a downstream service's group lag was plausibly its own alerting
     problem. On a neutral node it is not: nobody else watches these, and this
-    is the one place that can. Cost is three more XPENDING calls per tick.
+    is the one place that can. Cost is three more group reads per tick.
 
     Pinned as an exact set rather than a subset, so a group silently dropped
     from the inventory fails here instead of going quiet in production.
@@ -534,7 +534,12 @@ async def test_collect_missing_group_is_a_finding(fake_redis) -> None:
     must say it - without guessing why. A consumer that never ran is one of
     three causes (docs/BUS-HEALTH.md), and a message asserting it would send
     whoever reads the alert after a wipe to the consumer's deployment instead of
-    to the group that was lost with its stream."""
+    to the group that was lost with its stream.
+
+    An empty stream of groups rules out exactly one of the three - a consumer
+    reading under another name (broker#29) - so the message names the other two
+    and says the stream carries none.
+    """
     await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
     findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     (finding,) = [
@@ -542,6 +547,63 @@ async def test_collect_missing_group_is_a_finding(fake_redis) -> None:
     ]
     assert "never provisioned" not in finding.message, finding.message
     assert "recreated" in finding.message, finding.message
+    assert "NO consumer group exists" in finding.message, finding.message
+
+
+async def test_a_missing_group_names_the_groups_that_are_there_instead(fake_redis) -> None:
+    """broker#29: the evidence the old finding had to hedge about.
+
+    "The consumer runs its group under a name other than the one ``group_name()``
+    derives" is the one cause no other check reports - the consumer looks healthy
+    to itself, and its real group is probed by nobody. Reading the group list
+    rather than asking ``XPENDING`` about one name means the finding can print
+    what IS on the stream, which is that cause's whole evidence.
+    """
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.content.revisions", id="0")
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    (finding,) = [
+        f for f in findings if f.check == "group-missing" and f.subject == CONTENT_REVISIONS
+    ]
+    assert "archiver.content.revisions" in finding.message, finding.message
+    assert "NO consumer group exists" not in finding.message, finding.message
+
+
+async def test_the_group_is_read_once_per_stream(fake_redis) -> None:
+    """broker#29. Position and pending come out of one reply, not two.
+
+    ``XINFO GROUPS`` has always carried ``pending``, so the ``XPENDING`` that
+    used to precede it read the same group a round trip later - the shape
+    broker#13 took out of the DLQ scan, where two reads an ``XADD`` can land
+    between are not one observation. Asserted as "``XPENDING`` is not issued
+    at all" rather than as a call count, because the cost is only half of it:
+    the two halves of the group's state now cannot disagree.
+    """
+
+    class _CountingGroupReads(_DelegatingClient):
+        def __init__(self, delegate):
+            super().__init__(delegate)
+            self.group_reads = 0
+
+        async def xinfo_groups(self, topic, *a, **kw):
+            self.group_reads += 1
+            return await self._delegate.xinfo_groups(topic, *a, **kw)
+
+        async def xpending(self, *a, **kw):
+            raise AssertionError("XPENDING is the round trip broker#29 removed")
+
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+    client = _CountingGroupReads(fake_redis)
+
+    findings, pending = await collect_broker_findings(client, previous_state={})
+
+    # One read for the one grouped stream that exists here; the other four are
+    # absent, and an absent stream is dormancy, not a group to check.
+    assert client.group_reads == 1
+    assert pending[f"{CONTENT_REVISIONS}/archiver.revisions"] == 0
+    assert not any(f.check == "group-missing" and f.subject == CONTENT_REVISIONS for f in findings)
 
 
 async def test_collect_pending_carries_state_between_ticks(fake_redis) -> None:
@@ -564,7 +626,7 @@ async def test_collect_warns_when_a_group_stopped_reading(fake_redis) -> None:
     """The 2026-09-16 state, reproduced: a group that exists, has a stream with
     entries, and never calls XREADGROUP.
 
-    Every other signal reads healthy here - nothing was delivered, so XPENDING
+    Every other signal reads healthy here - nothing was delivered, so pending
     is 0 - which is why this is the check the event asked for.
     """
     await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
@@ -578,7 +640,7 @@ async def test_collect_warns_when_a_group_stopped_reading(fake_redis) -> None:
 
 async def test_collect_says_nothing_once_the_group_has_read(fake_redis) -> None:
     """A read clears it, and nothing about an ack is required: this check is
-    about *delivery*, which is the half XPENDING starts counting at."""
+    about *delivery*, which is the half the pending count starts at."""
     await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
     await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
     await fake_redis.xreadgroup("archiver.revisions", "c1", {CONTENT_REVISIONS: ">"}, count=10)
@@ -1267,7 +1329,7 @@ def test_every_config_state_check_probes_last_entry_age(check: StreamCheck) -> N
 
     This is the invariant the constructor does *not* enforce, and it is the one
     with teeth (CannObserv/archiver#128). A config/state stream has no consumer group, so
-    it is invisible to every ``XPENDING``-based check; without an age threshold
+    it is invisible to every pending-based check; without an age threshold
     a producer that stopped publishing would look identical to one that is
     merely quiet. Adding a config/state stream to the inventory without
     ``warn_last_entry_age_seconds`` therefore buys a probe that cannot detect

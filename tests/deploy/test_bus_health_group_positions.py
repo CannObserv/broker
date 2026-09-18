@@ -21,6 +21,13 @@ same rules the node has - and a check needing a grant nobody has fails as
 ``NOPERM`` rather than passing in a test that granted itself ``~*``. The
 converse, that the probe still cannot join a group, is asserted on the ACL
 itself in ``test_redis_acl.py``.
+
+A third arrived with CannObserv/broker#29, which moved ``group-missing`` off
+``XPENDING``'s NOGROUP and onto the group's absence from ``XINFO GROUPS``:
+**the two servers have to agree on how a group-less stream answers.** They
+disagreed on ``XPENDING`` - a ``ResponseError`` on real Redis, an ``IndexError``
+out of redis-py's parser on fakeredis, which is why the old branch caught both -
+so the new mechanism is worth asserting where the server is real.
 """
 
 from __future__ import annotations
@@ -108,6 +115,46 @@ async def undelivered(probe) -> list:
     """
     findings, _ = await collect_broker_findings(probe, previous_state={})
     return [f for f in findings if f.check.startswith("group-undelivered")]
+
+
+async def missing(probe) -> list:
+    """This tick's ``group-missing`` findings, through the timer's own path."""
+    findings, _ = await collect_broker_findings(probe, previous_state={})
+    return [f for f in findings if f.check == "group-missing" and f.subject == CONTENT_REVISIONS]
+
+
+async def test_a_group_less_stream_answers_the_way_fakeredis_does(probe, seeder) -> None:
+    """broker#29's one portability question, asked of a real server.
+
+    ``XINFO GROUPS`` on a stream that exists and carries no group returns an
+    **empty list** on Redis 7.0 and on fakeredis alike - unlike ``XPENDING``,
+    which raised two different exceptions for the same condition and is the
+    reason the branch this replaced had to catch both. The main suite covers the
+    finding's wording; what only a real server can say is that the mechanism
+    behind it is the same mechanism.
+    """
+    seeder.xadd(CONTENT_REVISIONS, {"k": "v"})
+
+    assert await probe.xinfo_groups(CONTENT_REVISIONS) == [], "the empty list is the signal"
+    (finding,) = await missing(probe)
+    assert "NO consumer group exists" in finding.message, finding.message
+
+
+async def test_a_group_under_another_name_is_named_by_the_finding(probe, seeder) -> None:
+    """The cause the old finding could only hedge about (broker#29).
+
+    A consumer running its group under a name other than the one
+    ``group_name()`` derives is healthy from its own side and watched by nobody,
+    and no other check on this node reports it. The group list is that cause's
+    evidence, and reading it costs the probe nothing it does not already hold:
+    this runs as the real ``brokeradmin``, so a grant the node lacks would fail
+    here as ``NOPERM``.
+    """
+    seeder.xgroup_create(CONTENT_REVISIONS, "archiver.content.revisions", id="0", mkstream=True)
+
+    (finding,) = await missing(probe)
+    assert "archiver.content.revisions" in finding.message, finding.message
+    assert GROUP in finding.message, finding.message
 
 
 async def test_a_group_with_a_reader_that_never_came_back_is_reported(probe, seeder) -> None:

@@ -55,7 +55,7 @@ silently corrupts values.
   that gap - that is the boundary, not an omission. An unclaimed `*.dlq` is
   reported as unassigned, never skipped.
 - **The probe joins no consumer group and holds no database credential.** Both
-  are pinned by `tests/deploy/test_bus_health_units.py`. `XPENDING` is
+  are pinned by `tests/deploy/test_bus_health_units.py`. `XINFO GROUPS` is
   read-only introspection; joining a group would silently swallow another
   service's messages.
 - **The backup holds no Redis credential, and its identity cannot delete.**
@@ -142,11 +142,12 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - CannObserv/broker#1 - the relocation epic. Closed 2026-09-15, every sub-issue
   with it. #14 - confining each service's `+xadd`/`+xtrim` to the streams it
   produces - landed 2026-09-18 and is live on the node.
-- Open follow-ons: #29 (one `XINFO GROUPS` for the position and the pending
-  count the probe reads separately), CannObserv/replicator#96 (how long a
-  `content.replicate` handler takes - the undelivered threshold is sized from a
-  `content.fetch` measurement), CannObserv/archiver#234 (whether archiver ever
-  `XTRIM`s `info.registry`, which its ACL selector still permits).
+  #29 - one `XINFO GROUPS` per grouped stream for the position, the pending
+  count and the group's existence - landed 2026-09-18.
+- Open follow-ons: CannObserv/replicator#96 (how long a `content.replicate`
+  handler takes - the undelivered threshold is sized from a `content.fetch`
+  measurement), CannObserv/archiver#234 (whether archiver ever `XTRIM`s
+  `info.registry`, which its ACL selector still permits).
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
 - CannObserv/archiver#196 - archiver's half of the OOM seam, repointed after the
   cap moved to `deploy/redis.conf.broker`

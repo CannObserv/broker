@@ -27,16 +27,23 @@ The checks, per tick:
   cap + margin, so a breach means the retention mechanism broke rather than
   that traffic grew. Three different caps apply here - see the constants below.
 - last-entry age via ``XINFO STREAM`` for the permanently-groupless streams,
-  which are invisible to any ``XPENDING``-based check.
-- ``XPENDING`` on every consumer group on this node, warning only on two
-  consecutive non-zero ticks - a healthy steady state is pending 0, and one
+  which are invisible to any pending-based check.
+- the ``pending`` count of every consumer group on this node, warning only on
+  two consecutive non-zero ticks - a healthy steady state is pending 0, and one
   tick of in-flight delivery is normal.
 - the age of the oldest entry each group has **not been delivered**, by
   comparing its ``last-delivered-id`` with the stream's ``last-generated-id``.
-  ``XPENDING`` starts counting at delivery, so a consumer that has stopped
-  calling ``XREADGROUP`` holds it at the healthy 0 forever - which is what
-  reported a broker with a command stuck on it as having zero findings for
-  hours on 2026-09-16 (CannObserv/broker#20).
+  The pending count starts at delivery, so a consumer that has stopped calling
+  ``XREADGROUP`` holds it at the healthy 0 forever - which is what reported a
+  broker with a command stuck on it as having zero findings for hours on
+  2026-09-16 (CannObserv/broker#20).
+
+  Both of those, and the group's existence, come out of **one** ``XINFO
+  GROUPS`` per grouped stream (CannObserv/broker#29): the reply carries
+  ``pending`` beside ``last-delivered-id``, so the ``XPENDING`` that used to
+  read the same group a round trip later bought nothing - and its absence from
+  that list says more about a missing group than NOGROUP could, because it
+  names the groups that do exist.
 - ``XLEN > 0`` on every ``*.dlq`` key - resting state is depth 0, and every
   entry is operator-actionable. The entries are dumped to local storage on
   first sight and the finding names the service that owes it triage; see
@@ -792,13 +799,19 @@ def evaluate_undelivered(
 def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int) -> list[Finding]:
     """Two-tick rule: one tick of non-zero pending is in-flight delivery;
     non-zero across two consecutive ticks means the consumer is wedged or its
-    database is down."""
+    database is down.
+
+    The count is the group's ``pending`` field, which since CannObserv/broker#29
+    comes out of the same ``XINFO GROUPS`` reply as its position rather than
+    from an ``XPENDING`` of its own - the same number either way, which is why
+    the message names the count and not a command.
+    """
     if pending_now > 0 and pending_prev > 0:
         return [
             Finding(
                 check="pending",
                 subject=f"{check.topic}/{check.pending_group}",
-                message=f"XPENDING {pending_now} for two consecutive ticks "
+                message=f"pending {pending_now} for two consecutive ticks "
                 f"(was {pending_prev}) - consumer wedged or DB down; messages "
                 "are accruing unconsumed while the stream keeps accepting them",
             )
@@ -1074,27 +1087,36 @@ async def _collect_stream(
 
     if check.pending_group is not None:
         key = f"{check.topic}/{check.pending_group}"
-        try:
-            summary = await client.xpending(check.topic, check.pending_group)
-        except (ResponseError, IndexError):
-            # Real Redis raises NOGROUP (a ResponseError); fakeredis's reply
-            # for a missing group instead crashes redis-py's parse_xpending
-            # with IndexError. Both mean the same thing here.
-            findings.append(
-                Finding(
-                    check="group-missing",
-                    subject=check.topic,
-                    # Three causes, and the message must not pick one: after a
-                    # wipe the group was lost with its stream, and "never
-                    # provisioned" would send the reader to the wrong service.
-                    message=f"consumer group {check.pending_group!r} does not exist on a "
-                    "stream that does, so its lag cannot be read - the consumer never "
-                    "created it, runs it under another name, or it was lost when the "
-                    'stream was recreated; see docs/BUS-HEALTH.md, "The bus-health probe"',
-                )
-            )
+        # ONE reply for the group's whole state (CannObserv/broker#29).
+        # ``XINFO GROUPS`` has always carried ``pending`` beside
+        # ``last-delivered-id``, so the ``XPENDING`` that used to precede it was
+        # a second round trip reading the same group a moment later - the shape
+        # broker#13 took out of the DLQ scan, where two reads an ``XADD`` can
+        # land between are not one observation. Nothing compared the two here
+        # yet, so that half was cost rather than a bug; the finding below is the
+        # part that gets better.
+        #
+        # The stream is known to exist. ``XINFO GROUPS`` raises "no such key" on
+        # one deleted since the ``exists`` above, which is the race the
+        # ``XINFO STREAM`` two lines up already answers the same way: the tick
+        # ends as a ``broker`` finding with ``previous_state`` passed through
+        # untouched, so the next tick - which sees the key simply absent -
+        # reports the deletion as ``stream-reset`` off an intact baseline.
+        groups = await client.xinfo_groups(check.topic)
+        position = next(
+            (g for g in groups if _decode(g.get("name", "")) == check.pending_group), None
+        )
+        if position is None:
+            # Absence from the list, where it used to be ``XPENDING`` answering
+            # NOGROUP (a ResponseError on real Redis, an IndexError out of
+            # redis-py's parse_xpending on fakeredis - both the same condition).
+            # Both servers report a group-less stream the same way here - an
+            # empty list - which is why one branch now does: asserted against a
+            # real 7.0 server by ``tests/deploy/test_bus_health_group_positions
+            # .py::test_a_group_less_stream_answers_the_way_fakeredis_does``.
+            findings.append(_evaluate_group_missing(check, groups))
         else:
-            pending_now = int(summary["pending"])
+            pending_now = int(position["pending"])
             pending[key] = pending_now
             findings.extend(
                 evaluate_pending(
@@ -1105,21 +1127,67 @@ async def _collect_stream(
             )
             findings.extend(
                 await _collect_undelivered(
-                    client, check, last_generated_id=info.get("last-generated-id")
+                    client,
+                    check,
+                    position=position,
+                    last_generated_id=info.get("last-generated-id"),
                 )
             )
     return findings, pending
 
 
+def _evaluate_group_missing(check: StreamCheck, groups: list) -> Finding:
+    """The group is absent from its stream's group list - and what else is on it.
+
+    Three causes, and the old message could pick none of them: it asked
+    ``XPENDING`` about one name and got NOGROUP, which says nothing about what
+    else is there. The list the check now reads does (CannObserv/broker#29), and
+    it separates the causes in both directions:
+
+    - **Other groups, but not this one.** The probe asks for the name co-core's
+      ``group_name()`` derives (cannobserv#384); a consumer running under
+      another name looks healthy to itself and is probed by nobody. That is the
+      one cause no other check on this node reports, and the names are its
+      evidence rather than a guess.
+    - **No groups at all.** Then nothing is reading the stream, and the reader
+      is not sent hunting for a misnamed group that does not exist. Still two
+      causes here - never created, or lost when the stream was recreated - and
+      naming either alone would send whoever reads the alert after a wipe to the
+      consumer's deployment instead of to the stream that came back empty.
+    """
+    present = sorted(_decode(g.get("name", "")) for g in groups)
+    head = (
+        f"consumer group {check.pending_group!r} does not exist on a stream that does, "
+        "so its lag cannot be read. "
+    )
+    if present:
+        body = (
+            f"The groups that DO exist on it: {', '.join(repr(n) for n in present)}. The probe "
+            "asks for the name group_name() derives (cannobserv#384), so a consumer reading "
+            "under one of those is healthy from its own side and watched by nobody; a group is "
+            "also missing after the stream it belonged to was deleted and recreated. "
+        )
+    else:
+        body = (
+            "NO consumer group exists on that stream at all, so nothing on this node is "
+            "reading it: the consumer never created it, or the group was lost when the "
+            "stream was recreated. "
+        )
+    tail = 'See docs/BUS-HEALTH.md, "The bus-health probe"'
+    return Finding(check="group-missing", subject=check.topic, message=head + body + tail)
+
+
 async def _collect_undelivered(
-    client: Redis, check: StreamCheck, *, last_generated_id: str | bytes | None
+    client: Redis, check: StreamCheck, *, position: dict, last_generated_id: str | bytes | None
 ) -> list[Finding]:
     """Where the group stands against the end of its stream (broker#20).
 
-    ``last-generated-id`` rides the ``XINFO STREAM`` reply the length and
-    continuity checks already pay for. Only the group's own position costs a
-    call, and the ``XRANGE`` after it is skipped entirely unless the group is
-    behind - so a healthy tick adds one read per grouped stream and no more.
+    Both ids ride replies the tick has already paid for: ``last-generated-id``
+    from the ``XINFO STREAM`` the length and continuity checks read, and the
+    group's ``last-delivered-id`` from the ``XINFO GROUPS`` row the pending
+    count comes out of (CannObserv/broker#29). A healthy tick therefore adds no
+    read at all, and the ``XRANGE`` below is skipped entirely unless the group
+    is behind.
 
     **No new privilege, and no group membership.** ``XINFO GROUPS`` and
     ``XRANGE`` are both read-only introspection this probe's ``brokeradmin``
@@ -1128,14 +1196,12 @@ async def _collect_undelivered(
     ``tests/deploy/test_bus_health_units.py`` and, on the ACL itself, by
     ``test_the_probe_can_read_a_groups_position_without_joining_it``.
 
-    Runs only where ``XPENDING`` already found the group: a missing one is
-    ``group-missing``, and saying so twice in two vocabularies helps nobody.
+    Runs only where that row was found: a missing group is ``group-missing``,
+    and saying so twice in two vocabularies helps nobody.
     """
     if check.warn_undelivered_age_seconds is None:
         return []
-    groups = await client.xinfo_groups(check.topic)
-    position = next((g for g in groups if _decode(g.get("name", "")) == check.pending_group), None)
-    if position is None or position.get("last-delivered-id") is None:
+    if position.get("last-delivered-id") is None:
         return []
     last_delivered_id = _decode(position["last-delivered-id"])
     generated = None if last_generated_id is None else _decode(last_generated_id)
