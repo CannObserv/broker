@@ -43,3 +43,17 @@ docs/RESTART-WINDOW.md :: retarget :: | comment out `aclfile`, restart, fix, re-
 # fresh-eyes review: moved into BUS-HEALTH.md, these name rows of a table that stayed in STREAMS.md
 docs/STREAMS.md :: retarget :: The `info.changes` health row spent a while naming
 docs/STREAMS.md :: retarget :: Note the *permanently* in that row.
+
+# 2026-09-18 curation (STREAMS.md -> + NETWORK-PATHS.md, CONSUMER-REGISTRATIONS.md;
+# RESTART-WINDOW.md -> + INCIDENT-2026-09-10.md). CR finding 8: both source docs
+# were over the per-doc budget.
+#
+# AGENTS.md - the two index lines whose docs were split. NOT `index`: that warrant
+# is for a line extended in place, and these had to be rewritten - each described
+# content that is no longer in the doc it names. Keeping the old words to satisfy
+# a checker is the stale claim this skill exists against; the words themselves
+# survive in the new NETWORK-PATHS.md and INCIDENT-2026-09-10.md index lines.
+AGENTS.md :: retarget :: - [docs/STREAMS.md](docs/STREAMS.md) - which streams exist
+AGENTS.md :: retarget :: - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting
+# AGENTS.md - Layout line: the incident it named is now its own entry below it
+AGENTS.md :: retarget :: the cohort restart window, its identities, the 2026-09-10 incident

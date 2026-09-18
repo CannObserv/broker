@@ -175,7 +175,9 @@ old combined probe stayed in archiver with the table it queries.
 `tests/deploy/test_bus_health_units.py` pins that, the consumer-group
 abstention, and installed-copy parity.
 
-## A consumer that stopped reading (CannObserv/broker#20)
+## A consumer that stopped reading
+
+Provenance: CannObserv/broker#20.
 
 **A group whose consumer is gone was invisible to every other check here**, and
 the probe said so out loud: after the node's reboot on 2026-09-16

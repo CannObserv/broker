@@ -5,7 +5,10 @@
 # file never counted exactly or since drifted far from the size recorded here.
 8996 3678 AGENTS.md
 12428 5123 docs/ACL-CUTOVER.md
-20167 7674 docs/BUS-HEALTH.md
+26027 9771 docs/BUS-HEALTH.md
+3147 1217 docs/CONSUMER-REGISTRATIONS.md
+3058 1196 docs/INCIDENT-2026-09-10.md
+4137 1594 docs/NETWORK-PATHS.md
 21256 8383 docs/RECOVERY.md
 25476 10067 docs/RESTART-WINDOW.md
 6721 2633 docs/SKILLS.md

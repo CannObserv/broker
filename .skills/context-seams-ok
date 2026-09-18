@@ -62,3 +62,38 @@ deploy/redis.conf.broker :: docs/RESTART-WINDOW.md step 1a-bis is the runbook
 tests/deploy/test_live_acl_matches_tracked_acl.py :: ``docs/RESTART-WINDOW.md`` step 1d runs
 tests/deploy/test_live_acl_matches_tracked_acl.py :: docs/RESTART-WINDOW.md step 1d runs this suite
 tests/deploy/test_redis_acl.py :: That sequence is recorded in docs/RESTART-WINDOW.md
+
+# 2026-09-18 curation. The Code Exploration Policy block did NOT move in this
+# run - it is still the `## Code Exploration Policy` section of AGENTS.md, where
+# init-socraticode puts it - so a detail doc pointing back at it is describing
+# the surface correctly, not naming a stale location.
+docs/SOCRATICODE.md :: Detail doc for the `## Code Exploration Policy` block in `AGENTS.md`
+docs/SOCRATICODE.md :: heading down there, not in `AGENTS.md`
+docs/SOCRATICODE.md :: `AGENTS.md` block should be on its degraded variant
+#
+# The 2026-09-18 split seams, judged. STREAMS.md kept its stream inventory, its
+# participants TABLE and *Who drains a DLQ*; only the latency/DERP measurements
+# and the one-time reap left it. RESTART-WINDOW.md kept every step; only the
+# incident record left. So each reference below still points at content that is
+# where it says it is. The one that did not - RECOVERY.md's pointer at *Risk:
+# the tailnet relay* - was repointed at NETWORK-PATHS.md rather than acked.
+docs/ACL-CUTOVER.md :: in [STREAMS.md](STREAMS.md), *Participants, hosts and paths*
+docs/SOCRATICODE.md :: - `docs/STREAMS.md` claims who produces, consumes and drains each stream
+.socraticodecontextartifacts.json :: "path": "./docs/STREAMS.md"
+.socraticodecontextartifacts.json :: "path": "./docs/RESTART-WINDOW.md"
+deploy/redis-acl.conf :: # publish selector naming only what ../docs/STREAMS.md says it produces
+deploy/redis-acl.conf :: # issue a command onto it and cannot cap it. That is ../docs/STREAMS.md's
+deploy/redis-acl.conf :: # ../docs/STREAMS.md documents for a queue nobody claimed
+tests/deploy/test_redis_acl.py :: """``stream -> the service that produces it``, read off ../docs/STREAMS.md.
+tests/deploy/test_redis_acl.py :: The sharpest case is `content.replicate`, whose row in ../docs/STREAMS.md
+tests/deploy/test_redis_acl.py :: delivered and orphans the PEL entries naming them, so ../docs/STREAMS.md
+tests/deploy/test_redis_acl.py :: them. ../docs/STREAMS.md says it is never trimmed, and archiver's drain loop
+tests/deploy/test_memory_protection.py :: all of it under copy-on-write, the worst case ``docs/RESTART-WINDOW.md``
+docs/RECOVERY.md :: have no established bound (`docs/RESTART-WINDOW.md`, *Step 1d*)
+# The new docs' own provenance lines - a demotion naming where it came from.
+docs/CONSUMER-REGISTRATIONS.md :: [STREAMS.md](STREAMS.md); what the probe watches on them is
+docs/CONSUMER-REGISTRATIONS.md :: [BUS-HEALTH.md](BUS-HEALTH.md). Moved out of STREAMS.md when it ran past the
+docs/NETWORK-PATHS.md :: [STREAMS.md](STREAMS.md), *Participants, hosts and paths* - this is the
+docs/NETWORK-PATHS.md :: measurement half of that section, moved out when STREAMS.md ran past the
+docs/NETWORK-PATHS.md :: exact position with nothing pending ([RESTART-WINDOW.md](RESTART-WINDOW.md))
+docs/INCIDENT-2026-09-10.md :: [RESTART-WINDOW.md](RESTART-WINDOW.md). Moved out of it when that file ran

@@ -109,7 +109,7 @@ is set. That is why this is safe to do before the restart.
 ### Step 1a-bis - `BGREWRITEAOF` FIRST. This is not optional.
 
 **`databases 1` against this broker's AOF wipes db0.** Found the hard way on
-2026-09-10; the incident is recorded at the bottom of this file, and both the
+2026-09-10; the incident is recorded in [INCIDENT-2026-09-10.md](INCIDENT-2026-09-10.md), and both the
 failure and this fix are reproduced in a scratch instance rather than reasoned
 about.
 
@@ -132,7 +132,7 @@ step 4's rollback in [ACL-CUTOVER.md](ACL-CUTOVER.md) - and that step is repeate
 1d is done.
 
 The rewrite destroys the AOF history, which is what recovered the incident
-below. That is acceptable now that broker#4 ships an hourly snapshot to
+recorded there. That is acceptable now that broker#4 ships an hourly snapshot to
 `co-gcs-broker-backup`, with one step first. The backup job ships whatever
 `dump.rdb` is, and only a save point rewrites that file, so a snapshot shipped
 by hand is up to an hour old unless you take the save yourself - `default` is
@@ -399,52 +399,5 @@ data*).
 
 ---
 
-## Incident, 2026-09-10: `databases 1` wiped db0
-
-Recorded because the fix above is only credible with the failure beside it.
-
-**What happened.** `databases 1` and `aclfile` were added together and
-`redis-server` restarted at 00:46:21. The AOF replayed, `SELECT 15` failed, and
-the `FLUSHDB` this epic ran against db15 on 2026-09-08 executed against **db0**.
-The broker came up holding only what had been written since that flush.
-
-**Duration: 2 minutes 23 seconds.** 00:46:22 to 00:48:45, from restart to the
-rollback of `databases 1` being live.
-
-**The remnant matched the theory exactly**, which is what identified it:
-
-| Stream | before | during the incident | added since the 09-08 flush |
-|---|---|---|---|
-| `content.fetch` | 948 | **30** | 30 |
-| `content.blobs` | 948 | **30** | 30 |
-| `info.watch-status` | 29,076 | **1,304** | 1,304 |
-| `content.fetch-policy` | 28,750 | **978** | 978 |
-
-**Recovery was complete**, because the AOF is append-only and the history was
-never rewritten - removing `databases 1` and restarting replayed it correctly.
-All ten streams, all five consumer groups at their real positions, `lag 0` on
-every group, 27 `replicator:cmd:fetch:*` keys with TTLs intact, `db0: 37 keys /
-27 expires` - identical to the pre-incident state.
-
-**Three things nearly made it worse, and are worth carrying:**
-
-- **A background save clobbered the shutdown RDB.** `dump.rdb` was 5.1 MB (the
-  full pre-restart dataset) when first listed and 206 KB roughly a minute later,
-  because the degraded server hit a `save` point and overwrote it with the small
-  dataset. If the AOF had *also* been damaged, that minute was the whole recovery
-  window. **`CONFIG SET save ""` and `CONFIG SET auto-aof-rewrite-percentage 0`
-  are the first commands to run when a restart comes up wrong** - before
-  diagnosing anything - because both of the on-disk copies are being actively
-  overwritten while you think. Since step 4 only `default` can run them, which
-  is why a window is entered with `default` already re-enabled and left that
-  way until the verification is done.
-- **An AOF rewrite would have been unrecoverable.** `auto-aof-rewrite-min-size`
-  is 64 MB and the incr was 41 MB, so it did not fire. It was margin, not design.
-- **The probe reported nothing wrong.** Every threshold is an upper bound -
-  length caps, memory, DLQ depth - so a broker that has lost 96% of its entries
-  is, to this probe, a very healthy broker. See below.
-
-**A follow-up the probe should carry:** there is no check for a stream getting
-*shorter*. `XLEN` collapsing between ticks is not something a producer-capped
-stream does, and the state file already persists per-tick numbers, so the
-comparison is nearly free. Filed as its own issue.
+The 2026-09-10 incident this runbook is shaped by:
+[INCIDENT-2026-09-10.md](INCIDENT-2026-09-10.md).

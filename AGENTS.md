@@ -107,7 +107,13 @@ docs/BUS-HEALTH.md
                  the probe: per-stream contracts, stream and DLQ checks, loss detection
 docs/RECOVERY.md node loss: the backup, the restore, the rehearsal record
 docs/RESTART-WINDOW.md
-                 the cohort restart window, its identities, the 2026-09-10 incident
+                 the cohort restart window and its identities
+docs/INCIDENT-2026-09-10.md
+                 what `databases 1` did to db0, and the order that avoids it
+docs/NETWORK-PATHS.md
+                 measured latency per participant, its path, the DERP risk
+docs/CONSUMER-REGISTRATIONS.md
+                 the one-time orphan reap, and why it cannot recur
 docs/ACL-CUTOVER.md
                  the per-service credential cutover around that window
 docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
@@ -147,10 +153,13 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Detail Docs
 
-- [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each; non-stream keys; where each participant runs, its measured path to the broker, the DERP risk
+- [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each; non-stream keys; where each participant runs
+- [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - the measured latency from each participant, the path beside every number, and the accepted DERP risk
+- [docs/CONSUMER-REGISTRATIONS.md](docs/CONSUMER-REGISTRATIONS.md) - the one-time reap of orphaned consumer registrations, and why it cannot recur
 - [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
 - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record
-- [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook, symptoms, the 2026-09-10 incident
+- [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook and its symptom playbook
+- [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
 - [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, [deploy/README.md](deploy/README.md)
 - [docs/SKILLS.md](docs/SKILLS.md) - the vendored agent skills, their refresh hook, the context cadence
 - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) - semantic search over this repo and its four siblings: the tool table, the prefetch, graph health, index scope
