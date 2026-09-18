@@ -135,9 +135,11 @@ def test_the_units_name_the_group_read_the_probe_issues() -> None:
 
     These units state live rules, which is why the bare string is forbidden
     here and nowhere else. ``deploy/redis-acl.conf`` still says ``XPENDING``
-    twice and keeps it: those sentences narrate the 2026-09 ``EXISTS``
-    incident, where the two-tick rule genuinely was an ``XPENDING`` rule, and a
-    historical account is correct as written.
+    and keeps every one: two of those sentences narrate the 2026-09 ``EXISTS``
+    incident, where the two-tick rule genuinely was an ``XPENDING`` rule, and
+    the third names the triage query ``+xpending`` is held for (broker#32) - a
+    command an operator issues at a ``redis-cli``, which is a caller this unit
+    is not.
     """
     assert "XINFO GROUPS" in REPO_SERVICE.read_text()
     for path in (REPO_SERVICE, REPO_TIMER):
