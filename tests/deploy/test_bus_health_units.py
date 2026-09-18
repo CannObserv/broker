@@ -151,7 +151,7 @@ def test_the_notifier_credential_has_a_file_of_its_own() -> None:
     assert "Environment=NOTIFIER_API_KEY" not in text, "a credential never belongs in the unit"
 
 
-def test_the_units_name_the_group_read_the_probe_issues() -> None:
+def test_the_units_name_only_reads_the_probe_issues() -> None:
     """Both units describe a read the probe stopped issuing.
 
     Since CannObserv/broker#29 there is no ``XPENDING`` in the tick at all: a
