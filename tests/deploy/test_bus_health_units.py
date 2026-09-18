@@ -26,6 +26,31 @@ def _read_if_installed(path: Path) -> str | None:
         return None
 
 
+def _comment_block_holding(text: str, phrase: str) -> str:
+    """The contiguous run of ``#`` lines carrying ``phrase``.
+
+    A whole-file substring test cannot tell a rule stated from a rule deleted:
+    the words would still be somewhere in the unit. Anchoring to the block lets
+    the sentence be rewrapped - #31 moved a word between lines already - while
+    still failing if the sentence itself goes.
+    """
+    lines = text.splitlines()
+    matches = [i for i, line in enumerate(lines) if phrase in line]
+    assert len(matches) == 1, (
+        f"expected exactly one line holding {phrase!r}, found {len(matches)} - "
+        "a deleted sentence is the failure this helper exists to report, so it "
+        "says so rather than raising out of an unpack"
+    )
+    (index,) = matches
+    start = index
+    while start > 0 and lines[start - 1].startswith("#"):
+        start -= 1
+    end = index
+    while end + 1 < len(lines) and lines[end + 1].startswith("#"):
+        end += 1
+    return "\n".join(lines[start : end + 1])
+
+
 def test_service_is_a_oneshot_probe() -> None:
     text = REPO_SERVICE.read_text()
     assert "Type=oneshot" in text
@@ -145,7 +170,11 @@ def test_the_units_name_the_group_read_the_probe_issues() -> None:
     command an operator issues at a ``redis-cli``, which is a caller this unit
     is not.
     """
-    assert "XINFO GROUPS" in REPO_SERVICE.read_text()
+    rule = _comment_block_holding(REPO_SERVICE.read_text(), "must never join")
+    assert "XINFO GROUPS" in rule, (
+        "the sentence stating the rule is what has to name the read - a match "
+        "anywhere else in the unit would pass with the sentence deleted"
+    )
     for path in (REPO_SERVICE, REPO_TIMER):
         assert "XPENDING" not in path.read_text(), (
             f"{path.name} names a command the probe has not issued since broker#29"
