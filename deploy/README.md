@@ -118,6 +118,21 @@ redis-cli -u "$A" --no-auth-warning ACL SAVE                    # -> /etc/redis/
 # then mirror the same rule into deploy/redis-acl.conf, with its reason, and commit
 ```
 
+**`ACL SETUSER` ADDS; it does not replace.** `-xadd`, `clearselectors` and the
+like are how a rule comes *off*. The obvious shortcut - `ACL SETUSER <user>
+reset <the whole line>` - works and costs something that is not obvious: `reset`
+sets an explicit `sanitize-payload` flag that a user loaded from an aclfile does
+not carry, `ACL SAVE` then writes it into `/etc/redis/users.acl`, and
+`test_live_acl_matches_tracked_acl.py` goes red on a difference that is
+behaviourally nil (it is the default, stated; only `RESTORE` reads it, which no
+user here holds). **There is no keyword that clears it** - verified on a scratch
+7.0.15 - so the repair is `ACL DELUSER` and recreate, which terminates every
+connection authenticated as those users. Done during broker#14, pipelined into
+one `redis-cli` invocation so the gap was sub-millisecond: all three services
+reconnected, `ACL LOG` recorded no denial, and no group lost its position. Cheap
+here, but a disconnect is not nothing - prefer the delta rules, and keep `reset`
+for the case where the whole line is being re-declared anyway.
+
 **The third line is the one that gets skipped.** Until broker#11 nothing
 checked it, and it rested on someone remembering four times: eleven corrections
 during the broker#2 cutover, step 4 of the restart window, and broker#9's key
@@ -509,8 +524,10 @@ re-arms capture rather than leaving a gap. See
 The **disposal** step is `XDEL <queue> <id>`, per entry, and since broker#12
 each named drainer can do it for its own queues without an operator - a
 selector, `(+xdel ~<its own>.dlq)`, which cannot reach the stream the queue
-copies from. `brokeradmin` holds `(+xdel ~*.dlq)` as the backstop for a queue
-nobody claimed. Before that the only tool was `XTRIM MAXLEN 0`, which empties
+copies from. `brokeradmin` holds `(+xdel +xtrim ~*.dlq)` as the backstop for a
+queue nobody claimed - `+xtrim` joined that selector in broker#14, having been a
+root grant riding `~*`, where the one identity that can see every stream on the
+instance could also cap any of them. Before that the only tool was `XTRIM MAXLEN 0`, which empties
 the queue: on one that has reached 110 entries, removing a single triaged frame
 took the other 109 with it.
 

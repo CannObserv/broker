@@ -22,6 +22,7 @@ than as a property of the pattern list.
 import contextlib
 import fnmatch
 import re
+from pathlib import Path
 
 import pytest
 import redis as redis_pkg
@@ -40,7 +41,7 @@ from co_core.pure.adapters.bus.streams import (
     stream_kind,
 )
 
-from src.broker.bus_health import DLQ_DRAINERS
+from src.broker.bus_health import DLQ_DRAINERS, STREAM_CHECKS
 from tests.deploy.conftest import ACL_FILE, PASSWORD, SERVICE_USERS, parse_users, split_rules
 
 CANONICAL_STREAMS = frozenset(
@@ -67,6 +68,9 @@ NON_STREAM_PATTERNS = frozenset({"*", "*.dlq", "replicator:cmd:*", "probe.*", "r
 # upstream fails ``test_replicator_can_name_every_dedupe_namespace`` here rather
 # than wedging its loop on the node.
 COMMAND_STREAMS = tuple(s for s in sorted(CANONICAL_STREAMS) if stream_kind(s) == "command")
+
+#: The cluster stream inventory, whose producer column says who may publish what.
+STREAMS_MD = Path(__file__).resolve().parents[2] / "docs" / "STREAMS.md"
 
 # A stand-in for the ULID replicator puts in the last segment. Any value works -
 # what is under test is the namespace before it.
@@ -263,11 +267,158 @@ def test_a_dlq_writer_can_also_drain_it(users, user) -> None:
     """CannObserv/broker#1 Phase 5 moved DLQ triage from archiver to each
     stream's own consumer, and the draft predates that. Draining is *audit, back
     up, trim* - a user that can `XADD` a DLQ but not read or trim it can create a
-    queue it is then unable to empty."""
-    if not any(p.endswith(".dlq") for p in key_patterns(users[user])):
+    queue it is then unable to empty.
+
+    `+xtrim` is asked of the **selector** rather than of the root rules, since
+    broker#14 took it off every root permission set: on the root it applied to
+    every pattern the user holds, including the streams it only reads.
+    """
+    queues = [p for p in key_patterns(users[user]) if p.endswith(".dlq")]
+    if not queues:
         pytest.skip(f"{user} writes no DLQ")
-    for command in ("+xrange", "+xlen", "+xtrim", "+xinfo|stream"):
+    for command in ("+xrange", "+xlen", "+xinfo|stream"):
         assert command in users[user], f"{user} cannot drain its own DLQ: missing {command}"
+    trimmable = selector_patterns(users[user], "+xtrim")
+    for queue in queues:
+        assert admits(trimmable, queue), f"{user} cannot trim {queue}, which it writes"
+
+
+# --- what each service may PUBLISH (CannObserv/broker#14) ---
+#
+# A Redis ACL key pattern applies to every command the user holds, so until
+# broker#14 a root `+xadd` beside the patterns a service needs to *read* made
+# every consumer on this bus able to forge its own work. Measured against the
+# real ACL then: every stream but `info.changes` had exactly one unintended
+# writer, and it was always the consumer.
+
+PRODUCER_CELL = 1
+"""The ``Producer → consumer`` column of the *Streams on this broker* table."""
+
+
+def documented_producers() -> dict[str, str]:
+    """``stream -> the service that produces it``, read off ../docs/STREAMS.md.
+
+    Parsed rather than mirrored, for the reason
+    ``test_every_connected_participant_is_where_the_docs_say`` parses the
+    participants table: the inventory is what an operator reads, and a constant
+    beside it in this repo would be a second copy with nothing comparing them.
+    The producer is the left half of the ``Producer → consumer`` cell, with
+    markdown emphasis stripped - ``**Archiver** → Watcher *(consumer live)*``
+    names Archiver.
+    """
+    text = STREAMS_MD.read_text()
+    found: dict[str, str] = {}
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) <= PRODUCER_CELL:
+            continue
+        topic = cells[0].strip("`")
+        if topic not in CANONICAL_STREAMS or topic in found:
+            continue
+        producer = cells[PRODUCER_CELL].split("→")[0].strip(" *").lower()
+        assert producer in SERVICE_USERS, f"{topic}'s producer cell names {producer!r}"
+        found[topic] = producer
+    return found
+
+
+def test_the_inventory_names_a_producer_for_every_stream() -> None:
+    """Static, so a table this file can no longer read fails in CI rather than
+    silently reducing every assertion below to a no-op."""
+    assert set(documented_producers()) == set(CANONICAL_STREAMS)
+
+
+@pytest.mark.parametrize("user", SERVICE_USERS)
+def test_a_service_can_publish_exactly_the_streams_it_produces(users, user) -> None:
+    """The selector, checked against the inventory rather than against itself.
+
+    The sharpest case is `content.replicate`, whose row in ../docs/STREAMS.md
+    reads "**Never XTRIMmed by Archiver**". That carve-out lived in *archiver's*
+    source (`no_trim_topics`), so the broker permitted the one thing its own
+    inventory says must never happen - and both parties could do it: archiver
+    could trim the stream, and so could replicator, whose PEL entries would be
+    the ones orphaned.
+
+    Written as a denial as well as a grant, because a too-wide grant is the
+    mistake a pattern list cannot show you - the same reason the
+    archiver/`content.blobs` assertion is written that way.
+    """
+    producers = documented_producers()
+    publishable = selector_patterns(users[user], "+xadd")
+    for topic, producer in sorted(producers.items()):
+        if producer == user:
+            assert admits(publishable, topic), f"{user} produces {topic} and cannot publish it"
+        else:
+            assert not admits(publishable, topic), (
+                f"{user} can publish {topic}, which {producer} produces - "
+                f"{user} only consumes it, so this is a consumer that can forge its own work"
+            )
+
+
+@pytest.mark.parametrize("user", SERVICE_USERS)
+def test_a_service_can_publish_the_dead_letter_queues_it_writes(users, user) -> None:
+    """The other half of what a service writes, from the assignment that owns it.
+
+    ``DLQ_DRAINERS`` names the stream's own consumer, which is the same service
+    whose ``dead_letter()`` copies the frame into the queue - writer and drainer
+    are one role split into two words. Conditioned on holding the pattern, like
+    the `+xdel` test below: replicator is the prospective drainer of
+    `info.changes.dlq` and cannot name `info.changes` at all.
+    """
+    for dlq, drainer in sorted(DLQ_DRAINERS.items()):
+        if drainer != user or dlq not in key_patterns(users[user]):
+            continue
+        assert admits(selector_patterns(users[user], "+xadd"), dlq), (
+            f"{user} dead-letters into {dlq} and cannot write it"
+        )
+
+
+def test_no_user_holds_xadd_or_xtrim_on_its_root_permission_set(users) -> None:
+    """Publishing and capping are selector-scoped or they are not granted.
+
+    The rule `test_no_user_holds_xdel_on_its_root_permission_set` states for
+    deletion, applied to the other two commands that write. A root grant carries
+    the command onto **every** pattern the user holds, which is how a service
+    that must read a stream ends up able to publish to it.
+    """
+    for name, rules in users.items():
+        root, _ = split_rules(rules)
+        for command in ("+xadd", "+xtrim"):
+            assert command not in root, (
+                f"{name} holds {command} on its root permissions, which applies it to every "
+                f"key pattern the user has: {sorted(root_key_patterns(rules))}"
+            )
+
+
+def test_no_selector_can_trim_the_stream_the_inventory_never_trims(users) -> None:
+    """The assertion that replaces `no_trim_topics` in archiver's source.
+
+    Capping a command stream deletes commands the consumer group has not
+    delivered and orphans the PEL entries naming them, so ../docs/STREAMS.md
+    carves `content.replicate` out of the drain loop's trim set. Derived from
+    the probe's own inventory (`never_trimmed`) rather than named here, so a
+    second such stream is covered the day it is declared.
+    """
+    never_trimmed = [c.topic for c in STREAM_CHECKS if c.never_trimmed]
+    assert never_trimmed, "the probe's inventory carves out no stream - has the flag moved?"
+    for name, rules in users.items():
+        for topic in never_trimmed:
+            assert not admits(selector_patterns(rules, "+xtrim"), topic), (
+                f"{name} holds an +xtrim selector naming {topic}, which is never trimmed "
+                "by design - a cap there orphans undelivered commands"
+            )
+
+
+def test_replicator_can_set_only_its_dedupe_keys(users) -> None:
+    """`+set` moves the same way, which this file's own stanza asked for.
+
+    That stanza spent a while saying the shape was not closeable - "there is no
+    ACL grammar for this command on that pattern only" - which is true of
+    `%R~`/`%W~` and false of a selector. Until it moved, `+set` also landed on
+    every stream pattern on replicator's line, and `SET content.fetch <string>`
+    would have replaced a live stream with a string.
+    """
+    assert selector_patterns(users["replicator"], "+set") == {"replicator:cmd:*"}
+    assert "+set" not in split_rules(users["replicator"])[0]
 
 
 def test_default_is_declared_disabled_and_still_carries_a_password(users) -> None:
@@ -519,11 +670,91 @@ def test_archiver_is_refused_content_blobs_but_served_its_own_streams(tracked_ac
     documentation nobody could enforce. Here the broker refuses it. A key-pattern
     denial is also the quieter of the two ACL mistakes, so it is the one worth an
     end-to-end assertion.
+
+    The stream it *is* served is `info.changes`, which it produces. This test
+    used `content.revisions` until broker#14 and passed - archiver consumes that
+    stream and could publish to it, which is the whole shape broker#14 closed:
+    the denial half of this test was real, and the grant half was the bug next
+    to it.
     """
     client = tracked_acl_broker("archiver")
-    assert client.xadd(CONTENT_REVISIONS, {"k": "v"})
+    assert client.xadd(INFO_CHANGES, {"k": "v"})
     with pytest.raises(redis_pkg.exceptions.NoPermissionError):
         client.xadd(CONTENT_BLOBS, {"k": "v"})
+    with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+        client.xadd(CONTENT_REVISIONS, {"k": "v"})
+
+
+@pytest.mark.parametrize("user", SERVICE_USERS)
+def test_a_service_is_served_the_streams_it_produces_and_refused_the_rest(
+    tracked_acl_broker, user
+) -> None:
+    """broker#14 with redis's own matcher instead of ``fnmatch``.
+
+    Both halves on every canonical stream, because the two mistakes fail
+    differently: a selector that is too narrow produces `NOPERM`, which all
+    three participants classify transient, so a publisher backs off and an
+    operator widens the grant live with one `ACL SETUSER` - loud and
+    recoverable. A selector that is too wide is silent forever, and is the
+    condition that existed here until this test did.
+    """
+    client = tracked_acl_broker(user)
+    producers = documented_producers()
+    for topic, producer in sorted(producers.items()):
+        if producer == user:
+            assert client.xadd(topic, {"k": "v"}), f"{user} produces {topic} and was refused"
+        else:
+            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+                client.xadd(topic, {"k": "v"})
+
+
+def test_nobody_can_trim_the_stream_that_is_never_trimmed(tracked_acl_broker, users) -> None:
+    """The assertion that replaces a carve-out in another repository's source.
+
+    `content.replicate` is a command stream: an `XTRIM` there deletes commands
+    the consumer group has not been delivered and orphans the PEL entries naming
+    them. ../docs/STREAMS.md says it is never trimmed, and archiver's drain loop
+    keeps `no_trim_topics` to honour that - one participant's convention, in a
+    repo the broker does not see, for a stream two participants could both cap.
+
+    Over every enabled user rather than the two that touch the stream, because
+    the interesting failure is a grant arriving on a user nobody was thinking
+    about. `default` is excluded by being `off`: it is declared `+@all` and
+    cannot authenticate, and the day it is re-enabled for a window is a day the
+    runbook already treats as break-glass.
+    """
+    trimmable = [c.topic for c in STREAM_CHECKS if c.never_trimmed]
+    assert trimmable, "the probe's inventory carves out no stream - has the flag moved?"
+    with _seeder(tracked_acl_broker) as seeder:
+        for topic in trimmable:
+            seeder.xadd(topic, {"k": "v"})
+    for name, rules in sorted(users.items()):
+        if "off" in rules:
+            continue
+        client = tracked_acl_broker(name)
+        for topic in trimmable:
+            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+                client.xtrim(topic, maxlen=0)
+
+
+def test_replicator_cannot_replace_a_stream_with_a_string(tracked_acl_broker) -> None:
+    """What `+set` cost while it sat on the root permission set.
+
+    A key pattern applies to every command the user holds, so `+set` landed on
+    every stream pattern on replicator's line too - and `SET content.fetch
+    <string>` replaces a live stream, its groups and their PELs with a string.
+    Nothing in replicator issues `SET` against a topic; the selector is what
+    makes that a property of the broker rather than of the client's source.
+    """
+    client = tracked_acl_broker("replicator")
+    # A command id of its own: the server is module-scoped and replicator holds
+    # no `+del`, so a key written here would still be there when the dedupe test
+    # below asks its own `SET .. NX` to return True.
+    key = dedupe_key(CONTENT_FETCH, "01ARZ3NDEKTSV4RRFFQ69G5NOT")
+    assert client.set(key, "x", nx=True, ex=60) is True
+    for topic in sorted(CANONICAL_STREAMS):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            client.set(topic, "clobbered")
 
 
 @pytest.mark.parametrize("user", SERVICE_USERS)
