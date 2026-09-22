@@ -50,7 +50,7 @@ boot by replaying from `0-0`, so the floor is "at least one full snapshot plus
 the deltas since" - a consumer contract, not operator housekeeping. It is
 capped on every publish via `BusPublish.maxlen` (`ARCHIVER_REGISTRY_STREAM_MAXLEN`,
 default 50k, sized from key count × sets retained - never from the
-`info.changes` number) and **`XTRIM`med by nobody**: not archiver's drain loop,
+`info.changes` number) and **`XTRIM`med by nobody** - not archiver's drain loop,
 and not a person at a `redis-cli`: `brokeradmin` trims `*.dlq` keys only
 (CannObserv/broker#34). Snapshot period: `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL`,
 default 3600s; operator republish-now: `POST
