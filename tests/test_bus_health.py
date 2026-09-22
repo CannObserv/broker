@@ -432,8 +432,8 @@ def test_behind_a_held_delivery_is_not_called_a_stopped_reader() -> None:
     assert finding.check == "group-undelivered"
     assert "healthy 0" not in finding.message
     assert "stopped READING" not in finding.message
-    assert "holds 1 delivered" in finding.message
-    assert "replicator#98" in finding.message
+    assert "Pending is 1 - delivered and not acked" in finding.message
+    assert "replicator's shape: CannObserv/replicator#98" in finding.message
     assert "XPENDING t g - + 10" in finding.message
 
 
@@ -731,7 +731,7 @@ async def test_collect_words_the_finding_by_the_pending_count_it_already_read(fa
 
     findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     (finding,) = [f for f in findings if f.check == "group-undelivered"]
-    assert "holds 1 delivered" in finding.message
+    assert "Pending is 1 - delivered and not acked" in finding.message
     assert "stopped READING" not in finding.message
 
 

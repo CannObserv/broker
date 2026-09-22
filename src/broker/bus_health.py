@@ -809,10 +809,10 @@ def evaluate_undelivered(
         )
     else:
         body = (
-            f"The group holds {pending} delivered and not acked, so its consumer took delivery "
-            "and has not read since: inside one long handler, re-claiming its own retry "
-            "instead of reading (CannObserv/replicator#98), or gone while holding it. A "
-            "connected consumer is not the all-clear here; run "
+            f"Pending is {pending} - delivered and not acked - so the group's consumer took "
+            "delivery and has not read since: inside one long handler, re-claiming its own "
+            "retry instead of reading (replicator's shape: CannObserv/replicator#98), or gone "
+            "while holding it. A connected consumer is not the all-clear here; run "
             f"`XPENDING {check.topic} {check.pending_group} - + 10` twice - a delivery count "
             "that climbs is a consumer alive and retrying"
         )
