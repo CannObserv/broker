@@ -85,3 +85,8 @@ AGENTS.md :: retarget :: `docs/BUS-HEALTH.md`, *`noeviction` is load-bearing bey
 docs/BUS-HEALTH.md :: retarget :: which is the healthy value. The two-tick rule above catches a consumer wedged
 docs/BUS-HEALTH.md :: retarget ::    `pending` count and the group names the checks above read out of the same
 docs/BUS-HEALTH.md :: retarget :: **A group whose consumer is gone was invisible to every other check here**, and
+# CR 13: the preamble claimed this file expands STREAMS.md's `Producer
+# durability under OOM` column. That expansion IS the section this run moved,
+# so the sentence became false the moment it left.
+docs/BUS-HEALTH.md :: retarget :: `Health primitive` and `Producer durability under OOM` columns this file expands.
+docs/BUS-HEALTH.md :: retarget :: The probe's `backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s.

@@ -3,8 +3,9 @@
 What the bus-health probe watches, the per-stream contracts it holds each stream
 to, and what it cannot see. Which stream is which, who produces and consumes it,
 and who drains its DLQ is [STREAMS.md](STREAMS.md) - including the table whose
-`Health primitive` and `Producer durability under OOM` columns this file expands.
-The probe's `backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s.
+`Health primitive` column this file expands. Its `Producer durability under OOM`
+column is expanded in [MEMORY-PROTECTION.md](MEMORY-PROTECTION.md); the probe's
+`backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s.
 
 Moved out of STREAMS.md on 2026-09-11, when the two together ran past the
 per-doc context budget.
