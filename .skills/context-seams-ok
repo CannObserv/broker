@@ -135,3 +135,8 @@ src/broker/bus_health.py :: tail = 'See docs/BUS-HEALTH.md, "The bus-health prob
 tests/test_bus_health.py :: set sizes docs/BUS-HEALTH.md says it was measured at, so the claim there
 tests/test_bus_health.py :: named on each (docs/BUS-HEALTH.md, "Mirrored constants")."""
 tests/test_bus_health.py :: three causes (docs/BUS-HEALTH.md), and a message asserting it would send
+# CR 10-11 (same run): the two pointers rewritten to name BUS-HEALTH.md by
+# hand, where the two-tick pending rule and the checks sharing the XINFO GROUPS
+# reply both stayed. New back-references, and correct ones.
+docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md) catches a consumer wedged
+docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md) read out of the same
