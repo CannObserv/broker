@@ -171,22 +171,26 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # own value on its row: that schedule's period plus margin, with the source
 # named the way a mirrored constant names its owner.
 #
-# **A LONG-RUNNING HANDLER PRESENTS AS A CONSUMER THAT STOPPED READING, and the
-# measurement behind this number is a `content.fetch` one** (CR 2). A blocking
-# reader is not reading while it is inside a handler, so a queued entry ages for
-# as long as the entry before it takes to process. That is harmless where the
-# handler is a fetch or a database write - seconds - and it is an open question
-# on `content.replicate`, whose handler writes bytes into a permanent store and
-# whose per-command duration this repo has never measured. Sized from the wrong
-# stream, this threshold would report a busy consumer as a gone one, which is
-# the cry-wolf failure every other threshold here is sized to avoid.
+# **Sized against the slowest handler on the node, not only the fastest**
+# (CannObserv/broker#30). A blocking reader is not reading while it is inside a
+# handler - replicator's loop reads `count=1`, handles, acks, then reads again,
+# with no prefetch - so a queued entry ages for as long as the entries ahead of
+# it take. The 14:18 bracket above is a `content.fetch` one. Replicator timed
+# `content.replicate`'s whole handler against production-shaped GCS in
+# CannObserv/replicator#96: ~0.25 s at both p50 and p95 on today's corpus, and
+# 5.4 s for a blob at the 64 MiB `REPLICATOR_MAX_BLOB_BYTES` ceiling. Five
+# minutes is ~55x that worst case, so the replicate row keeps the shared value
+# on a measurement rather than by default.
 #
-# Not guessed at a larger number instead: a threshold with no owner is what the
-# `content.blobs` rule exists against. The measurement belongs to replicator and
-# is asked for in CannObserv/replicator#96; `content.replicate` keeps the shared
-# value until it arrives - the safe direction, since a false WARN on a stream
-# that has carried three entries in its life is cheap and a missed one on a
-# command stream is not.
+# What no duration sizes is a consumer alive and not reading. Replicator names
+# two: one stalled-provider attempt (a 30 s download and a 120 s create timeout,
+# each with the SDK's retry deadline on top - inside five minutes, not by much),
+# and CannObserv/replicator#98, where recovery re-claims its own failing entry
+# every cycle and never issues XREADGROUP. The second is a state, not a
+# duration, and to a positional check it looks like a gone consumer. Both hold
+# a delivered entry, which the 2026-09-16 consumer did not, so
+# `evaluate_undelivered` words the finding by the group's pending count - read
+# from the same reply as its position - instead of naming a stopped reader.
 GROUP_WARN_UNDELIVERED_AGE_SECONDS = 300.0
 
 # Every length threshold is its stream's retention cap plus this margin, so a

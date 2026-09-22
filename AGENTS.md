@@ -151,10 +151,10 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   produces - landed 2026-09-18 and is live on the node.
   #29 - one `XINFO GROUPS` per grouped stream for the position, the pending
   count and the group's existence - landed 2026-09-18.
-- Open follow-ons: CannObserv/replicator#96 (how long a `content.replicate`
-  handler takes - the undelivered threshold is sized from a `content.fetch`
-  measurement), CannObserv/archiver#234 (whether archiver ever `XTRIM`s
-  `info.registry`, which its ACL selector still permits).
+- Open follow-ons: CannObserv/replicator#98 (recovery re-claiming its own
+  failing retry starves `XREADGROUP` - a live consumer the undelivered check
+  can only word, not tell from a gone one), CannObserv/archiver#234 (whether
+  archiver ever `XTRIM`s `info.registry`, which its ACL selector still permits).
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
 - CannObserv/archiver#196 - archiver's half of the OOM seam, repointed after the
   cap moved to `deploy/redis.conf.broker`
