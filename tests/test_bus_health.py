@@ -392,9 +392,11 @@ def test_positions_are_compared_as_numbers_not_strings() -> None:
 def test_behind_and_holding_nothing_is_a_stopped_reader() -> None:
     """The 2026-09-16 shape: behind, and nothing delivered is outstanding.
 
-    A consumer inside a handler holds the entry it is handling - the loops on
-    this node read, handle, then ack - so a pending count of 0 means nothing is
-    in flight, and what is left to explain the age is a consumer not reading.
+    A consumer that acks after handling holds the entry it is handling, so for
+    one a pending count of 0 means nothing is in flight, and what is left to
+    explain the age is a consumer not reading. Replicator's does
+    (CannObserv/replicator#96); archiver's and watcher's are not measured here,
+    and one that acked first would be busy at 0.
     """
     now_ms = 10_000_000
     (finding,) = evaluate_undelivered(

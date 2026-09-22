@@ -767,8 +767,9 @@ def evaluate_undelivered(
     for is one this repo has no opinion about yet.
 
     ``pending`` words the finding, and never decides it. A group holding
-    nothing has nothing in a handler, so its consumer has stopped reading. A
-    group holding a delivery has a consumer that took one and has not read
+    nothing has nothing in a handler - for a consumer that acks after handling,
+    as replicator's does (CannObserv/replicator#96) - so its consumer has
+    stopped reading. A group holding a delivery has a consumer that took one and has not read
     since - inside one long attempt, re-claiming its own retry instead of
     reading (CannObserv/replicator#98), or gone while holding it. The position
     cannot tell those apart, and the message says so rather than naming the
