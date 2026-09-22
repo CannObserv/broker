@@ -85,7 +85,7 @@ Per tick it probes:
   fact streams on archiver's operator-side `XTRIM`
   (`ARCHIVER_REDIS_STREAM_MAXLEN`), 55k for `info.registry` (capped on publish
   instead, `ARCHIVER_REGISTRY_STREAM_MAXLEN`), and for the two LWW streams
-  `max(550, 11 x the set Watcher republishes)` - 550 while the sets are small,
+  `max(500, 10 x the set Watcher republishes)` + 10% - the 550 while the sets are small,
   which is the state the node is in today, and the floor past ~50 entries per
   set. See *Mirrored constants* and *The one cap that is read, not mirrored*
   below. `content.replicate` is the exception: never trimmed by design, so its
@@ -441,27 +441,20 @@ higher - and a standing WARN with the wrong cause trains an operator to ignore
 the LWW rows, which is the blindness CannObserv/broker#40 closed
 (CannObserv/broker#44).
 
-**The third term cannot be mirrored.** It is the size of Watcher's corpus. It
-changes with no edit anywhere, which is precisely the failure a mirror cannot be
-made to cover - `info.watch-status` carries one entry per `info_item_id` and
-Watcher's own comment on the constant expects the floor to take over "as the
-registry fills". So the probe reads it (`republished_set_size`) instead:
+**The third term cannot be mirrored.** It is the size of Watcher's corpus, it
+changes with no edit anywhere, and that is precisely the failure a mirror cannot
+cover. So `republished_set_size` reads it off one `XINFO STREAM` reply - the one
+the length and age checks already make - as `length / the republishes the span
+holds`. Three properties carry it:
 
-- **off one `XINFO STREAM` reply**, the same one the length and the last-entry
-  age come out of, so it costs no round trip and is one observation rather than
-  two ticks apart - the argument CannObserv/broker#13 and #29 already made about
-  this probe's reads;
-- **as `length / the republishes the span holds`**, which is entries per
-  republish *whether or not the cap is being applied*: an untrimmed stream grows
-  its span in step with its length, so a broken cap still climbs through the
-  threshold rather than carrying it along;
-- **rounded up, twice.** The oldest retained entries are a partial set
-  (`MAXLEN ~` drops whole macro nodes, not whole republishes), and the division
-  charges that fragment to the whole sets; the remainder is then ceilinged. Up
-  can only delay reporting a real breach by a tick or two. Down would invent
-  one, which is the bug being fixed;
-- **never downward.** `max(mirrored, floor)` is Watcher's rule and the probe's:
-  a reading can raise the threshold above 550 and never lower it.
+- it is entries per republish **whether or not the cap is applied**, because an
+  untrimmed stream grows its span in step with its length, so a broken cap still
+  climbs through the threshold instead of carrying it along;
+- it **rounds up twice** - the oldest retained entries are a partial set, and
+  the division charges that fragment to the whole ones before the remainder is
+  ceilinged. Up delays a real breach by a tick or two; down would invent one;
+- it **never lowers the threshold**: `max(default, floor)` is Watcher's rule and
+  the probe's.
 
 **What it reads on this node.** Measured 2026-09-22, against the live broker as
 `brokeradmin` - `XINFO STREAM` is the read the length and age checks already
