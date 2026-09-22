@@ -538,7 +538,7 @@ def test_no_user_holds_xadd_or_xtrim_on_its_root_permission_set(users) -> None:
             )
 
 
-def test_no_selector_can_trim_the_stream_the_inventory_never_trims(users) -> None:
+def test_no_selector_can_trim_a_stream_the_inventory_never_xtrims(users) -> None:
     """The assertion that replaces `no_trim_topics` in archiver's source.
 
     Capping a command stream deletes commands the consumer group has not
@@ -970,7 +970,7 @@ def test_a_service_is_served_the_streams_it_produces_and_refused_the_rest(
                 client.xtrim(topic, maxlen=0)
 
 
-def test_nobody_can_trim_the_stream_that_is_never_trimmed(tracked_acl_broker, users) -> None:
+def test_nobody_can_xtrim_a_stream_the_inventory_never_xtrims(tracked_acl_broker, users) -> None:
     """The assertion that replaces a carve-out in another repository's source.
 
     `content.replicate` is a command stream: an `XTRIM` there deletes commands
