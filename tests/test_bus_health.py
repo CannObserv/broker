@@ -30,6 +30,7 @@ from co_core.pure.adapters.bus.streams import (
     CONTENT_REVISIONS,
     INFO_CHANGES,
     INFO_REGISTRY,
+    INFO_WATCH_STATUS,
     StreamKind,
     dlq_name,
     stream_kind,
@@ -45,6 +46,7 @@ from src.broker.bus_health import (
     DISK_WARN_MIN_FREE_BYTES,
     FACT_PRODUCER_MAXLEN,
     FACT_WARN_LENGTH,
+    LWW_PRODUCER_MAXLEN,
     REGISTRY_PRODUCER_MAXLEN,
     STREAM_CHECKS,
     StreamCheck,
@@ -548,6 +550,25 @@ def test_fact_stream_threshold_tracks_the_operator_xtrim_cap() -> None:
     make it two."""
     assert _check_for(INFO_CHANGES).warn_length == with_margin(FACT_PRODUCER_MAXLEN)
     assert FACT_WARN_LENGTH > FACT_PRODUCER_MAXLEN
+
+
+@pytest.mark.parametrize("topic", [CONTENT_FETCH_POLICY, INFO_WATCH_STATUS])
+def test_lww_threshold_catches_the_backlog_its_cap_was_cut_for(topic: str) -> None:
+    """A cap lowered at home and not here does not fail safe
+    (CannObserv/broker#40).
+
+    Under the old 50k cap `content.fetch-policy` reached 29,770 entries, and
+    replicator#85 measured a 950 s boot replay; watcher#292 cut both LWW caps to
+    500 for it. A threshold still derived from 50k sat at 55k and would have let
+    a broken cap climb through that whole range unreported. The other half: the
+    node read 511 under `MAXLEN ~ 500` on 2026-09-22, so the margin has to
+    absorb one macro node of approximate-trim overshoot.
+    """
+    check = _check_for(topic)
+    assert check.warn_length == with_margin(LWW_PRODUCER_MAXLEN)
+    (finding,) = evaluate_stream(check, length=29_770, last_entry_ms=None, now_ms=0)
+    assert finding.check == "stream-length"
+    assert evaluate_stream(check, length=511, last_entry_ms=None, now_ms=0) == []
 
 
 def test_never_trimmed_stream_does_not_claim_a_broken_cap() -> None:
