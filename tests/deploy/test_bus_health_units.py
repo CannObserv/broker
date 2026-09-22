@@ -6,15 +6,22 @@ repo copy (runs everywhere) and for byte-parity against ``/etc/systemd/system/``
 (skips on hosts that do not run the timer).
 """
 
+import re
 from pathlib import Path
 
 import pytest
 
-_DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
+_ROOT = Path(__file__).resolve().parents[2]
+_DEPLOY = _ROOT / "deploy"
 REPO_SERVICE = _DEPLOY / "broker-bus-health.service"
 REPO_TIMER = _DEPLOY / "broker-bus-health.timer"
 INSTALLED_SERVICE = Path("/etc/systemd/system/broker-bus-health.service")
 INSTALLED_TIMER = Path("/etc/systemd/system/broker-bus-health.timer")
+PROBE_SOURCE = _ROOT / "src" / "broker" / "bus_health.py"
+# The file the probe shares with the operator: 0640 root:exedev, so readable by
+# the account these tests run as, by design.
+SHARED_ENV = Path("/etc/broker/.env")
+WHEELHOUSE_KEY = "GOOGLE_APPLICATION_CREDENTIALS"
 
 
 def _read_if_installed(path: Path) -> str | None:
@@ -53,6 +60,14 @@ def _comment_block_holding(text: str, phrase: str) -> str:
 
 def _directive(text: str, key: str) -> list[str]:
     return [ln.split("=", 1)[1] for ln in text.splitlines() if ln.startswith(f"{key}=")]
+
+
+def _variables_the_probe_reads() -> set[str]:
+    """Every name ``src/broker/bus_health.py`` looks up in its environment."""
+    source = PROBE_SOURCE.read_text()
+    return set(re.findall(r'os\.(?:environ\.get|getenv)\(\s*"(\w+)"', source)) | set(
+        re.findall(r'os\.environ\[\s*"(\w+)"\s*\]', source)
+    )
 
 
 def test_service_is_a_oneshot_probe() -> None:
@@ -198,3 +213,46 @@ def test_the_unit_loads_environment_only_from_etc_broker() -> None:
     assert files, "the probe needs BROKER_REDIS_URL from somewhere"
     stray = [f for f in files if not f.startswith("/etc/broker/")]
     assert not stray, f"environment files outside /etc/broker/: {stray}"
+
+
+def test_the_unit_unsets_the_wheelhouse_key() -> None:
+    """``GOOGLE_APPLICATION_CREDENTIALS`` is the operator's, not the probe's
+    (CannObserv/broker#37).
+
+    It shares ``/etc/broker/.env`` with ``BROKER_REDIS_URL`` so the manual sync
+    is one ``source`` away. The unit has no use for it: ``uv run`` resolves
+    ``co-core`` from ``./.wheelhouse``, a local directory, and the probe imports
+    no storage SDK. Unset rather than split into a second file, so the operator's
+    command stays what AGENTS.md says it is.
+    """
+    unset = " ".join(_directive(REPO_SERVICE.read_text(), "UnsetEnvironment")).split()
+    assert WHEELHOUSE_KEY in unset
+    assert WHEELHOUSE_KEY not in _variables_the_probe_reads(), (
+        "the probe now reads the key it unsets - it would start without it"
+    )
+
+
+def test_every_variable_the_probe_inherits_is_one_it_reads() -> None:
+    """The credential form of the ACL's grant rule, checked on the live file.
+
+    ``/etc/broker/.env`` is edited on the node, not in this repo, so a variable
+    added there reaches the probe with nothing in review to notice. Each name it
+    assigns is either read by ``src/broker/bus_health.py`` or unset by the unit.
+    Names only: no value leaves the file, pass or fail.
+    """
+    try:
+        text = SHARED_ENV.read_text()
+    except FileNotFoundError:
+        pytest.skip(f"{SHARED_ENV} not present - not the node")
+    assigned = {
+        line.split("=", 1)[0].strip()
+        for line in text.splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+    unset = set(" ".join(_directive(REPO_SERVICE.read_text(), "UnsetEnvironment")).split())
+    unused = sorted(assigned - unset - _variables_the_probe_reads())
+    assert not unused, (
+        f"{SHARED_ENV} hands the probe variables it never reads: {unused}. "
+        "Read it in src/broker/bus_health.py, or add it to the unit's "
+        "UnsetEnvironment= and say whose it is"
+    )

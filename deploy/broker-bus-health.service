@@ -10,12 +10,20 @@ Type=oneshot
 User=exedev
 WorkingDirectory=/home/exedev/broker
 
-# BROKER_REDIS_URL and GOOGLE_APPLICATION_CREDENTIALS (for the wheelhouse the
-# ExecStart's `uv run` resolves against).
+# BROKER_REDIS_URL. The file also carries GOOGLE_APPLICATION_CREDENTIALS, the
+# read-only co-pypi-reader key, and that one is the OPERATOR'S: it is what the
+# manual wheelhouse sync in AGENTS.md authenticates with, and it shares this
+# file so that sync is one `source` away. No unit runs the sync. This one has no
+# use for the key - `uv run` resolves co-core from ./.wheelhouse, a local
+# directory, and the probe imports no storage SDK - so it is unset rather than
+# inherited (CannObserv/broker#37).
 #
-# Nothing from the dev tree's .env. It carries the cohort's GitHub tokens and an
-# Anthropic key, none of which the probe reads (CannObserv/broker#37).
+# Nothing from the dev tree's .env either. It carries the cohort's GitHub
+# tokens and an Anthropic key, none of which the probe reads.
+# tests/deploy/test_bus_health_units.py checks every name /etc/broker/.env
+# assigns is one the probe reads or one this unit unsets.
 EnvironmentFile=/etc/broker/.env
+UnsetEnvironment=GOOGLE_APPLICATION_CREDENTIALS
 
 # NOTIFIER_MONITOR_ID and NOTIFIER_API_KEY (CannObserv/broker#3), in a file of
 # their own at 0400 root:root - NOT in /etc/broker/.env, which is 0640
