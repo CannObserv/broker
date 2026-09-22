@@ -65,7 +65,11 @@ silently corrupts values.
   (broker#13) and `+xpending` (broker#32, after #29) are both kept deliberately.
   The stanza above the rule in `deploy/redis-acl.conf` has to say which caller,
   and `tests/deploy/test_redis_acl.py` fails when one does not. Record it or cut
-  it; do not leave it to read as residue.
+  it; do not leave it to read as residue. Archiver's unused DLQ disposals are
+  held the same way (CannObserv/archiver#238). The inverse is withheld on
+  purpose: `brokeradmin`'s `+xtrim` stops at `~*.dlq`, the only thing keeping an
+  operator off a **Never XTRIMmed** stream (broker#34). Do not widen it in an
+  incident.
 - **The backup holds no Redis credential, and its identity cannot delete.**
   `broker-backup.service` reads `dump.rdb` - the server's own atomic snapshot -
   and creates objects under `objectCreator` + `objectViewer`; retention is the
