@@ -750,9 +750,14 @@ def republished_set_size(
     partial-replay failure ``RETAINED_FULL_SETS`` exists to prevent, so the one
     republish such a window holds is a complete one and ``length`` is the set.
 
-    The direction it fails in is a **gap**. Republishes that did not happen are
-    counted as if they had, so the set reads low and the threshold with it - the
-    warns-early direction, not the quiet one.
+    What it fails on is a window that is **not uniform** - the reading assumes
+    every republish in it was the same size and arrived on time. Both ways that
+    breaks read the set low, which is the warns-early direction, not the quiet
+    one: a **gap**, where republishes that did not happen are counted as if they
+    had, and a **set that changed size**, where the window holds two sizes and
+    the reading averages them. The second is the one watcher's comment on
+    ``RETAINED_FULL_SETS`` tells us to expect, though only a step change moves
+    it - an item at a time never does.
 
     **It absorbs exactly one missed republish**, and by a hair: at
     ``retained_full_sets`` of 10 the margin is worth ``11/11`` of the reading a
@@ -760,9 +765,11 @@ def republished_set_size(
     republishes warn, at every set size. That is ten minutes of silence, under
     the fifteen ``LWW_WARN_LAST_ENTRY_AGE_SECONDS`` needs, so between the two
     there is a window where this reports a broken cap with no ``stream-age``
-    finding beside it naming the real cause - bounded (it trims out within
-    ``retained_full_sets`` periods) and reachable only once a set is past 50
-    entries, but not covered. CannObserv/broker#45.
+    finding beside it naming the real cause. A set that doubles costs about six
+    ticks the same way. Both are bounded - the old window trims out within
+    ``retained_full_sets`` periods - and both are unreachable until a set passes
+    50 entries, so they are recorded rather than covered: CannObserv/broker#45,
+    and docs/BUS-HEALTH.md for the measured tables.
     """
     span_seconds = (last_entry_ms - first_entry_ms) / 1000.0
     whole_sets = round(span_seconds / floor.republish_period_seconds)

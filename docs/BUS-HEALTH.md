@@ -476,10 +476,14 @@ One over the true set in both rows, which is the rounding working: the reading
 is an upper bound on the set and therefore on the cap, and at these sizes it
 changes nothing at all - `10 x 5` is far under 500.
 
-**It fails on a gap.** Republishes that did not happen are counted as if they
-had, so the set reads low and the threshold with it - the warns-early direction,
-not the quiet one. Measured at set sizes from 62 to 1,000, the behaviour is the
-same at all of them:
+**It fails on a window that is not uniform.** The reading assumes every
+republish in the retained window was the same size and arrived on time. Two
+things break that, and both read the set *low* - the warns-early direction, not
+the quiet one.
+
+**A gap**, first: republishes that did not happen are counted as if they had.
+Measured at set sizes from 62 to 1,000, the behaviour is the same at all of
+them:
 
 | Missed republishes | Reading | Length finding |
 |---|---|---|
@@ -491,9 +495,30 @@ same at all of them:
 So one missed republish is absorbed and two are not, while `stream-age` waits
 for three (`LWW_WARN_LAST_ENTRY_AGE_SECONDS`, 15 min). The ten-minute gap
 between those is a window where this check reports a broken cap and nothing
-beside it names the real cause. It is bounded - the gap trims out within
-`RETAINED_FULL_SETS` periods - and unreachable until a set passes 50 entries,
-which is why it is recorded rather than closed: CannObserv/broker#45.
+beside it names the real cause.
+
+**A set that changes size** is the second, and it is the one Watcher's own
+comment on `RETAINED_FULL_SETS` tells us to expect - the window then holds sets
+of two sizes and the reading averages them. Simulated against a retained window
+trimming at `max(500, 10 x set)`, for a set that jumps in a single republish:
+
+| Jump | False WARNs |
+|---|---|
+| 1.10x, 1.25x | none - absorbed |
+| 1.50x | 4 ticks (~20 min) |
+| 2x | 6 ticks (~30 min) |
+| 3x and above | 7 ticks (~35 min) |
+
+Growth that *accumulates* - an item at a time, the way a registry fills - never
+trips it: the two sizes in the window differ by too little to move the average
+past the margin. It takes a step change, which on this cluster means a bulk
+import or a restore.
+
+Both are bounded the same way: the old window trims out within
+`RETAINED_FULL_SETS` periods, so neither is standing the way
+CannObserv/broker#44's was, and neither is reachable until a set passes 50
+entries. That is why they are recorded rather than closed:
+CannObserv/broker#45.
 
 A period *lengthened* at home and not here reads the same way, permanently
 rather than transiently, and is the same mirror failure as any other row in the
