@@ -94,3 +94,9 @@ docs/BUS-HEALTH.md :: retarget :: **A group whose consumer is gone was invisible
 # so the sentence became false the moment it left.
 docs/BUS-HEALTH.md :: retarget :: `Health primitive` and `Producer durability under OOM` columns this file expands.
 docs/BUS-HEALTH.md :: retarget :: The probe's `backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s.
+# CR 16: two "see below" pointers that now reached a redirect stub rather than
+# the argument they promised. Named at the destination doc instead; the stubs
+# stay as landing spots for the old section names.
+docs/BUS-HEALTH.md :: retarget :: (see below). All from the one `INFO memory` the first check already pays for;
+docs/BUS-HEALTH.md :: retarget ::   and the one the 2026-09-16 event asked for; see *A consumer that stopped
+docs/BUS-HEALTH.md :: retarget ::   reading* below;

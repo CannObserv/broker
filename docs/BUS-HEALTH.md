@@ -79,7 +79,8 @@ Per tick it probes:
   starts refusing `XADD` instance-wide), `maxmemory 0` (inert ceiling), and
   **`maxmemory-policy` other than `noeviction`** - the third way the protection
   goes inert, and the only one whose damage is otherwise reported by nobody
-  (see below). All from the one `INFO memory` the first check already pays for;
+  ([MEMORY-PROTECTION.md](MEMORY-PROTECTION.md)). All from the one `INFO memory`
+  the first check already pays for;
 - `XLEN` per stream, each threshold derived as **that stream's own retention
   cap + 10%** - so a breach means the retention mechanism broke, not that
   traffic grew. Three caps apply and they are not interchangeable: 110k for
@@ -134,8 +135,8 @@ Per tick it probes:
   again from zero;
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
   minutes on each of the five groups. The check a pending count cannot make,
-  and the one the 2026-09-16 event asked for; see *A consumer that stopped
-  reading* below;
+  and the one the 2026-09-16 event asked for; see
+  [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
   named and the entries captured; see *Who drains a DLQ* in [STREAMS.md](STREAMS.md).
   The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
