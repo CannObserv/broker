@@ -12,8 +12,10 @@ WorkingDirectory=/home/exedev/broker
 
 # BROKER_REDIS_URL and GOOGLE_APPLICATION_CREDENTIALS (for the wheelhouse the
 # ExecStart's `uv run` resolves against).
+#
+# Nothing from the dev tree's .env. It carries the cohort's GitHub tokens and an
+# Anthropic key, none of which the probe reads (CannObserv/broker#37).
 EnvironmentFile=/etc/broker/.env
-EnvironmentFile=-/home/exedev/broker/.env
 
 # NOTIFIER_MONITOR_ID and NOTIFIER_API_KEY (CannObserv/broker#3), in a file of
 # their own at 0400 root:root - NOT in /etc/broker/.env, which is 0640

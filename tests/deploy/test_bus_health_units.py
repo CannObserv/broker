@@ -51,6 +51,10 @@ def _comment_block_holding(text: str, phrase: str) -> str:
     return "\n".join(lines[start : end + 1])
 
 
+def _directive(text: str, key: str) -> list[str]:
+    return [ln.split("=", 1)[1] for ln in text.splitlines() if ln.startswith(f"{key}=")]
+
+
 def test_service_is_a_oneshot_probe() -> None:
     text = REPO_SERVICE.read_text()
     assert "Type=oneshot" in text
@@ -179,3 +183,18 @@ def test_the_units_name_only_reads_the_probe_issues() -> None:
         assert "XPENDING" not in path.read_text(), (
             f"{path.name} names a command the probe has not issued since CannObserv/broker#29"
         )
+
+
+def test_the_unit_loads_environment_only_from_etc_broker() -> None:
+    """The dev tree's ``.env`` carries the cohort's GitHub tokens and an
+    Anthropic key, and the probe reads none of them (CannObserv/broker#37).
+
+    Loading it handed all of them to a process that runs every ten minutes. The
+    grant rule in ``deploy/redis-acl.conf`` - a grant nothing issues names its
+    caller - applies to credentials too, and this file's caller is an operator
+    at a shell, never this unit.
+    """
+    files = [f.lstrip("-") for f in _directive(REPO_SERVICE.read_text(), "EnvironmentFile")]
+    assert files, "the probe needs BROKER_REDIS_URL from somewhere"
+    stray = [f for f in files if not f.startswith("/etc/broker/")]
+    assert not stray, f"environment files outside /etc/broker/: {stray}"
