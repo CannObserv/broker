@@ -630,12 +630,15 @@ def test_replicator_holds_the_xpending_its_delivery_ceiling_reads(users) -> None
     entry's `times_delivered` with `XPENDING <topic> <group> <id> <id> 1`, and
     `_handle_unclassified` dead-letters once that reaches
     `REPLICATOR_MAX_DELIVERY_ATTEMPTS`. Refused, the read raises
-    `NoPermissionError`, which replicator#82 classifies transient on purpose, so
-    the ceiling cannot fire: a handler bug is reclaimed and fails the same way
-    forever instead of dead-lettering after five attempts (CannObserv/broker#39).
+    `NoPermissionError` from inside the loop's `except Exception` arm, out of
+    reach of replicator#82's transient one, so it escapes before anything is
+    dead-lettered and the ceiling cannot fire: a handler bug is reclaimed and
+    fails the same way forever instead of dead-lettering after five attempts
+    (CannObserv/broker#39).
 
-    Correction eleven's shape a second time. The grant was built from what
-    `MONITOR` saw, and this path runs only after a failure nothing had produced.
+    The dedupe namespace's shape (CannObserv/broker#9) a second time. The grant
+    was built from what `MONITOR` saw, and this path runs only after a failure
+    nothing had produced.
     On the root permission set, which already names every command stream: the
     command is read-only, so the selector rule for writes does not reach it.
 
