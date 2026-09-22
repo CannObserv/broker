@@ -401,6 +401,19 @@ class FullSetFloor:
     retained_full_sets: int
     republish_period_seconds: float
 
+    def __post_init__(self) -> None:
+        """Refuse the values that would make ``republished_set_size`` a crash or
+        a no-op, at import time and for the same reason ``StreamCheck`` does:
+        every one of them is reachable only by editing this file, which is
+        exactly when a guard is worth having. A zero period is the sharp one -
+        it divides.
+        """
+        if self.republish_period_seconds <= 0 or self.retained_full_sets <= 0:
+            raise ValueError(
+                "a full-set floor needs a positive republish period and multiplier, got "
+                f"{self.republish_period_seconds}s x {self.retained_full_sets}"
+            )
+
 
 @dataclass(frozen=True)
 class FlooredCap:
@@ -446,8 +459,9 @@ class StreamCheck:
 
     def __post_init__(self) -> None:
         """Refuse a ``pending_group`` on a config/state stream, an undelivered
-        threshold on a row with no group at all, and a ``full_set_floor`` whose
-        mirrored cap is not the one ``warn_length`` was derived from.
+        threshold on a row with no group at all, and a ``full_set_floor`` that
+        either sits on a never-trimmed row or disagrees with ``warn_length``
+        about the mirrored cap.
 
         The third keeps one number to one spelling. A row with a floor states
         the mirrored cap twice - once as the ``warn_length`` the length check
@@ -490,6 +504,11 @@ class StreamCheck:
         a caught test failure rather than a silently disabled guard.
         """
         if self.full_set_floor is not None:
+            if self.never_trimmed:
+                raise ValueError(
+                    f"{self.topic} is never trimmed by design and carries a full-set "
+                    "floor - a stream nothing caps has no cap for a floor to raise"
+                )
             expected = with_margin(self.full_set_floor.default_maxlen)
             if self.warn_length != expected:
                 raise ValueError(
