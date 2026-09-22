@@ -623,6 +623,34 @@ def test_replicator_can_set_only_its_dedupe_keys(users) -> None:
     assert "+set" not in split_rules(users["replicator"])[0]
 
 
+def test_replicator_holds_the_xpending_its_delivery_ceiling_reads(users) -> None:
+    """The retry limit on a failure replicator cannot classify is an `XPENDING`.
+
+    `_delivery_count` (CannObserv/replicator `src/worker/loop.py`) reads one
+    entry's `times_delivered` with `XPENDING <topic> <group> <id> <id> 1`, and
+    `_handle_unclassified` dead-letters once that reaches
+    `REPLICATOR_MAX_DELIVERY_ATTEMPTS`. Refused, the read raises
+    `NoPermissionError`, which replicator#82 classifies transient on purpose, so
+    the ceiling cannot fire: a handler bug is reclaimed and fails the same way
+    forever instead of dead-lettering after five attempts (CannObserv/broker#39).
+
+    Correction eleven's shape a second time. The grant was built from what
+    `MONITOR` saw, and this path runs only after a failure nothing had produced.
+    On the root permission set, which already names every command stream: the
+    command is read-only, so the selector rule for writes does not reach it.
+
+    Static as well as exercised below, because CI installs no `redis-server` and
+    every test on `tracked_acl_broker` skips there.
+    """
+    rules = users["replicator"]
+    assert "+xpending" in split_rules(rules)[0], (
+        "replicator's delivery ceiling reads XPENDING (CannObserv/broker#39)"
+    )
+    assert COMMAND_STREAMS, "co-core classified no stream as a command"
+    for topic in COMMAND_STREAMS:
+        assert admits(root_key_patterns(rules), topic), f"replicator cannot name {topic}"
+
+
 def test_default_is_declared_disabled_and_still_carries_a_password(users) -> None:
     """The sharpest line in the file, and it has now been through both of its states.
 
@@ -1090,6 +1118,37 @@ def test_replicator_can_dedupe_a_command_on_every_command_stream(tracked_acl_bro
     for refused in (lambda: client.get(key), lambda: client.delete(key), lambda: client.ttl(key)):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             refused()
+
+
+@pytest.mark.parametrize("topic", COMMAND_STREAMS)
+def test_replicator_can_count_a_commands_deliveries_on_every_command_stream(
+    tracked_acl_broker, topic
+) -> None:
+    """The delivery ceiling's read, in the form `_delivery_count` sends it.
+
+    One entry, delivered to replicator's own group and then reclaimed the way
+    `claim_stale` reclaims it: `times_delivered` must read 1 and then 2, because
+    the ceiling counts reclaims and advances on nothing else. A refused
+    `XPENDING` here is a ceiling that cannot fire (CannObserv/broker#39).
+
+    The group is created at `$` by replicator itself - it holds
+    `+xgroup|create` - so entries earlier tests left on the stream are never
+    delivered to it, and the read names exactly the one entry seeded here.
+    """
+    client = tracked_acl_broker("replicator")
+    group = group_name(topic, "replicator")
+    client.xgroup_create(topic, group, id="$", mkstream=True)
+    with _seeder(tracked_acl_broker) as seeder:
+        entry = seeder.xadd(topic, {"k": "v"})
+    assert client.xreadgroup(group, "worker", {topic: ">"}, count=1)
+
+    def times_delivered() -> int:
+        (pending,) = client.xpending_range(topic, group, min=entry, max=entry, count=1)
+        return pending["times_delivered"]
+
+    assert times_delivered() == 1
+    client.xautoclaim(topic, group, "worker", min_idle_time=0)
+    assert times_delivered() == 2
 
 
 @contextlib.contextmanager
