@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,8 +48,12 @@ from src.broker.bus_health import (
     FACT_PRODUCER_MAXLEN,
     FACT_WARN_LENGTH,
     LWW_PRODUCER_MAXLEN,
+    LWW_REPUBLISH_PERIOD_SECONDS,
+    LWW_RETAINED_FULL_SETS,
+    LWW_WARN_LAST_ENTRY_AGE_SECONDS,
     REGISTRY_PRODUCER_MAXLEN,
     STREAM_CHECKS,
+    FullSetFloor,
     StreamCheck,
     collect_broker_findings,
     evaluate_backup,
@@ -59,6 +64,7 @@ from src.broker.bus_health import (
     evaluate_stream,
     evaluate_undelivered,
     load_state,
+    republished_set_size,
     save_state,
     with_margin,
 )
@@ -574,6 +580,147 @@ def test_lww_threshold_catches_the_backlog_its_cap_was_cut_for(topic: str) -> No
     assert evaluate_stream(check, length=511, last_entry_ms=None, now_ms=0) == []
 
 
+# --- the producer's full-set floor, read off the stream (CannObserv/broker#44) ---
+#
+# `LWW_PRODUCER_MAXLEN` mirrors watcher's *default*, and the default is not the
+# whole rule: `resolve_stream_maxlen` floors each cap at `RETAINED_FULL_SETS`
+# copies of the set being republished, so the cap in force is
+# `max(500, 10 x set)`. Every case below is about which of the two governs.
+
+_NOW_MS = 1_700_000_000_000
+_PERIOD_MS = int(LWW_REPUBLISH_PERIOD_SECONDS * 1000)
+
+
+def _spanning(periods: int) -> dict[str, int]:
+    """The two ids a set size is read off, for a window holding `periods`
+    republish intervals and ending now."""
+    return {"first_entry_ms": _NOW_MS - periods * _PERIOD_MS, "last_entry_ms": _NOW_MS}
+
+
+@pytest.mark.parametrize("topic", [CONTENT_FETCH_POLICY, INFO_WATCH_STATUS])
+def test_a_set_past_50_entries_raises_the_lww_threshold_with_the_cap(topic: str) -> None:
+    """Past ~50 entries per set the floor overtakes the mirrored 500, and a
+    threshold that stayed at 550 would call a correctly applied cap broken on
+    every tick (CannObserv/broker#44).
+
+    A 62-entry set is capped at 620, and `MAXLEN ~` leaves one macro node of
+    overshoot above it: 631 entries in a window spanning ten republishes.
+    """
+    check = _check_for(topic)
+    assert 631 > with_margin(LWW_PRODUCER_MAXLEN)  # the standing false WARN #44 is about
+    assert evaluate_stream(check, length=631, now_ms=_NOW_MS, **_spanning(10)) == []
+
+
+def test_the_floor_does_not_hide_a_cap_that_stopped_being_applied() -> None:
+    """An untrimmed stream grows its span in step with its length, so the set
+    size the probe reads stays put and the threshold with it.
+
+    This is the property that makes the reading safe to raise a threshold on:
+    it measures entries *per republish*, which the cap does not change.
+    """
+    check = _check_for(CONTENT_FETCH_POLICY)
+    (finding,) = evaluate_stream(check, length=41 * 62, now_ms=_NOW_MS, **_spanning(40))
+    assert finding.check == "stream-length"
+    assert "not being applied" in finding.message
+    assert "full-set floor" in finding.message
+
+
+def test_the_floor_never_lowers_the_mirrored_lww_threshold() -> None:
+    """Below 50 entries per set the mirrored default is the cap in force, so
+    the reading changes nothing - the state the node was in on 2026-09-22, with
+    sets of 3 and 4. Read off the live broker that day: `content.fetch-policy`
+    500 entries over 830 minutes (a 3-host set read as 4), `info.watch-status`
+    504 over 625 (a 4-item set read as 5), both nowhere near the floor.
+
+    The check is `max(500, 10 x set)`, not `10 x set`: a reading that lowered
+    the threshold would hand back the blindness #40 closed.
+    """
+    check = _check_for(INFO_WATCH_STATUS)
+    assert evaluate_stream(check, length=504, now_ms=_NOW_MS, **_spanning(125)) == []
+    (finding,) = evaluate_stream(check, length=29_770, now_ms=_NOW_MS, **_spanning(7442))
+    assert f"exceeds {with_margin(LWW_PRODUCER_MAXLEN)}" in finding.message
+
+
+def test_a_window_holding_one_republish_holds_a_whole_one() -> None:
+    """A span under one period cannot be divided into sets, and does not need
+    to be: the floor is what makes the single reading safe to take at face
+    value.
+
+    Trimming inside one set would leave the stream below a full set, which is
+    the partial-replay failure `RETAINED_FULL_SETS` exists to prevent, so the
+    one republish a narrow window holds is a complete one.
+    """
+    floor = _check_for(CONTENT_FETCH_POLICY).full_set_floor
+    assert floor is not None
+    assert (
+        republished_set_size(
+            floor, length=700, first_entry_ms=_NOW_MS - 1_000, last_entry_ms=_NOW_MS
+        )
+        == 700
+    )
+
+
+def test_the_set_size_is_read_high_rather_than_low() -> None:
+    """The oldest retained entries are a *partial* set - an approximate trim
+    drops whole macro nodes, not whole republishes - so the window is one
+    fragment followed by whole sets.
+
+    Charging the fragment to the whole sets rounds the reading up, and up is
+    the direction that cannot invent a broken cap.
+    """
+    floor = _check_for(CONTENT_FETCH_POLICY).full_set_floor
+    assert floor is not None
+    # 10 whole 62-entry sets plus an 11-entry fragment of an eleventh, over a
+    # span of 10 periods: 631/10 read up to 64, never down to 62 or below
+    assert republished_set_size(floor, length=631, **_spanning(10)) == 64
+
+
+def test_one_missed_republish_is_absorbed_and_two_are_not() -> None:
+    """The direction this derivation fails in, and how far, pinned rather than
+    left to be discovered.
+
+    A gap inside the retained window counts as republishes that did not happen,
+    so the set reads low and the threshold with it - the stale-low, warns-early
+    direction, where the probe stays loud rather than going quiet. The 10%
+    margin covers exactly one missed republish at `RETAINED_FULL_SETS` of 10,
+    and only because the reading is ceilinged; two warn. Measured the same at
+    set sizes from 62 to 1,000.
+
+    Two missed republishes is ten minutes of silence and `stream-age` needs
+    fifteen, so between them sits a window with no finding naming the cause -
+    bounded, unreachable until a set passes 50 entries, and recorded as
+    CannObserv/broker#45 rather than closed here.
+    """
+    check = _check_for(CONTENT_FETCH_POLICY)
+    assert LWW_WARN_LAST_ENTRY_AGE_SECONDS == 3 * LWW_REPUBLISH_PERIOD_SECONDS
+    # a 62-entry set capped at 620, one macro node of overshoot above it
+    assert evaluate_stream(check, length=631, now_ms=_NOW_MS, **_spanning(11)) == []
+    findings = evaluate_stream(check, length=631, now_ms=_NOW_MS, **_spanning(12))
+    assert [f.check for f in findings] == ["stream-length"]
+
+
+def test_a_floor_must_agree_with_the_row_it_sits_on() -> None:
+    """The mirrored cap would otherwise have two spellings on one row - the
+    `warn_length` the length check uses and the `maxlen` the floor compares
+    against - and nothing would notice them diverging."""
+    floor = FullSetFloor(maxlen=500, retained_full_sets=10, republish_period_seconds=300.0)
+    with pytest.raises(ValueError, match="full-set floor"):
+        StreamCheck(topic="t", warn_length=999, full_set_floor=floor)
+    with pytest.raises(ValueError, match="full-set floor"):
+        StreamCheck(topic="t", full_set_floor=floor)
+
+
+def test_the_floor_constants_mirror_watchers() -> None:
+    """Both are copies of numbers owned in CannObserv/watcher, so the source is
+    named on each (docs/BUS-HEALTH.md, "Mirrored constants")."""
+    for topic in (CONTENT_FETCH_POLICY, INFO_WATCH_STATUS):
+        floor = _check_for(topic).full_set_floor
+        assert floor is not None
+        assert floor.maxlen == LWW_PRODUCER_MAXLEN
+        assert floor.retained_full_sets == LWW_RETAINED_FULL_SETS
+        assert floor.republish_period_seconds == LWW_REPUBLISH_PERIOD_SECONDS
+
+
 def test_never_trimmed_stream_does_not_claim_a_broken_cap() -> None:
     """content.replicate is carved out of the trim set
     (capping a command stream orphans PEL entries), so it grows monotonically;
@@ -599,6 +746,22 @@ async def test_collect_reports_stale_lww_stream(fake_redis) -> None:
     await fake_redis.xadd(CONTENT_FETCH_POLICY, {"k": "v"}, id="1000-0")
     findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     assert any(f.check == "stream-age" and f.subject == CONTENT_FETCH_POLICY for f in findings)
+
+
+async def test_collect_reads_the_full_set_floor_off_the_stream(fake_redis) -> None:
+    """The collector has to hand `evaluate_stream` the *first* entry as well.
+
+    Without it every tick falls back to the mirrored default, and a set past 50
+    entries is the standing false WARN CannObserv/broker#44 is about - so this
+    pins the wiring, not just the arithmetic.
+    """
+    now_ms = int(time.time() * 1000)
+    first_ms = now_ms - 10 * int(LWW_REPUBLISH_PERIOD_SECONDS * 1000)
+    step = (now_ms - first_ms) // 630
+    for i in range(631):
+        await fake_redis.xadd(CONTENT_FETCH_POLICY, {"k": "v"}, id=f"{first_ms + i * step}-0")
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    assert [f for f in findings if f.subject == CONTENT_FETCH_POLICY] == []
 
 
 async def test_collect_reports_nonempty_dlq(fake_redis) -> None:
