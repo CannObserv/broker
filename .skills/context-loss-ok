@@ -78,3 +78,10 @@ docs/BUS-HEALTH.md :: rename :: ### `noeviction` is load-bearing beyond refusing
 # docs/MEMORY-PROTECTION.md in this same change, so the corrected line is a
 # different line; the words it points AT are unchanged over there.
 AGENTS.md :: retarget :: `docs/BUS-HEALTH.md`, *`noeviction` is load-bearing beyond refusing writes*;
+# CR 10-12: three relative pointers inside the moved section. They travelled
+# verbatim, so no-loss saw nothing, and they name no filename, so check-seams
+# saw nothing either - but "above" and "here" meant BUS-HEALTH.md, where the
+# checks they contrast with stayed. Retargeted at the doc by name.
+docs/BUS-HEALTH.md :: retarget :: which is the healthy value. The two-tick rule above catches a consumer wedged
+docs/BUS-HEALTH.md :: retarget ::    `pending` count and the group names the checks above read out of the same
+docs/BUS-HEALTH.md :: retarget :: **A group whose consumer is gone was invisible to every other check here**, and

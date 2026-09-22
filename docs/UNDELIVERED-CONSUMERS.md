@@ -16,7 +16,8 @@ probe*; this is the reasoning behind it.
 
 Provenance: CannObserv/broker#20.
 
-**A group whose consumer is gone was invisible to every other check here**, and
+**A group whose consumer is gone was invisible to every other check on this
+node**, and
 the probe said so out loud: after the node's reboot on 2026-09-16
 (redis-server up 15:26:34Z, AOF intact) replicator never reconnected,
 `replicator.fetch` held one undelivered command from 15:27:00Z onwards, and the
@@ -27,7 +28,8 @@ Each existing signal is blind to a consumer that has stopped *reading*:
 
 - **`pending` counts what was delivered and not acked.** A consumer that never
   calls `XREADGROUP` is delivered nothing, so its pending count sits at `0` -
-  which is the healthy value. The two-tick rule above catches a consumer wedged
+  which is the healthy value. The two-tick pending rule in
+  [BUS-HEALTH.md](BUS-HEALTH.md) catches a consumer wedged
   *after* delivery; this is the half before it.
 - **Last-entry age catches a stopped producer**, and exists only for the
   permanently-groupless streams.
@@ -58,7 +60,8 @@ So the check compares positions and dates one entry:
 1. `XINFO STREAM <stream>` -> `last-generated-id`, which the length and
    continuity checks already read;
 2. `XINFO GROUPS <stream>` -> that group's `last-delivered-id`, plus the
-   `pending` count and the group names the checks above read out of the same
+   `pending` count and the group names the checks in
+   [BUS-HEALTH.md](BUS-HEALTH.md) read out of the same
    reply - one round trip, one observation (CannObserv/broker#29);
 3. equal - or the group *ahead*, which happens when an `XADD` lands between the
    two replies - and the group is caught up, whatever `lag` says. Nothing
