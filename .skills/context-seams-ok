@@ -1,6 +1,10 @@
 # Cross-references check-seams.sh reported and a person judged legitimate.
 # A hit is wrong only if what it points at moved; each entry below points at
 # something that did not. Grammar: check-seams.sh --help.
+# Entries are PER-TARGET: check-seams.sh consults only those matching the
+# --file it was run against, so a run reporting some of these as
+# "matched nothing" is usually sweeping a different target, not finding
+# them stale. Prune only what you have re-judged against its own target.
 
 # --- the policy file (AGENTS.md has not moved) --------------------------------
 docs/SKILLS.md :: (`AGENTS.md` and the docs it links)

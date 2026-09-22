@@ -1,5 +1,9 @@
 # Lines a curation had to rewrite rather than move - one judged entry per line.
 # Grammar and the closed warrant set: prove-no-loss.sh --help.
+# Entries are PER-TARGET: prove-no-loss.sh consults only those matching the
+# --file it was run against, so a run reporting some of these as
+# "matched nothing" is usually sweeping a different target, not finding
+# them stale. Prune only what you have re-judged against its own target.
 
 # 2026-09-11 curation (STREAMS.md -> + BUS-HEALTH.md, RESTART-WINDOW.md -> + ACL-CUTOVER.md)
 
