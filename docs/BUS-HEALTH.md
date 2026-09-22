@@ -45,27 +45,24 @@ policy - it is a contract property, not broker tuning. The broker's exposure is
 the shared-instance blast radius, which `maxmemory` bounds and the probe
 watches.
 
-
 **`info.registry` retention is different in kind** (CannObserv/archiver#141): consumers
 boot by replaying from `0-0`, so the floor is "at least one full snapshot plus
 the deltas since" - a consumer contract, not operator housekeeping. It is
-therefore **excluded from the periodic `XTRIM` loop** and capped on every
-publish via `BusPublish.maxlen` instead (`ARCHIVER_REGISTRY_STREAM_MAXLEN`,
+capped on every publish via `BusPublish.maxlen` (`ARCHIVER_REGISTRY_STREAM_MAXLEN`,
 default 50k, sized from key count × sets retained - never from the
-`info.changes` number). Snapshot period: `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL`,
+`info.changes` number) and **`XTRIM`med by nobody**: not archiver's drain loop,
+and not a person at a `redis-cli`: `brokeradmin` trims `*.dlq` keys only
+(CannObserv/broker#34). Snapshot period: `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL`,
 default 3600s; operator republish-now: `POST
 /api/v1/tools/republish-registry-announcements`.
 
 **Retention, stream side.** With no consumer yet, entries accumulate on
-`info.changes`. The Archiver outbox publisher caps the stream operator-side via
-a periodic `XTRIM ... MAXLEN ~ N`; `N` is `ARCHIVER_REDIS_STREAM_MAXLEN`
-(default 100000). Operator-side rather than co-core's XADD-time trim is a
-**choice, not an absence** - `BusPublish` has carried `maxlen`/`approximate`
-since cannobserv#285 (CannObserv/archiver#138), and `info.registry` uses it, because a
-config/state stream's retention is a consumer contract. `info.changes` is a fact
-stream nothing replays, so its cap is housekeeping and belongs on the operator's
-cadence.
-
+`info.changes`. The Archiver outbox publisher caps it with a periodic
+`XTRIM ... MAXLEN ~ N`; `N` is `ARCHIVER_REDIS_STREAM_MAXLEN` (default 100000).
+A timer rather than the per-`XADD` trim `info.registry` uses is a **choice, not
+an absence** (`BusPublish` has carried `maxlen` since cannobserv#285,
+CannObserv/archiver#138): a fact stream nothing replays needs housekeeping, not
+a consumer contract.
 
 ## The bus-health probe
 
@@ -316,9 +313,6 @@ lower `maxmemory` below the current `used_memory` so the state holds still.
 
 ### `noeviction` is load-bearing beyond refusing writes (CannObserv/broker#9)
 
-The policy matters as much as the cap, and for a reason that is not visible from
-`deploy/redis.conf.broker`.
-
 **Replicator's `replicator:cmd:*` keys are the only volatile keys on this
 instance.** Every other tenant writes streams, and a stream never carries a TTL.
 So under any `volatile-*` policy - `volatile-lru`, `volatile-ttl`,
@@ -340,8 +334,14 @@ So "evict something rather than refuse writes" - the obvious change to reach for
 under memory pressure - buys a silent failure in exchange for a loud one, and
 picks the one namespace on the instance nobody would choose to lose. If a future
 tuning pass moves off `noeviction`, that trade has to be made deliberately, and
-`allkeys-*` is not the escape either: it evicts stream entries, which is the
-loss `## Detecting loss` exists to catch after the fact.
+`allkeys-*` is not the escape either.
+
+**Archiver's argument against it is the sharper one: silence**
+(CannObserv/archiver#234). Eviction takes a whole key, so `info.registry` comes
+back with the next delta but not its replay-from-`0-0` floor, and a consumer
+booting before the next snapshot converges to a partial set and **reports
+success**. *Detecting loss* flags the reset after the fact; the wrong answer is
+in the consumer. The dedupe keys cost re-work; this costs correctness.
 
 All three claims are checked rather than trusted, and the third is the one
 that matters at 3am:
@@ -350,17 +350,13 @@ that matters at 3am:
   the tracked config, with the hazard in the failing test's own docstring so
   whoever changes it deliberately reads why;
 - `test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance` pins the
-  keyspace claim against the live broker - the hazard changes shape the moment
-  a second service writes a key with a TTL, and that is the day this section
-  stops being true;
+  keyspace claim against the live broker: the day a second service writes a key
+  with a TTL is the day this section stops being true;
 - **the probe reports a wrong policy every tick**, which is what closes the gap
-  the other two leave. A `CONFIG SET maxmemory-policy volatile-lru` is live,
-  persisted nowhere, and reaches nothing that runs on a schedule - so until
-  this check existed, the only detector was a test suite someone had to
-  remember to run on the node. The finding names the family, because the two
-  fail differently: `volatile-*` evicts only the dedupe keys and reports it to
-  nobody; `allkeys-*` evicts stream entries, which *Detecting loss* catches,
-  but only afterwards.
+  the other two leave. A `CONFIG SET maxmemory-policy volatile-lru` is live and
+  persisted nowhere, so until this check existed the only detector was a test
+  suite someone had to remember to run on the node. The finding names the
+  family, because the two fail differently, as above.
 
 ## Detecting loss - the one check that is not an upper bound
 
