@@ -178,7 +178,7 @@ with no owner is how a probe starts crying wolf.
 The unit holds **no** database credential: the `changes_outbox` half of the
 old combined probe stayed in archiver with the table it queries.
 `tests/deploy/test_bus_health_units.py` pins that, the consumer-group
-abstention, and installed-copy parity.
+abstention, installed-copy parity, and what the unit inherits (broker#37).
 
 ## A consumer that stopped reading
 
