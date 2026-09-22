@@ -380,14 +380,14 @@ class FullSetFloor:
     """A producer that republishes its whole set on a timer and floors the
     stream's cap at ``retained_full_sets`` copies of it.
 
-    The rule is watcher's ``resolve_stream_maxlen``: ``max(maxlen, floor)``,
+    The rule is watcher's ``resolve_stream_maxlen``: ``max(default, floor)``,
     where the caller passes ``len(set) * RETAINED_FULL_SETS`` as the floor
     (CannObserv/watcher#292). Both halves have to be here, because mirroring
     only the first is what CannObserv/broker#44 was - a cap that is correct
     today and wrong from about 54 entries per set, in the direction that says
     a working cap is broken.
 
-    ``maxlen`` and ``retained_full_sets`` are mirrored constants. The third
+    ``default_maxlen`` and ``retained_full_sets`` are mirrored constants. The third
     term - the set size - is **not mirrorable**: it is the size of watcher's
     corpus, it changes without anybody editing anything, and that is exactly
     the failure a mirror cannot be made to cover. It is read off the stream
@@ -395,7 +395,9 @@ class FullSetFloor:
     ``republish_period_seconds`` is for.
     """
 
-    maxlen: int
+    #: Watcher's ``default``, and the name is its own: the cap in force is this
+    #: or the floor, whichever is larger, and ``FlooredCap.maxlen`` is that.
+    default_maxlen: int
     retained_full_sets: int
     republish_period_seconds: float
 
@@ -412,9 +414,11 @@ class FlooredCap:
 
     set_size: int
     retained_full_sets: int
+    #: The cap in force - ``set_size * retained_full_sets``, which by
+    #: construction is above the default below.
     maxlen: int
     #: The mirrored default this cap overtook, for the finding to contrast with.
-    mirrored_maxlen: int
+    default_maxlen: int
 
 
 @dataclass(frozen=True)
@@ -485,15 +489,15 @@ class StreamCheck:
         ``test_every_canonical_stream_constant_is_classifiable`` turns that into
         a caught test failure rather than a silently disabled guard.
         """
-        if self.full_set_floor is not None and self.warn_length != with_margin(
-            self.full_set_floor.maxlen
-        ):
-            raise ValueError(
-                f"{self.topic} carries a full-set floor over maxlen "
-                f"{self.full_set_floor.maxlen} but a warn_length of {self.warn_length} - "
-                f"the row and the floor disagree about the mirrored cap "
-                f"(expected {with_margin(self.full_set_floor.maxlen)})"
-            )
+        if self.full_set_floor is not None:
+            expected = with_margin(self.full_set_floor.default_maxlen)
+            if self.warn_length != expected:
+                raise ValueError(
+                    f"{self.topic} carries a full-set floor over default_maxlen "
+                    f"{self.full_set_floor.default_maxlen} but a warn_length of "
+                    f"{self.warn_length} - the row and the floor disagree about the "
+                    f"mirrored cap (expected {expected})"
+                )
         if self.pending_group is None:
             if self.warn_undelivered_age_seconds is not None:
                 raise ValueError(
@@ -517,7 +521,7 @@ class StreamCheck:
 # (CannObserv/broker#44). One object for both streams because watcher gives
 # them one rule: the same default, the same floor multiplier, the same `*/5`.
 LWW_FULL_SET_FLOOR = FullSetFloor(
-    maxlen=LWW_PRODUCER_MAXLEN,
+    default_maxlen=LWW_PRODUCER_MAXLEN,
     retained_full_sets=LWW_RETAINED_FULL_SETS,
     republish_period_seconds=LWW_REPUBLISH_PERIOD_SECONDS,
 )
@@ -773,7 +777,7 @@ def floor_in_force(
     """The cap this stream's full-set floor puts in force, or ``None``.
 
     ``None`` means the mirrored default governs - either because the floor is
-    under it (``max(maxlen, 10 x set)``, watcher's rule and not ``10 x set``,
+    under it (``max(default, 10 x set)``, watcher's rule and not ``10 x set``,
     so a reading can only ever *raise* the threshold and never hand back the
     blindness CannObserv/broker#40 closed), or because the reply did not carry
     the ids to read a set size off. The second is a probe limitation and is
@@ -787,13 +791,13 @@ def floor_in_force(
         floor, length=length, first_entry_ms=first_entry_ms, last_entry_ms=last_entry_ms
     )
     maxlen = set_size * floor.retained_full_sets
-    if maxlen <= floor.maxlen:
+    if maxlen <= floor.default_maxlen:
         return None
     return FlooredCap(
         set_size=set_size,
         retained_full_sets=floor.retained_full_sets,
         maxlen=maxlen,
-        mirrored_maxlen=floor.maxlen,
+        default_maxlen=floor.default_maxlen,
     )
 
 
@@ -822,7 +826,7 @@ def evaluate_stream(
                 "the retention cap for this stream is not being applied - the cap in "
                 f"force is the producer's full-set floor, {floored.retained_full_sets} x "
                 f"the {floored.set_size}-entry set this stream's own span says it "
-                f"republishes, not the mirrored {floored.mirrored_maxlen}"
+                f"republishes, not the mirrored {floored.default_maxlen}"
             )
         else:
             diagnosis = "the retention cap for this stream is not being applied"

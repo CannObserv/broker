@@ -703,7 +703,7 @@ def test_a_floor_must_agree_with_the_row_it_sits_on() -> None:
     """The mirrored cap would otherwise have two spellings on one row - the
     `warn_length` the length check uses and the `maxlen` the floor compares
     against - and nothing would notice them diverging."""
-    floor = FullSetFloor(maxlen=500, retained_full_sets=10, republish_period_seconds=300.0)
+    floor = FullSetFloor(default_maxlen=500, retained_full_sets=10, republish_period_seconds=300.0)
     with pytest.raises(ValueError, match="full-set floor"):
         StreamCheck(topic="t", warn_length=999, full_set_floor=floor)
     with pytest.raises(ValueError, match="full-set floor"):
@@ -716,7 +716,7 @@ def test_the_floor_constants_mirror_watchers() -> None:
     for topic in (CONTENT_FETCH_POLICY, INFO_WATCH_STATUS):
         floor = _check_for(topic).full_set_floor
         assert floor is not None
-        assert floor.maxlen == LWW_PRODUCER_MAXLEN
+        assert floor.default_maxlen == LWW_PRODUCER_MAXLEN
         assert floor.retained_full_sets == LWW_RETAINED_FULL_SETS
         assert floor.republish_period_seconds == LWW_REPUBLISH_PERIOD_SECONDS
 
