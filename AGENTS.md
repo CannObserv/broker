@@ -92,10 +92,15 @@ silently corrupts values.
   `docs/BUS-HEALTH.md`, *`noeviction` is load-bearing beyond refusing writes*;
   tests pin it on the config and on the live keyspace.
 - **Mirrored constants.** The retention caps in `src/broker/bus_health.py`
-  are copies of numbers owned elsewhere, each with its source named. Group
-  names are **derived** via co-core's `group_name()`, never spelled - that is
-  the point of cannobserv#384 and the reason this repo depends on co-core at
-  all. See `docs/BUS-HEALTH.md`, "Mirrored constants".
+  are copies of numbers owned elsewhere, each with its source named. A mirrored
+  default is not always the whole rule: the LWW cap is `max(500, 10 x the set
+  watcher republishes)`, and the set size is **read off the stream's own span**
+  each tick rather than mirrored, because a corpus size changes with no edit
+  anywhere - the one failure a mirror cannot cover (broker#44). Group names are
+  **derived** via co-core's `group_name()`, never spelled - that is the point of
+  cannobserv#384 and the reason this repo depends on co-core at all. See
+  `docs/BUS-HEALTH.md`, "Mirrored constants" and "The one cap that is read, not
+  mirrored".
 - **No em dashes.** ASCII `-`.
 - **No inline module imports.** Ruff `PLC0415`.
 - All UTC, ISO 8601.
@@ -163,7 +168,13 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   failing retry starves `XREADGROUP` - a live consumer the undelivered check
   cannot tell from a gone one). #43 (each grouped stream's producer holds the
   group commands on its root, so it can `XACK` its consumer's work away -
-  #14's hole the other way round).
+  #14's hole the other way round). #45 (the LWW set reading absorbs one missed
+  republish and not two, and `stream-age` waits for three - a ten-minute window
+  where the length check warns with nothing naming the cause).
+- CannObserv/watcher#319 - the notice for the other end of #44's mirror:
+  `RETAINED_FULL_SETS` and the `*/5` republish period are copied into
+  `src/broker/bus_health.py`, and the period moves from watcher's *environment*
+  (`WATCHER_WATCH_STATUS_REPUBLISH_CRON`) with no commit anywhere.
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
 - CannObserv/archiver#196 - archiver's half of the OOM seam, repointed after the
   cap moved to `deploy/redis.conf.broker`

@@ -26,6 +26,9 @@ The checks, per tick:
 - ``XLEN`` per stream, each threshold derived as that stream's own retention
   cap + margin, so a breach means the retention mechanism broke rather than
   that traffic grew. Three different caps apply here - see the constants below.
+  Two of them are constants; the LWW one is ``max(mirrored default, 10 x the
+  set watcher republishes)``, so its threshold is read off the stream's own
+  span each tick rather than mirrored whole (CannObserv/broker#44).
 - last-entry age via ``XINFO STREAM`` for the permanently-groupless streams,
   which are invisible to any pending-based check.
 - the ``pending`` count of every consumer group on this node, warning only on
@@ -146,10 +149,17 @@ DISK_PATH = "/"
 SOCKET_CONNECT_TIMEOUT_SECONDS = 5.0
 SOCKET_TIMEOUT_SECONDS = 10.0
 
-# Both LWW streams republish their full set on `*/5 * * * *`
-# (CannObserv/watcher#264, #265), so 3x the period of silence means the
-# producer is down, not slow.
-LWW_WARN_LAST_ENTRY_AGE_SECONDS = 900.0
+# The period both LWW streams republish their full set on, `*/5 * * * *`
+# (CannObserv/watcher#264, #265; `info.watch-status` reads it from
+# ``WATCHER_WATCH_STATUS_REPUBLISH_CRON`` and defaults to it). Spelled as a
+# constant rather than folded into the age threshold below because
+# ``republished_set_size`` divides by it: the period is what turns a retained
+# window into a count of republishes, and it was already load-bearing here -
+# lengthened at home and not here, the age check below false-WARNs every tick.
+LWW_REPUBLISH_PERIOD_SECONDS = 300.0
+
+# 3x the period of silence means the producer is down, not slow.
+LWW_WARN_LAST_ENTRY_AGE_SECONDS = 3 * LWW_REPUBLISH_PERIOD_SECONDS
 # info.registry guarantees >=1 entry/hour on a non-empty corpus via archiver's
 # periodic snapshot; 2x that interval of silence means the producer is down. An
 # empty stream skips the age check entirely - the corpus-size guard
@@ -234,12 +244,25 @@ LWW_PRODUCER_MAXLEN = 500
 and ``DEFAULT_WATCH_STATUS_STREAM_MAXLEN`` (``src/core/watch_status.py``), both cut
 from 50k by CannObserv/watcher#292.
 
-Watcher floors each at ``RETAINED_FULL_SETS`` (10) copies of the set it
-republishes, so a set past 50 entries raises the real cap above this one. That
-is not the safe direction it looks like: from about 54 entries per set the
-threshold warns, and from 56 it warns every tick, saying the cap is not being
-applied when it is. CannObserv/broker#44. The sets were 3 and 4 entries on
-2026-09-22.
+**The default, not the whole rule.** Watcher's ``resolve_stream_maxlen`` floors
+each cap at ``LWW_RETAINED_FULL_SETS`` copies of the set being republished, so
+the cap in force is ``max(500, 10 x set)`` and this number governs only while
+the set is under 50 entries - it was 3 and 4 on 2026-09-22. Past that the floor
+takes over, and a threshold left at 550 would have said "the retention cap is
+not being applied" on every tick while it was being applied correctly, just
+higher (CannObserv/broker#44). ``FullSetFloor`` is the other half; the set size
+it needs is read off the stream rather than mirrored, because a set size is not
+a constant anyone could mirror.
+"""
+
+LWW_RETAINED_FULL_SETS = 10
+"""Mirrors ``RETAINED_FULL_SETS`` in watcher's ``src/core/bus.py`` (CannObserv/watcher#292).
+
+The second mirrored number this stream's cap is made of, and it fails the same
+way the first does: raised at home and not here the threshold goes stale-low and
+warns early, lowered it goes stale-high. Unlike ``LWW_PRODUCER_MAXLEN`` it is a
+multiplier rather than a bound, so it is also what decides *when* the mirrored
+default stops governing at all.
 """
 
 FACT_WARN_LENGTH = with_margin(FACT_PRODUCER_MAXLEN)
@@ -353,6 +376,48 @@ class Finding:
 
 
 @dataclass(frozen=True)
+class FullSetFloor:
+    """A producer that republishes its whole set on a timer and floors the
+    stream's cap at ``retained_full_sets`` copies of it.
+
+    The rule is watcher's ``resolve_stream_maxlen``: ``max(maxlen, floor)``,
+    where the caller passes ``len(set) * RETAINED_FULL_SETS`` as the floor
+    (CannObserv/watcher#292). Both halves have to be here, because mirroring
+    only the first is what CannObserv/broker#44 was - a cap that is correct
+    today and wrong from about 54 entries per set, in the direction that says
+    a working cap is broken.
+
+    ``maxlen`` and ``retained_full_sets`` are mirrored constants. The third
+    term - the set size - is **not mirrorable**: it is the size of watcher's
+    corpus, it changes without anybody editing anything, and that is exactly
+    the failure a mirror cannot be made to cover. It is read off the stream
+    instead, by ``republished_set_size``, which is what
+    ``republish_period_seconds`` is for.
+    """
+
+    maxlen: int
+    retained_full_sets: int
+    republish_period_seconds: float
+
+
+@dataclass(frozen=True)
+class FlooredCap:
+    """The cap a ``FullSetFloor`` puts in force, and the reading it came from.
+
+    Every term the finding quotes, because an operator reading "XLEN 1402
+    exceeds 1364" has to be able to tell that the 1364 came off this stream's
+    own span rather than out of a constant - the remedy differs, and the
+    constant is the one they would go and check first.
+    """
+
+    set_size: int
+    retained_full_sets: int
+    maxlen: int
+    #: The mirrored default this cap overtook, for the finding to contrast with.
+    mirrored_maxlen: int
+
+
+@dataclass(frozen=True)
 class StreamCheck:
     """Per-stream expectations, mirroring the ``docs/STREAMS.md`` inventory."""
 
@@ -370,10 +435,22 @@ class StreamCheck:
     # PEL entries naming them. Growth is therefore expected, and a breach is a
     # volume milestone rather than a broken cap.
     never_trimmed: bool = False
+    # The producer floors this stream's cap at N copies of the set it
+    # republishes, so `warn_length` above is the threshold only while the set is
+    # small enough for the mirrored default to win (CannObserv/broker#44).
+    full_set_floor: FullSetFloor | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a ``pending_group`` on a config/state stream, and an
-        undelivered threshold on a row with no group at all.
+        """Refuse a ``pending_group`` on a config/state stream, an undelivered
+        threshold on a row with no group at all, and a ``full_set_floor`` whose
+        mirrored cap is not the one ``warn_length`` was derived from.
+
+        The third keeps one number to one spelling. A row with a floor states
+        the mirrored cap twice - once as the ``warn_length`` the length check
+        compares against, once as the ``maxlen`` the floor has to beat before it
+        governs - and two copies that can disagree is the shape of
+        CannObserv/broker#44 in miniature, at a scale where nothing downstream
+        would report the disagreement.
 
         The second is the cheaper guard and it is here for the same reason as
         the first. ``evaluate_undelivered`` builds its subject as
@@ -408,6 +485,15 @@ class StreamCheck:
         ``test_every_canonical_stream_constant_is_classifiable`` turns that into
         a caught test failure rather than a silently disabled guard.
         """
+        if self.full_set_floor is not None and self.warn_length != with_margin(
+            self.full_set_floor.maxlen
+        ):
+            raise ValueError(
+                f"{self.topic} carries a full-set floor over maxlen "
+                f"{self.full_set_floor.maxlen} but a warn_length of {self.warn_length} - "
+                f"the row and the floor disagree about the mirrored cap "
+                f"(expected {with_margin(self.full_set_floor.maxlen)})"
+            )
         if self.pending_group is None:
             if self.warn_undelivered_age_seconds is not None:
                 raise ValueError(
@@ -425,6 +511,16 @@ class StreamCheck:
                 f"{self.topic} is a config_state stream and must not carry a "
                 f"consumer group (got {self.pending_group!r})"
             )
+
+
+# The other half of the LWW cap, alongside LWW_PRODUCER_MAXLEN
+# (CannObserv/broker#44). One object for both streams because watcher gives
+# them one rule: the same default, the same floor multiplier, the same `*/5`.
+LWW_FULL_SET_FLOOR = FullSetFloor(
+    maxlen=LWW_PRODUCER_MAXLEN,
+    retained_full_sets=LWW_RETAINED_FULL_SETS,
+    republish_period_seconds=LWW_REPUBLISH_PERIOD_SECONDS,
+)
 
 
 STREAM_CHECKS: tuple[StreamCheck, ...] = (
@@ -463,11 +559,13 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         CONTENT_FETCH_POLICY,
         warn_length=LWW_WARN_LENGTH,
         warn_last_entry_age_seconds=LWW_WARN_LAST_ENTRY_AGE_SECONDS,
+        full_set_floor=LWW_FULL_SET_FLOOR,
     ),
     StreamCheck(
         INFO_WATCH_STATUS,
         warn_length=LWW_WARN_LENGTH,
         warn_last_entry_age_seconds=LWW_WARN_LAST_ENTRY_AGE_SECONDS,
+        full_set_floor=LWW_FULL_SET_FLOOR,
     ),
     # content.blobs: its group's two contracts, and deliberately nothing else.
     #
@@ -614,23 +712,125 @@ def evaluate_disk(*, total: int, free: int) -> list[Finding]:
     return []
 
 
+def republished_set_size(
+    floor: FullSetFloor, *, length: int, first_entry_ms: int, last_entry_ms: int
+) -> int:
+    """How many entries one republish of the full set puts on this stream.
+
+    The number the mirrored cap cannot carry (CannObserv/broker#44), read off
+    **one** ``XINFO STREAM`` reply - the same reply the length and the
+    last-entry age come out of. Deliberately not differenced across ticks: two
+    observations ten minutes apart are not one observation, the argument
+    CannObserv/broker#13 and #29 already made about this probe's round trips,
+    and a tick-to-tick delta would additionally be silent on the first tick
+    after every deploy and hostage to the timer's own cadence.
+
+    The arithmetic. A stream republished every ``republish_period_seconds``
+    holds, between its oldest and newest retained entry, one republish per
+    period that has elapsed. So ``length`` divided by that count is entries per
+    republish - and it stays entries per republish whether or not the cap is
+    being applied, which is what makes it safe to raise a threshold on: an
+    untrimmed stream grows its span in step with its length.
+
+    **Read high, not low, in two places.** The oldest retained entries are a
+    *partial* set (``MAXLEN ~`` drops whole macro nodes, not whole republishes),
+    so the window is one fragment followed by whole sets; dividing by the whole
+    sets alone charges the fragment to them, and the ceiling rounds what is
+    left. Both round the reading up, because up cannot invent a broken cap - it
+    can only delay reporting a real one by a tick or two, against a failure
+    whose whole shape is growth without bound.
+
+    **A window narrower than one period is one republish**, and needs no
+    division. That is not a fudge to avoid dividing by zero: a cap that trimmed
+    *inside* a set would leave the stream below one full set, which is the
+    partial-replay failure ``RETAINED_FULL_SETS`` exists to prevent, so the one
+    republish such a window holds is a complete one and ``length`` is the set.
+
+    The direction it fails in is a **gap**. Republishes that did not happen are
+    counted as if they had, so the set reads low and the threshold with it - the
+    warns-early direction, not the quiet one.
+
+    **It absorbs exactly one missed republish**, and by a hair: at
+    ``retained_full_sets`` of 10 the margin is worth ``11/11`` of the reading a
+    one-period gap leaves, so what carries it is the ceiling above. Two missed
+    republishes warn, at every set size. That is ten minutes of silence, under
+    the fifteen ``LWW_WARN_LAST_ENTRY_AGE_SECONDS`` needs, so between the two
+    there is a window where this reports a broken cap with no ``stream-age``
+    finding beside it naming the real cause - bounded (it trims out within
+    ``retained_full_sets`` periods) and reachable only once a set is past 50
+    entries, but not covered. CannObserv/broker#45.
+    """
+    span_seconds = (last_entry_ms - first_entry_ms) / 1000.0
+    whole_sets = round(span_seconds / floor.republish_period_seconds)
+    if whole_sets < 1:
+        return length
+    return -(-length // whole_sets)
+
+
+def floor_in_force(
+    check: StreamCheck, *, length: int, first_entry_ms: int | None, last_entry_ms: int | None
+) -> FlooredCap | None:
+    """The cap this stream's full-set floor puts in force, or ``None``.
+
+    ``None`` means the mirrored default governs - either because the floor is
+    under it (``max(maxlen, 10 x set)``, watcher's rule and not ``10 x set``,
+    so a reading can only ever *raise* the threshold and never hand back the
+    blindness CannObserv/broker#40 closed), or because the reply did not carry
+    the ids to read a set size off. The second is a probe limitation and is
+    treated the way every other missing field here is: fall back, and fall back
+    to the threshold that warns early rather than the one that goes quiet.
+    """
+    floor = check.full_set_floor
+    if floor is None or length <= 0 or first_entry_ms is None or last_entry_ms is None:
+        return None
+    set_size = republished_set_size(
+        floor, length=length, first_entry_ms=first_entry_ms, last_entry_ms=last_entry_ms
+    )
+    maxlen = set_size * floor.retained_full_sets
+    if maxlen <= floor.maxlen:
+        return None
+    return FlooredCap(
+        set_size=set_size,
+        retained_full_sets=floor.retained_full_sets,
+        maxlen=maxlen,
+        mirrored_maxlen=floor.maxlen,
+    )
+
+
 def evaluate_stream(
-    check: StreamCheck, *, length: int, last_entry_ms: int | None, now_ms: int
+    check: StreamCheck,
+    *,
+    length: int,
+    last_entry_ms: int | None,
+    now_ms: int,
+    first_entry_ms: int | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
-    if check.warn_length is not None and length > check.warn_length:
-        diagnosis = (
-            "this stream is never trimmed by design (capping it would orphan "
-            "undelivered commands), so this is a volume milestone - size the "
-            "broker for it rather than looking for a broken cap"
-            if check.never_trimmed
-            else "the retention cap for this stream is not being applied"
-        )
+    floored = floor_in_force(
+        check, length=length, first_entry_ms=first_entry_ms, last_entry_ms=last_entry_ms
+    )
+    warn_length = with_margin(floored.maxlen) if floored is not None else check.warn_length
+    if warn_length is not None and length > warn_length:
+        if check.never_trimmed:
+            diagnosis = (
+                "this stream is never trimmed by design (capping it would orphan "
+                "undelivered commands), so this is a volume milestone - size the "
+                "broker for it rather than looking for a broken cap"
+            )
+        elif floored is not None:
+            diagnosis = (
+                "the retention cap for this stream is not being applied - the cap in "
+                f"force is the producer's full-set floor, {floored.retained_full_sets} x "
+                f"the {floored.set_size}-entry set this stream's own span says it "
+                f"republishes, not the mirrored {floored.mirrored_maxlen}"
+            )
+        else:
+            diagnosis = "the retention cap for this stream is not being applied"
         findings.append(
             Finding(
                 check="stream-length",
                 subject=check.topic,
-                message=f"XLEN {length} exceeds {check.warn_length} - {diagnosis}",
+                message=f"XLEN {length} exceeds {warn_length} - {diagnosis}",
             )
         )
     if check.warn_last_entry_age_seconds is not None and length > 0 and last_entry_ms is not None:
@@ -1104,9 +1304,20 @@ async def _collect_stream(
     length = int(info.get("length", 0))
     last_entry = info.get("last-entry")
     last_entry_ms = _entry_ms(last_entry[0]) if last_entry else None
+    # The oldest *retained* entry, which with the newest is the span a full-set
+    # stream's cap is read off (CannObserv/broker#44). Out of the reply the
+    # length and the age already came from, so it costs no round trip.
+    first_entry = info.get("first-entry")
+    first_entry_ms = _entry_ms(first_entry[0]) if first_entry else None
     now_ms = int(time.time() * 1000)
     findings.extend(
-        evaluate_stream(check, length=length, last_entry_ms=last_entry_ms, now_ms=now_ms)
+        evaluate_stream(
+            check,
+            length=length,
+            last_entry_ms=last_entry_ms,
+            now_ms=now_ms,
+            first_entry_ms=first_entry_ms,
+        )
     )
 
     entries_added = int(info.get("entries-added", 0))

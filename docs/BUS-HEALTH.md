@@ -84,10 +84,12 @@ Per tick it probes:
   traffic grew. Three caps apply and they are not interchangeable: 110k for
   fact streams on archiver's operator-side `XTRIM`
   (`ARCHIVER_REDIS_STREAM_MAXLEN`), 55k for `info.registry` (capped on publish
-  instead, `ARCHIVER_REGISTRY_STREAM_MAXLEN`), 550 for the two LWW streams
-  (Watcher's producer-side `maxlen`). See *Mirrored constants* below.
-  `content.replicate` is the exception: never trimmed by design, so its breach
-  message says "volume milestone", not "broken cap";
+  instead, `ARCHIVER_REGISTRY_STREAM_MAXLEN`), and for the two LWW streams
+  `max(550, 11 x the set Watcher republishes)` - 550 while the sets are small,
+  which is the state the node is in today, and the floor past ~50 entries per
+  set. See *Mirrored constants* and *The one cap that is read, not mirrored*
+  below. `content.replicate` is the exception: never trimmed by design, so its
+  breach message says "volume milestone", not "broken cap";
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
   is empty - the corpus-size guard);
@@ -404,22 +406,98 @@ against nothing and a wipe *during* the outage would go unseen.
 `src/broker/bus_health.py` derives each `XLEN` warning threshold from the
 retention cap that stream is *supposed* to be held at, plus 10%. Before
 CannObserv/archiver#193 D6 two of those caps were **imported**; across a repo boundary
-they cannot be, so all three are mirrored here with their owner named:
+they cannot be, so all three are mirrored here with their owner named - and,
+since CannObserv/broker#44, the two further numbers the LWW cap's floor is made
+of:
 
 | Constant in `src/broker/bus_health.py` | Source of truth |
 |---|---|
 | `FACT_PRODUCER_MAXLEN` (100k) | `DEFAULT_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/publisher.py` |
 | `REGISTRY_PRODUCER_MAXLEN` (50k) | `DEFAULT_REGISTRY_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/registry_snapshot.py` |
 | `LWW_PRODUCER_MAXLEN` (500) | Watcher's two `DEFAULT_*_STREAM_MAXLEN`, `src/core/{fetch_policy,watch_status}.py` (CannObserv/watcher#292) |
+| `LWW_RETAINED_FULL_SETS` (10) | `RETAINED_FULL_SETS`, `CannObserv/watcher:src/core/bus.py` (CannObserv/watcher#292) - the multiplier on the floor the line above is only the *default* of |
+| `LWW_REPUBLISH_PERIOD_SECONDS` (300) | Watcher's `*/5 * * * *` republish (CannObserv/watcher#264, #265; `info.watch-status` reads `WATCHER_WATCH_STATUS_REPUBLISH_CRON` and defaults to it) - already load-bearing as 3x the LWW age threshold before it was spelled out |
 | `DLQ_DRAINERS` (who triages each `*.dlq`) | *Who drains a DLQ* in [STREAMS.md](STREAMS.md) - an assignment, so it has no computable source; the keys are still derived through co-core's `dlq_name()` |
 
-The third was already a mirror before the split - there was never an import to
-lose - which is why the pattern was tolerable enough to extend to the other two.
+`LWW_PRODUCER_MAXLEN` was already a mirror before the split - there was never an
+import to lose - which is why the pattern was tolerable enough to extend to the
+other two caps.
 
 **Only a raised cap fails safe.** Raised at home and not here, the threshold
 goes stale-*low* and warns early. Lowered, it goes stale-*high* and can hide the
 backlog the cut was for (CannObserv/broker#40: watcher#292's 29,770 is under
 55k).
+
+## The one cap that is read, not mirrored
+
+`LWW_PRODUCER_MAXLEN` is a **default, not the whole rule**. Watcher's
+`resolve_stream_maxlen` floors each LWW cap at `RETAINED_FULL_SETS` (10) copies
+of the set it is about to republish, so the cap in force is
+`max(500, 10 x set)`. The sets were 3 (`content.fetch-policy`) and 4
+(`info.watch-status`) on 2026-09-22 and the default governs; from about 54
+entries per set a threshold of 550 would have said *the retention cap for this
+stream is not being applied* while the cap was being applied correctly, just
+higher - and a standing WARN with the wrong cause trains an operator to ignore
+the LWW rows, which is the blindness CannObserv/broker#40 closed
+(CannObserv/broker#44).
+
+**The third term cannot be mirrored.** It is the size of Watcher's corpus. It
+changes with no edit anywhere, which is precisely the failure a mirror cannot be
+made to cover - `info.watch-status` carries one entry per `info_item_id` and
+Watcher's own comment on the constant expects the floor to take over "as the
+registry fills". So the probe reads it (`republished_set_size`) instead:
+
+- **off one `XINFO STREAM` reply**, the same one the length and the last-entry
+  age come out of, so it costs no round trip and is one observation rather than
+  two ticks apart - the argument CannObserv/broker#13 and #29 already made about
+  this probe's reads;
+- **as `length / the republishes the span holds`**, which is entries per
+  republish *whether or not the cap is being applied*: an untrimmed stream grows
+  its span in step with its length, so a broken cap still climbs through the
+  threshold rather than carrying it along;
+- **rounded up, twice.** The oldest retained entries are a partial set
+  (`MAXLEN ~` drops whole macro nodes, not whole republishes), and the division
+  charges that fragment to the whole sets; the remainder is then ceilinged. Up
+  can only delay reporting a real breach by a tick or two. Down would invent
+  one, which is the bug being fixed;
+- **never downward.** `max(mirrored, floor)` is Watcher's rule and the probe's:
+  a reading can raise the threshold above 550 and never lower it.
+
+**What it reads on this node.** Measured 2026-09-22, against the live broker as
+`brokeradmin` - `XINFO STREAM` is the read the length and age checks already
+make, so this needs no grant nobody holds and no round trip nobody pays:
+
+| Stream | `XLEN` | span | set read | cap in force |
+|---|---|---|---|---|
+| `content.fetch-policy` | 500 | 830 min (166 republishes) | 4, for a 3-host set | the mirrored 500 |
+| `info.watch-status` | 504 | 625 min (125 republishes) | 5, for a 4-item set | the mirrored 500 |
+
+One over the true set in both rows, which is the rounding working: the reading
+is an upper bound on the set and therefore on the cap, and at these sizes it
+changes nothing at all - `10 x 5` is far under 500.
+
+**It fails on a gap.** Republishes that did not happen are counted as if they
+had, so the set reads low and the threshold with it - the warns-early direction,
+not the quiet one. Measured at set sizes from 62 to 1,000, the behaviour is the
+same at all of them:
+
+| Missed republishes | Reading | Length finding |
+|---|---|---|
+| 0 | one or two over the true set | silent |
+| 1 | ~9% under | silent - the ceiling is what carries it |
+| 2 | ~17% under | **WARN**, with no `stream-age` beside it |
+| 3+ | further under | WARN, and `stream-age` now fires too |
+
+So one missed republish is absorbed and two are not, while `stream-age` waits
+for three (`LWW_WARN_LAST_ENTRY_AGE_SECONDS`, 15 min). The ten-minute gap
+between those is a window where this check reports a broken cap and nothing
+beside it names the real cause. It is bounded - the gap trims out within
+`RETAINED_FULL_SETS` periods - and unreachable until a set passes 50 entries,
+which is why it is recorded rather than closed: CannObserv/broker#45.
+
+A period *lengthened* at home and not here reads the same way, permanently
+rather than transiently, and is the same mirror failure as any other row in the
+table above.
 
 ## Who watches what, after the split
 
