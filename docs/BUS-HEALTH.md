@@ -39,7 +39,7 @@ nothing can write `content.fetch-policy.dlq` and nothing would trigger one.
 **Retention on this stream is the producer's, not the broker's.** A stream whose
 producer republishes its full set on a timer grows without bound unless trimmed;
 `BusPublish.maxlen` (co-core >=0.7.7) rides the trim on each publish, and the
-knob sits with Watcher (CannObserv/watcher#265: `maxlen` 50k on both LWW
+knob sits with Watcher (CannObserv/watcher#292: `maxlen` 500 on both LWW
 streams) because the consumer's replay-from-`0-0` boot depends on the retention
 policy - it is a contract property, not broker tuning. The broker's exposure is
 the shared-instance blast radius, which `maxmemory` bounds and the probe
@@ -85,7 +85,7 @@ Per tick it probes:
   traffic grew. Three caps apply and they are not interchangeable: 110k for
   fact streams on archiver's operator-side `XTRIM`
   (`ARCHIVER_REDIS_STREAM_MAXLEN`), 55k for `info.registry` (capped on publish
-  instead, `ARCHIVER_REGISTRY_STREAM_MAXLEN`), 55k for the two LWW streams
+  instead, `ARCHIVER_REGISTRY_STREAM_MAXLEN`), 550 for the two LWW streams
   (Watcher's producer-side `maxlen`). See *Mirrored constants* below.
   `content.replicate` is the exception: never trimmed by design, so its breach
   message says "volume milestone", not "broken cap";
@@ -411,17 +411,16 @@ they cannot be, so all three are mirrored here with their owner named:
 |---|---|
 | `FACT_PRODUCER_MAXLEN` (100k) | `DEFAULT_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/publisher.py` |
 | `REGISTRY_PRODUCER_MAXLEN` (50k) | `DEFAULT_REGISTRY_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/registry_snapshot.py` |
-| `LWW_PRODUCER_MAXLEN` (50k) | Watcher's producer-side `BusPublish.maxlen` (CannObserv/watcher#265) |
+| `LWW_PRODUCER_MAXLEN` (500) | Watcher's two `DEFAULT_*_STREAM_MAXLEN`, `src/core/{fetch_policy,watch_status}.py` (CannObserv/watcher#292) |
 | `DLQ_DRAINERS` (who triages each `*.dlq`) | *Who drains a DLQ* in [STREAMS.md](STREAMS.md) - an assignment, so it has no computable source; the keys are still derived through co-core's `dlq_name()` |
 
 The third was already a mirror before the split - there was never an import to
 lose - which is why the pattern was tolerable enough to extend to the other two.
 
-**The failure mode is bounded and it is the safe direction.** A cap raised in
-its home repo and not here leaves this probe's threshold stale-*low*, so it
-warns early. It never goes quiet. The reverse - lowering a cap without lowering
-the threshold - widens the blind window but cannot hide a stream that has
-stopped being trimmed at all, which is the condition the check exists for.
+**Only a raised cap fails safe.** Raised at home and not here, the threshold
+goes stale-*low* and warns early. Lowered, it goes stale-*high* and can hide the
+very backlog the cut was for (CannObserv/broker#40: 55k over a stream that had
+reached 29,770).
 
 ## Who watches what, after the split
 

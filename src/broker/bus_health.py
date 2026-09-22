@@ -210,8 +210,11 @@ def with_margin(cap: int) -> int:
 # repo boundary they cannot be, so each is mirrored here with its owner named.
 # That is a real cost of CannObserv/archiver#193 D6 and it is recorded rather
 # than hidden: a cap raised in its home repo and not here turns this probe's
-# WARN into a false alarm (never a missed one - a stale-low threshold fires
-# early, it does not go quiet). See docs/BUS-HEALTH.md, "Mirrored constants".
+# WARN into a false alarm (a stale-low threshold fires early, it does not go
+# quiet). A cap *lowered* there and not here is the direction that misses: the
+# threshold goes stale-high, and the range between the two is unreported -
+# CannObserv/broker#40, where that range was the very backlog the cut was for.
+# See docs/BUS-HEALTH.md, "Mirrored constants".
 #
 # Three different caps apply on this broker, and they are not interchangeable:
 # - fact streams archiver's outbox publishes ride its operator-side periodic
@@ -226,8 +229,16 @@ REGISTRY_PRODUCER_MAXLEN = 50_000
 """Mirrors ``DEFAULT_REGISTRY_STREAM_MAXLEN`` in archiver's
 ``src/core/changes/registry_snapshot.py``."""
 
-LWW_PRODUCER_MAXLEN = 50_000
-"""Mirrors Watcher's producer-side ``BusPublish.maxlen`` (CannObserv/watcher#265)."""
+LWW_PRODUCER_MAXLEN = 500
+"""Mirrors watcher's ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN`` (``src/core/fetch_policy.py``)
+and ``DEFAULT_WATCH_STATUS_STREAM_MAXLEN`` (``src/core/watch_status.py``), both cut
+from 50k by CannObserv/watcher#292.
+
+Watcher floors each at ``RETAINED_FULL_SETS`` (10) copies of the set it
+republishes, so a set past 50 entries raises the real cap above this one and
+the probe warns early - the safe direction. The sets were 3 and 4 entries on
+2026-09-22.
+"""
 
 FACT_WARN_LENGTH = with_margin(FACT_PRODUCER_MAXLEN)
 REGISTRY_WARN_LENGTH = with_margin(REGISTRY_PRODUCER_MAXLEN)
