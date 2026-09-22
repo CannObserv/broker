@@ -213,7 +213,7 @@ def with_margin(cap: int) -> int:
 # WARN into a false alarm (a stale-low threshold fires early, it does not go
 # quiet). A cap *lowered* there and not here is the direction that misses: the
 # threshold goes stale-high, and the range between the two is unreported -
-# CannObserv/broker#40, where that range was the very backlog the cut was for.
+# CannObserv/broker#40, a range wide enough to hold the backlog the cut was for.
 # See docs/BUS-HEALTH.md, "Mirrored constants".
 #
 # Three different caps apply on this broker, and they are not interchangeable:

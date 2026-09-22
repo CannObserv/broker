@@ -419,8 +419,8 @@ lose - which is why the pattern was tolerable enough to extend to the other two.
 
 **Only a raised cap fails safe.** Raised at home and not here, the threshold
 goes stale-*low* and warns early. Lowered, it goes stale-*high* and can hide the
-very backlog the cut was for (CannObserv/broker#40: 55k over a stream that had
-reached 29,770).
+backlog the cut was for (CannObserv/broker#40: watcher#292's 29,770 is under
+55k).
 
 ## Who watches what, after the split
 
