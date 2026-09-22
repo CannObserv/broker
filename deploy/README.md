@@ -381,11 +381,20 @@ rewrite time, which `maxmemory` also caps.
   (CannObserv/archiver#195). `localhost` rather than `broker`, because this
   probe runs *on* the broker and `redis.conf` binds loopback as well as the
   tailnet address, deliberately.
-- `GOOGLE_APPLICATION_CREDENTIALS` - the read-only `co-pypi-reader` key the
-  `uv run` in `ExecStart` needs to resolve `co-core` from the wheelhouse.
+- `GOOGLE_APPLICATION_CREDENTIALS` - the read-only `co-pypi-reader` key. **It
+  is the operator's, not the probe's:** it authenticates the wheelhouse sync in
+  AGENTS.md, and it is here so that sync is one `source` away. The unit unsets
+  it. `uv run` resolves `co-core` from `./.wheelhouse`, a local directory, and
+  needs no credential (CannObserv/broker#37).
 
-The probe holds **no** database credential and joins **no** consumer group.
-Both are asserted by `tests/deploy/test_bus_health_units.py`.
+**No unit syncs the wheelhouse.** CI syncs on every run; on the node the sync is
+manual, and it is due before any `uv sync` or `uv run` that follows a `co-core`
+pin change. Miss it and the probe's `ExecStart` fails with a resolution error.
+
+The probe holds **no** database credential, joins **no** consumer group, and
+inherits no variable from `/etc/broker/.env` that it does not read. All three
+are asserted by `tests/deploy/test_bus_health_units.py`; the last one against
+the live file, so a variable added there on the node fails it.
 
 `/etc/broker/notifier.env` (`0400 root:root`, **optional**) carries the check-in
 credential - see *The notifier check-in* below.

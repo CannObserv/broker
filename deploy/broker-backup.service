@@ -17,9 +17,10 @@ WorkingDirectory=/home/exedev/broker
 
 # BROKER_BACKUP_BUCKET and GOOGLE_APPLICATION_CREDENTIALS (the writer key, 0400
 # root:root). NOT /etc/broker/.env: that file is 0640 root:exedev and carries
-# the probe's read-only wheelhouse key and a Redis URL, neither of which this
-# unit needs and the second of which it must not have. No leading '-': a backup
-# unit without its configuration must fail loudly, not run quietly with none.
+# the operator's read-only wheelhouse key and the probe's Redis URL, neither of
+# which this unit needs and the second of which it must not have. No leading
+# '-': a backup unit without its configuration must fail loudly, not run
+# quietly with none.
 EnvironmentFile=/etc/broker/backup.env
 
 # /var/lib/broker-backup/state.json - one record per run, written 0644 because

@@ -40,7 +40,7 @@ def test_service_is_a_oneshot_running_the_backup_module() -> None:
 
 def test_service_holds_no_redis_credential() -> None:
     """The job reads a file. It has no reason to hold a Redis URL, and the file
-    that carries one (/etc/broker/.env) also carries the probe's read-only
+    that carries one (/etc/broker/.env) also carries the operator's read-only
     wheelhouse key - two things this unit must not inherit."""
     text = REPO_SERVICE.read_text()
     assert "EnvironmentFile=/etc/broker/.env" not in text

@@ -200,6 +200,23 @@ def test_the_units_name_only_reads_the_probe_issues() -> None:
         )
 
 
+def test_no_unit_runs_the_wheelhouse_sync() -> None:
+    """The node's wheelhouse is refreshed by hand, and the docs say so
+    (CannObserv/broker#37).
+
+    ``scripts/sync_wheelhouse.py`` came from archiver, whose service does run
+    it as an ``ExecStartPre``; no broker unit ever has, and the docstring that
+    said otherwise was archiver's. Adding one would put a GCS call in front of
+    every probe tick, for an input only a pin change moves, in a probe that
+    exists to report while other things are down. Whoever wants it anyway
+    arrives here, and the docs that say "manual" change with it.
+    """
+    units = sorted(_DEPLOY.glob("*.service"))
+    assert units, "the glob found no units - the guard would pass by finding nothing"
+    running = [u.name for u in units if "sync_wheelhouse" in u.read_text()]
+    assert not running, f"units running the wheelhouse sync: {running}"
+
+
 def test_the_unit_loads_environment_only_from_etc_broker() -> None:
     """The dev tree's ``.env`` carries the cohort's GitHub tokens and an
     Anthropic key, and the probe reads none of them (CannObserv/broker#37).

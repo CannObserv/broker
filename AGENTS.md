@@ -23,7 +23,8 @@ TDD required. Red -> Green -> Refactor.
 
 Python >=3.12, uv, pytest, ruff. **`co-core` resolves from a local wheelhouse**
 (`./.wheelhouse`, gitignored), not PyPI. Populate it before `uv sync`/`uv run`
-or resolution fails:
+or resolution fails. No unit syncs it: on the node that is by hand, and due
+again after any `co-core` pin change (broker#37):
 
 ```bash
 set -a; . /etc/broker/.env; set +a   # GOOGLE_APPLICATION_CREDENTIALS

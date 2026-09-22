@@ -18,10 +18,16 @@ service-account key at ``GOOGLE_APPLICATION_CREDENTIALS`` (set in
 way the identity needs only ``roles/storage.objectViewer`` on the bucket.
 
 Exit codes: ``0`` success (including a no-op re-run) · ``1`` failure (auth,
-network, or a missing bucket). The unit runs this as a non-fatal
-``ExecStartPre`` (``-`` prefix): a transient failure is surfaced to the journal,
-and if the wheelhouse is already populated the service still starts - only a
-genuinely missing wheel surfaces later as a hard ``uv`` resolution error.
+network, or a missing bucket).
+
+**No broker unit runs this, and none ever has** (CannObserv/broker#37). CI runs
+it on every job; on the node it is run by hand, and it is due before any
+``uv sync`` or ``uv run`` that follows a ``co-core`` pin change. Skip it then
+and the probe's ``ExecStart`` fails with a ``uv`` resolution error - a failed
+unit and a missed notifier check-in, not a silent one. Archiver's service does
+run it as a non-fatal ``ExecStartPre``; that was this docstring's claim until
+broker#37, carried over with the script. Here it would put a GCS call in front
+of every probe tick, for an input only a pin change moves.
 """
 
 from __future__ import annotations

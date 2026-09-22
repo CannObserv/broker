@@ -131,8 +131,8 @@ anywhere.
 |---|---|---|---|
 | the Redis `requirepass` | `/etc/redis/broker-password` | 0400 root | also `default`'s ACL password; the window-only identity |
 | the six ACL passwords | `/etc/redis/broker-acl-passwords` | 0400 root | **the services carry these in their own env files** - a rebuild must reuse the same values or update three services on two hosts |
-| the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`brokeradmin`), `GOOGLE_APPLICATION_CREDENTIALS` (the wheelhouse reader) |
-| the wheelhouse reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | `uv sync` needs it |
+| the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`brokeradmin`); `GOOGLE_APPLICATION_CREDENTIALS` (the wheelhouse reader) is the operator's, for the sync, and the probe's unit unsets it |
+| the wheelhouse reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | the manual sync `uv sync` depends on needs it |
 | the notifier check-in | `/etc/broker/notifier.env` | 0400 root | the monitor id is node-agnostic; the same monitor continues |
 | the backup writer | `/etc/broker/backup.env` + `/etc/broker/co-broker-backup.json` | 0400 root | also what the **restore** reads with - `objectViewer` lists and downloads |
 
