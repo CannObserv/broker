@@ -41,7 +41,12 @@ from co_core.pure.adapters.bus.streams import (
     stream_kind,
 )
 
-from src.broker.bus_health import DLQ_DRAINERS, STREAM_CHECKS
+from src.broker.bus_health import (
+    DLQ_DRAINERS,
+    FACT_PRODUCER_MAXLEN,
+    REGISTRY_PRODUCER_MAXLEN,
+    STREAM_CHECKS,
+)
 from tests.deploy.conftest import ACL_FILE, PASSWORD, SERVICE_USERS, parse_users, split_rules
 
 CANONICAL_STREAMS = frozenset(
@@ -365,6 +370,26 @@ def test_a_dlq_writer_can_also_drain_it(users, user) -> None:
 PRODUCER_CELL = 1
 """The ``Producer → consumer`` column of the *Streams on this broker* table."""
 
+NEVER_XTRIMMED = "**Never XTRIMmed"
+"""The phrase a row of that table carries when no identity may ``XTRIM`` it."""
+
+
+def inventory_rows() -> dict[str, list[str]]:
+    """``stream -> its cells`` in the *Streams on this broker* table.
+
+    The first row naming each canonical stream, so a later table that mentions
+    one in its first column cannot shadow the inventory's row.
+    """
+    rows: dict[str, list[str]] = {}
+    for line in STREAMS_MD.read_text().splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) <= PRODUCER_CELL:
+            continue
+        topic = cells[0].strip("`")
+        if topic in CANONICAL_STREAMS and topic not in rows:
+            rows[topic] = cells
+    return rows
+
 
 def documented_producers() -> dict[str, str]:
     """``stream -> the service that produces it``, read off ../docs/STREAMS.md.
@@ -377,25 +402,58 @@ def documented_producers() -> dict[str, str]:
     markdown emphasis stripped - ``**Archiver** → Watcher *(consumer live)*``
     names Archiver.
     """
-    text = STREAMS_MD.read_text()
     found: dict[str, str] = {}
-    for line in text.splitlines():
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) <= PRODUCER_CELL:
-            continue
-        topic = cells[0].strip("`")
-        if topic not in CANONICAL_STREAMS or topic in found:
-            continue
+    for topic, cells in inventory_rows().items():
         producer = cells[PRODUCER_CELL].split("→")[0].strip(" *").lower()
         assert producer in SERVICE_USERS, f"{topic}'s producer cell names {producer!r}"
         found[topic] = producer
     return found
 
 
+def documented_never_xtrimmed() -> frozenset[str]:
+    """The streams whose inventory row says **Never XTRIMmed**.
+
+    Read off ../docs/STREAMS.md for the reason the producer column is: that
+    table is where an operator looks before reaching for the `XTRIM MINID`
+    runbook printed below it, so it is the copy that has to be right. Two
+    reasons put a stream here, and they are different in kind. `content.replicate`
+    is a command stream, and a cap deletes commands its group has not been
+    delivered. `info.registry` is capped - on every publish, by its producer -
+    and any other trim can cut under the floor its consumers boot from
+    (CannObserv/broker#34).
+    """
+    return frozenset(
+        topic for topic, cells in inventory_rows().items() if NEVER_XTRIMMED in " | ".join(cells)
+    )
+
+
 def test_the_inventory_names_a_producer_for_every_stream() -> None:
     """Static, so a table this file can no longer read fails in CI rather than
     silently reducing every assertion below to a no-op."""
     assert set(documented_producers()) == set(CANONICAL_STREAMS)
+
+
+def test_the_inventory_says_which_streams_are_never_xtrimmed() -> None:
+    """The trim tests below read this set, so it has to be the right one.
+
+    Every stream the probe declares ``never_trimmed`` is in it - the probe and
+    the inventory describing one stream two ways is a drift with nothing else
+    comparing them. And `info.registry` is in it, which is CannObserv/broker#34:
+    its retention floor is a consumer boot contract (CannObserv/archiver#141),
+    and until that change the row said nothing about retention while the same
+    file printed a worked `redis-cli XTRIM` runbook further down. The inventory
+    taught the gesture and never said where not to point it.
+    """
+    never_xtrimmed = documented_never_xtrimmed()
+    never_trimmed = {c.topic for c in STREAM_CHECKS if c.never_trimmed}
+    assert never_trimmed, "the probe's inventory carves out no stream - has the flag moved?"
+    assert never_trimmed <= never_xtrimmed, (
+        f"the probe never trims {sorted(never_trimmed - never_xtrimmed)} and the inventory "
+        f"row does not say {NEVER_XTRIMMED}**"
+    )
+    assert INFO_REGISTRY in never_xtrimmed, (
+        f"the info.registry row lost {NEVER_XTRIMMED}** - its floor is what consumers boot from"
+    )
 
 
 @pytest.mark.parametrize("user", SERVICE_USERS)
@@ -465,18 +523,71 @@ def test_no_selector_can_trim_the_stream_the_inventory_never_trims(users) -> Non
 
     Capping a command stream deletes commands the consumer group has not
     delivered and orphans the PEL entries naming them, so ../docs/STREAMS.md
-    carves `content.replicate` out of the drain loop's trim set. Derived from
-    the probe's own inventory (`never_trimmed`) rather than named here, so a
-    second such stream is covered the day it is declared.
+    carves `content.replicate` out of the drain loop's trim set. `info.registry`
+    joined it in CannObserv/broker#34 for a different reason: it is capped, but
+    only by the `MAXLEN` riding each of its producer's publishes, because
+    consumers boot by replaying it from `0-0` and a trim from anywhere else
+    cannot see where the last full snapshot starts. Derived from the rows
+    that say so rather than named here, so a third such stream is covered
+    the day its row does.
     """
-    never_trimmed = [c.topic for c in STREAM_CHECKS if c.never_trimmed]
-    assert never_trimmed, "the probe's inventory carves out no stream - has the flag moved?"
+    never_xtrimmed = documented_never_xtrimmed()
+    assert never_xtrimmed, f"no inventory row says {NEVER_XTRIMMED}** - has the table moved?"
     for name, rules in users.items():
-        for topic in never_trimmed:
+        for topic in sorted(never_xtrimmed):
             assert not admits(selector_patterns(rules, "+xtrim"), topic), (
-                f"{name} holds an +xtrim selector naming {topic}, which is never trimmed "
-                "by design - a cap there orphans undelivered commands"
+                f"{name} holds an +xtrim selector naming {topic}, which ../docs/STREAMS.md "
+                "says is never XTRIMmed"
             )
+
+
+#: What archiver itself trims, as archiver verified at every call site answering
+#: CannObserv/archiver#234 (2026-09-18): one `XTRIM` in the process, its outbox
+#: drain loop's, whose production trim set is exactly this. Nothing in archiver,
+#: co-core or co-core-aio issues `XDEL`. Mirrored, not derived - the broker
+#: cannot read another repository's call sites - so it names its source the way
+#: the retention caps in `src/broker/bus_health.py` do.
+ARCHIVER_TRIMS = frozenset({INFO_CHANGES})
+
+#: The caller archiver's dead-letter disposals are held for. Both its `+xtrim`
+#: and its `+xdel` on the two queues it drains issue from nothing today; the
+#: triage tooling that will issue them is filed so that the grant names one.
+ARCHIVER_DLQ_TRIAGE = "CannObserv/archiver#238"
+
+
+def test_archiver_may_trim_the_streams_it_trims_and_its_queues_name_their_caller(
+    users,
+) -> None:
+    """CannObserv/archiver#234's answer, held against the selector.
+
+    The `+xtrim` selector was derived as "what archiver produces, minus what the
+    inventory never trims", and that left `info.registry` in it on the strength
+    of an inventory that did not yet say so. Archiver's answer is the other
+    derivation - what it actually issues - and the two now have to agree on
+    every canonical stream: `info.changes`, and nothing else.
+
+    The dead-letter queues are the part of the selector the answer does not
+    cover, and they stay (`test_a_dlq_writer_can_also_drain_it`). What this adds
+    is the rule `brokeradmin`'s stanza is already held to: a grant nothing
+    issues names its caller, or the next reader cannot tell a decision from an
+    oversight.
+    """
+    rules = users["archiver"]
+    trimmable = selector_patterns(rules, "+xtrim")
+    assert trimmable & CANONICAL_STREAMS == ARCHIVER_TRIMS, (
+        f"archiver may trim {sorted(trimmable & CANONICAL_STREAMS)} and trims "
+        f"{sorted(ARCHIVER_TRIMS)} (CannObserv/archiver#234)"
+    )
+
+    prose = stanza("archiver")
+    held = sorted((trimmable - ARCHIVER_TRIMS) | selector_patterns(rules, "+xdel"))
+    assert held, "archiver holds no dead-letter disposal - has the drainer assignment moved?"
+    unexplained = [queue for queue in held if queue not in prose]
+    assert not unexplained and ARCHIVER_DLQ_TRIAGE in prose, (
+        f"archiver holds disposal on {held} and issues none of it; the stanza in "
+        f"{ACL_FILE.name} must name each queue and {ARCHIVER_DLQ_TRIAGE}, the caller it is "
+        f"held for (missing: {unexplained})"
+    )
 
 
 def test_replicator_can_set_only_its_dedupe_keys(users) -> None:
@@ -680,6 +791,7 @@ def test_the_probe_cannot_write_to_a_stream(users) -> None:
     # dead-letter queues, so the instance-wide `~*` above cannot carry it onto a
     # fact or a command stream. Publishing remains the thing it cannot do.
     assert selector_patterns(users["brokeradmin"], "+xdel") == {"*.dlq"}
+    assert selector_patterns(users["brokeradmin"], "+xtrim") == {"*.dlq"}
 
 
 def test_a_probe_grant_nothing_issues_says_why_it_is_kept(users) -> None:
@@ -712,6 +824,26 @@ def test_a_probe_grant_nothing_issues_says_why_it_is_kept(users) -> None:
         f"nothing in src/broker/ issues {', '.join(unexplained)}, and the brokeradmin stanza "
         f"in {ACL_FILE.name} does not say why it is kept: record the caller that is not the "
         "probe, or cut the grant"
+    )
+
+
+def test_the_operator_identity_says_why_its_trim_stops_at_dead_letter_queues(users) -> None:
+    """The inverse of the check above: a capability withheld on purpose.
+
+    `brokeradmin` is the credential an operator holds at a `redis-cli`, it reads
+    every key on the instance, and its `+xtrim` is confined to `~*.dlq`. With
+    `default` off and no service selector naming them, that confinement is the
+    whole reason nothing on this broker can `XTRIM` a stream the inventory says
+    is never XTRIMmed (CannObserv/broker#34). Widening it is one `ACL SETUSER`,
+    and the moment somebody reaches for one is an incident, where "the operator
+    should be able to trim anything" sounds like help. So the stanza has to name
+    every stream the confinement protects, where whoever widens it reads it.
+    """
+    prose = stanza("brokeradmin")
+    unnamed = sorted(topic for topic in documented_never_xtrimmed() if topic not in prose)
+    assert not unnamed, (
+        f"brokeradmin's +xtrim is confined to *.dlq so that nobody can trim {unnamed}, and "
+        f"its stanza in {ACL_FILE.name} does not say so"
     )
 
 
@@ -821,24 +953,49 @@ def test_nobody_can_trim_the_stream_that_is_never_trimmed(tracked_acl_broker, us
     keeps `no_trim_topics` to honour that - one participant's convention, in a
     repo the broker does not see, for a stream two participants could both cap.
 
+    Over every stream the inventory says is never XTRIMmed, which since
+    CannObserv/broker#34 includes `info.registry` - capped by its producer on
+    every publish, and by nobody else, because its consumers boot from `0-0`.
+
     Over every enabled user rather than the two that touch the stream, because
     the interesting failure is a grant arriving on a user nobody was thinking
     about. `default` is excluded by being `off`: it is declared `+@all` and
     cannot authenticate, and the day it is re-enabled for a window is a day the
     runbook already treats as break-glass.
     """
-    trimmable = [c.topic for c in STREAM_CHECKS if c.never_trimmed]
-    assert trimmable, "the probe's inventory carves out no stream - has the flag moved?"
+    never_xtrimmed = sorted(documented_never_xtrimmed())
+    assert never_xtrimmed, f"no inventory row says {NEVER_XTRIMMED}** - has the table moved?"
     with _seeder(tracked_acl_broker) as seeder:
-        for topic in trimmable:
+        for topic in never_xtrimmed:
             seeder.xadd(topic, {"k": "v"})
     for name, rules in sorted(users.items()):
         if "off" in rules:
             continue
         client = tracked_acl_broker(name)
-        for topic in trimmable:
+        for topic in never_xtrimmed:
             with pytest.raises(redis_pkg.exceptions.NoPermissionError):
                 client.xtrim(topic, maxlen=0)
+
+
+def test_archiver_caps_the_registry_by_publishing_and_info_changes_by_trimming(
+    tracked_acl_broker,
+) -> None:
+    """The two retention paths archiver runs, under the grant broker#34 left it.
+
+    Narrowing `+xtrim` off `info.registry` is safe only because the registry's
+    cap never needed it: `BusPublish.maxlen` puts `MAXLEN` on the `XADD`, and an
+    ACL is checked against the command, not its arguments. That was inferred
+    from one live publish in CannObserv/archiver#234; here it is asserted, with
+    the same approximate trim archiver sends and at the cap the probe mirrors.
+    And `info.changes` keeps the `XTRIM` its drain loop issues every twentieth
+    iteration - the only trim archiver runs, and the one CannObserv/archiver#239
+    found can silently stop, which this probe's length check is the outside
+    detector for.
+    """
+    client = tracked_acl_broker("archiver")
+    assert client.xadd(INFO_REGISTRY, {"k": "v"}, maxlen=REGISTRY_PRODUCER_MAXLEN, approximate=True)
+    assert client.xadd(INFO_CHANGES, {"k": "v"})
+    assert client.xtrim(INFO_CHANGES, maxlen=FACT_PRODUCER_MAXLEN, approximate=True) == 0
 
 
 def test_replicator_cannot_replace_a_stream_with_a_string(tracked_acl_broker) -> None:
