@@ -501,6 +501,26 @@ def test_a_service_can_publish_the_dead_letter_queues_it_writes(users, user) -> 
         )
 
 
+@pytest.mark.parametrize("user", SERVICE_USERS)
+def test_a_service_can_trim_only_what_it_publishes(users, user) -> None:
+    """The `+xtrim` half of the column, which the test above asks only of `+xadd`.
+
+    Until CannObserv/broker#34 every service's trim rode the selector its
+    publish did, so asking the publish selector covered both. Archiver's now
+    split by command, and a `+xtrim` selector of its own is the obvious next
+    edit - one naming a stream the service only reads lets a consumer cap it,
+    which on a command stream deletes commands its group has not been
+    delivered: the hazard `content.replicate` is carved out for, on a stream
+    nobody carved out. So a trim grant is held to the publish grant - narrower
+    where a row says **Never XTRIMmed**, never wider.
+    """
+    publishable = selector_patterns(users[user], "+xadd")
+    wider = sorted(
+        p for p in selector_patterns(users[user], "+xtrim") if not admits(publishable, p)
+    )
+    assert not wider, f"{user} can trim {wider} and publishes none of it"
+
+
 def test_no_user_holds_xadd_or_xtrim_on_its_root_permission_set(users) -> None:
     """Publishing and capping are selector-scoped or they are not granted.
 
@@ -933,6 +953,10 @@ def test_a_service_is_served_the_streams_it_produces_and_refused_the_rest(
     operator widens the grant live with one `ACL SETUSER` - loud and
     recoverable. A selector that is too wide is silent forever, and is the
     condition that existed here until this test did.
+
+    `XTRIM` is refused wherever `XADD` is: a consumer that cannot publish to a
+    stream must not be able to cap it either, and since broker#34 the two can
+    sit in different selectors.
     """
     client = tracked_acl_broker(user)
     producers = documented_producers()
@@ -942,6 +966,8 @@ def test_a_service_is_served_the_streams_it_produces_and_refused_the_rest(
         else:
             with pytest.raises(redis_pkg.exceptions.NoPermissionError):
                 client.xadd(topic, {"k": "v"})
+            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+                client.xtrim(topic, maxlen=0)
 
 
 def test_nobody_can_trim_the_stream_that_is_never_trimmed(tracked_acl_broker, users) -> None:
