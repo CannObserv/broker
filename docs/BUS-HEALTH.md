@@ -240,63 +240,22 @@ another repo; this one is owned here, because it describes the consumer's read
 loop as this node can observe it. All five groups are blocking `XREADGROUP`
 readers, so delivery is immediate - `replicator.fetch` answered the 14:18:00Z
 command at 14:18:01Z - and five minutes is two orders of magnitude of slack over
-that. A consumer that ever moves to a schedule rather than a blocking read needs
-its own value on its row: that schedule's period plus margin, with the source
-named the way a mirrored constant names its owner.
-`test_every_probed_group_carries_an_undelivered_threshold` fails if a sixth
-group arrives without one, and `StreamCheck` refuses the other direction - a
-threshold on a row with no group - at import.
+that, and ~55x the slowest handler: `content.replicate`'s, 5.4 s at the 64 MiB
+blob ceiling (CannObserv/replicator#96, broker#30). A consumer that ever moves
+to a schedule rather than a blocking read needs its own value on its row: that
+schedule's period plus margin, with the source named the way a mirrored constant
+names its owner. `test_every_probed_group_carries_an_undelivered_threshold`
+fails if a sixth group arrives without one, and `StreamCheck` refuses the other
+direction - a threshold on a row with no group - at import.
 
-**Sized against the slowest handler too** (CannObserv/broker#30). A blocking
-reader is not reading while it is inside a handler - replicator's loop reads
-`count=1`, handles, acks and reads again, with no prefetch - so a queued entry
-ages for as long as the entries ahead of it take. The 14:18 bracket above is a
-fetch. Replicator timed `content.replicate`'s whole handler against
-production-shaped GCS in CannObserv/replicator#96:
-
-| Payload | Median |
-|---|---|
-| 140 KiB - today's corpus (p50 137 KB, p95 145 KB) | 240 ms |
-| 64 MiB - `REPLICATOR_MAX_BLOB_BYTES`, the largest blob that can exist | 5.3 s |
-
-p50 and p95 are both about 0.25 s, and the ceiling case is 5.4 s end to end.
-Five minutes is about 55 times that, so `content.replicate` keeps the shared
-value because it was measured, not by default. A dedicated row would be a
-threshold with no owner.
-
-**What no duration sizes: a consumer that is alive and not reading.** Replicator
-names two ways it happens:
-
-1. **One stalled-provider attempt.** A 30 s source-download timeout, then a 120 s
-   conditional-create timeout, each with the GCS SDK's retry deadline on top.
-   That is inside five minutes, but not by much.
-2. **Recovery starving delivery** (CannObserv/replicator#98). Replicator's poll
-   tries `XAUTOCLAIM` before `XREADGROUP`, and a reclaim resets the entry's idle
-   clock. A handler slower than the 60 s min-idle that keeps failing transiently
-   is re-claimed every cycle, so `XREADGROUP` is never issued and the group's
-   position stands still for as long as the condition lasts. Replicator's
-   transient classes retry forever by design.
-
-The second is a state, not a duration, and to a positional check it looks the
-same as a gone consumer. What both have, and the 2026-09-16 consumer did not,
-is **a delivered entry the consumer still holds**. So the finding reads the
-group's `pending` count, from the same `XINFO GROUPS` row as its position at no
-extra cost, and words itself by it:
-
-- **`pending` 0.** Nothing delivered is outstanding, so nothing is in a handler:
-  a consumer that stopped reading. `CLIENT LIST` is the next check (below).
-- **`pending` above 0.** The consumer took delivery and has not read since.
-  It is inside one long handler, re-claiming its own retry, or gone while
-  holding the entry, and a running, connected consumer is **not** the all-clear.
-  Run `XPENDING <stream> <group> - + 10` twice. A delivery count that climbs
-  between the two is a consumer alive and retrying (replicator#98's shape). One
-  that stands still is a single attempt in progress or a dead holder, and
-  `CLIENT LIST` tells those apart. On replicator's side the transient-retry
-  warning carries `duration_ms` (replicator `1e92d5c`), so its journal shows a
-  hold this long on either command stream.
-
-A held entry that is still held a tick later also trips the two-tick `pending`
-rule on the same group. That is one condition reported from both sides.
+**What no duration sizes: a consumer alive and not reading**, since a reader
+inside a handler is not reading - one stalled-provider attempt, or recovery
+re-claiming its own failing entry every cycle so `XREADGROUP` never runs
+(CannObserv/replicator#98). Both hold a delivered entry, so the finding words
+itself by the group's `pending` count: at 0, a stopped reader; above 0, run
+`XPENDING <stream> <group> - + 10` twice. A delivery count that climbs is a
+consumer alive and retrying; one that stands still is one long attempt or a dead
+holder, which `CLIENT LIST` separates.
 
 **A stream trimmed past its group's position is its own finding**
 (`group-undelivered-lost`), not an age. The group is behind and the entries it
