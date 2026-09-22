@@ -1015,8 +1015,8 @@ def test_archiver_caps_the_registry_by_publishing_and_info_changes_by_trimming(
     the same approximate trim archiver sends and at the cap the probe mirrors.
     And `info.changes` keeps the `XTRIM` its drain loop issues every twentieth
     iteration - the only trim archiver runs, and the one CannObserv/archiver#239
-    found can silently stop, which this probe's length check is the outside
-    detector for.
+    found can silently stop, which the bus-health probe's length check detects
+    from outside archiver.
     """
     client = tracked_acl_broker("archiver")
     assert client.xadd(INFO_REGISTRY, {"k": "v"}, maxlen=REGISTRY_PRODUCER_MAXLEN, approximate=True)
