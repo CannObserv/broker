@@ -705,13 +705,32 @@ def test_one_missed_republish_is_absorbed_and_two_are_not(set_size: int) -> None
 
 def test_a_floor_must_agree_with_the_row_it_sits_on() -> None:
     """The mirrored cap would otherwise have two spellings on one row - the
-    `warn_length` the length check uses and the `maxlen` the floor compares
-    against - and nothing would notice them diverging."""
-    floor = FullSetFloor(default_maxlen=500, retained_full_sets=10, republish_period_seconds=300.0)
+    `warn_length` the length check uses and the `default_maxlen` the floor
+    compares against - and nothing would notice them diverging.
+
+    A never-trimmed row carrying a floor is refused by the same guard: a stream
+    nothing caps has no cap for a floor to raise.
+    """
+    # deliberately not the LWW numbers: what is under test is the guard, and
+    # test_the_floor_constants_mirror_watchers already owns the real values
+    floor = FullSetFloor(default_maxlen=123, retained_full_sets=7, republish_period_seconds=60.0)
     with pytest.raises(ValueError, match="full-set floor"):
         StreamCheck(topic="t", warn_length=999, full_set_floor=floor)
     with pytest.raises(ValueError, match="full-set floor"):
         StreamCheck(topic="t", full_set_floor=floor)
+    with pytest.raises(ValueError, match="never trimmed"):
+        StreamCheck(
+            topic="t", warn_length=with_margin(123), never_trimmed=True, full_set_floor=floor
+        )
+
+
+def test_a_floor_refuses_a_period_it_cannot_divide_by() -> None:
+    """`republished_set_size` divides by the period, so a zero is a crash in a
+    WARN-only probe - caught at import, where the module's other invariants are."""
+    with pytest.raises(ValueError, match="positive republish period"):
+        FullSetFloor(default_maxlen=500, retained_full_sets=10, republish_period_seconds=0)
+    with pytest.raises(ValueError, match="positive republish period"):
+        FullSetFloor(default_maxlen=500, retained_full_sets=0, republish_period_seconds=300.0)
 
 
 def test_the_floor_constants_mirror_watchers() -> None:
