@@ -562,7 +562,10 @@ def test_lww_threshold_catches_the_backlog_its_cap_was_cut_for(topic: str) -> No
     500 for it. A threshold still derived from 50k sat at 55k and would have let
     a broken cap climb through that whole range unreported. The other half: the
     node read 511 under `MAXLEN ~ 500` on 2026-09-22, so the margin has to
-    absorb one macro node of approximate-trim overshoot.
+    absorb one macro node of approximate-trim overshoot. It does because these
+    nodes fill by bytes (`stream-node-max-bytes`, Redis's 4096 default, which
+    `deploy/redis.conf.broker` does not pin) at ~8-13 entries; filling by count
+    (`stream-node-max-entries` 100) they would overshoot the 50-entry margin.
     """
     check = _check_for(topic)
     assert check.warn_length == with_margin(LWW_PRODUCER_MAXLEN)
