@@ -62,6 +62,24 @@ def _directive(text: str, key: str) -> list[str]:
     return [ln.split("=", 1)[1] for ln in text.splitlines() if ln.startswith(f"{key}=")]
 
 
+def _names_assigned_in(path: Path) -> set[str] | None:
+    """The variable names an ``EnvironmentFile`` assigns, or ``None`` if absent.
+
+    A helper rather than inline, so the file's text - which holds a password in
+    ``BROKER_REDIS_URL`` - is never a local of the test frame: ``pytest -l``
+    prints a failing test's locals, and this frame has returned by then.
+    """
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return None
+    return {
+        line.split("=", 1)[0].strip()
+        for line in text.splitlines()
+        if "=" in line and not line.lstrip().startswith(("#", ";"))
+    }
+
+
 def _variables_the_probe_reads() -> set[str]:
     """Every name ``src/broker/bus_health.py`` looks up in its environment."""
     source = PROBE_SOURCE.read_text()
@@ -257,15 +275,9 @@ def test_every_variable_the_probe_inherits_is_one_it_reads() -> None:
     assigns is either read by ``src/broker/bus_health.py`` or unset by the unit.
     Names only: no value leaves the file, pass or fail.
     """
-    try:
-        text = SHARED_ENV.read_text()
-    except FileNotFoundError:
+    assigned = _names_assigned_in(SHARED_ENV)
+    if assigned is None:
         pytest.skip(f"{SHARED_ENV} not present - not the node")
-    assigned = {
-        line.split("=", 1)[0].strip()
-        for line in text.splitlines()
-        if "=" in line and not line.lstrip().startswith("#")
-    }
     unset = set(" ".join(_directive(REPO_SERVICE.read_text(), "UnsetEnvironment")).split())
     unused = sorted(assigned - unset - _variables_the_probe_reads())
     assert not unused, (
