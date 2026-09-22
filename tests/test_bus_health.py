@@ -675,7 +675,8 @@ def test_the_set_size_is_read_high_rather_than_low() -> None:
     assert republished_set_size(floor, length=631, **_spanning(10)) == 64
 
 
-def test_one_missed_republish_is_absorbed_and_two_are_not() -> None:
+@pytest.mark.parametrize("set_size", [62, 100, 200, 1000])
+def test_one_missed_republish_is_absorbed_and_two_are_not(set_size: int) -> None:
     """The direction this derivation fails in, and how far, pinned rather than
     left to be discovered.
 
@@ -683,8 +684,9 @@ def test_one_missed_republish_is_absorbed_and_two_are_not() -> None:
     so the set reads low and the threshold with it - the stale-low, warns-early
     direction, where the probe stays loud rather than going quiet. The 10%
     margin covers exactly one missed republish at `RETAINED_FULL_SETS` of 10,
-    and only because the reading is ceilinged; two warn. Measured the same at
-    set sizes from 62 to 1,000.
+    and only because the reading is ceilinged; two warn. Parametrized over the
+    set sizes docs/BUS-HEALTH.md says it was measured at, so the claim there
+    has an artifact rather than a memory.
 
     Two missed republishes is ten minutes of silence and `stream-age` needs
     fifteen, so between them sits a window with no finding naming the cause -
@@ -693,9 +695,11 @@ def test_one_missed_republish_is_absorbed_and_two_are_not() -> None:
     """
     check = _check_for(CONTENT_FETCH_POLICY)
     assert LWW_WARN_LAST_ENTRY_AGE_SECONDS == 3 * LWW_REPUBLISH_PERIOD_SECONDS
-    # a 62-entry set capped at 620, one macro node of overshoot above it
-    assert evaluate_stream(check, length=631, now_ms=_NOW_MS, **_spanning(11)) == []
-    findings = evaluate_stream(check, length=631, now_ms=_NOW_MS, **_spanning(12))
+    # the cap the floor puts in force, with one macro node of overshoot above it
+    length = set_size * LWW_RETAINED_FULL_SETS + 11
+    assert evaluate_stream(check, length=length, now_ms=_NOW_MS, **_spanning(10)) == []
+    assert evaluate_stream(check, length=length, now_ms=_NOW_MS, **_spanning(11)) == []
+    findings = evaluate_stream(check, length=length, now_ms=_NOW_MS, **_spanning(12))
     assert [f.check for f in findings] == ["stream-length"]
 
 
