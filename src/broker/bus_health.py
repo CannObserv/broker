@@ -235,8 +235,10 @@ and ``DEFAULT_WATCH_STATUS_STREAM_MAXLEN`` (``src/core/watch_status.py``), both 
 from 50k by CannObserv/watcher#292.
 
 Watcher floors each at ``RETAINED_FULL_SETS`` (10) copies of the set it
-republishes, so a set past 50 entries raises the real cap above this one and
-the probe warns early - the safe direction. The sets were 3 and 4 entries on
+republishes, so a set past 50 entries raises the real cap above this one. That
+is not the safe direction it looks like: from about 54 entries per set the
+threshold warns, and from 56 it warns every tick, saying the cap is not being
+applied when it is. CannObserv/broker#44. The sets were 3 and 4 entries on
 2026-09-22.
 """
 
