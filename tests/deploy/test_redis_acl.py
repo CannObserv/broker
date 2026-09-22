@@ -1143,7 +1143,8 @@ def test_replicator_can_count_a_commands_deliveries_on_every_command_stream(
     client.xgroup_create(topic, group, id="$", mkstream=True)
     with _seeder(tracked_acl_broker) as seeder:
         entry = seeder.xadd(topic, {"k": "v"})
-    assert client.xreadgroup(group, "worker", {topic: ">"}, count=1)
+    ((_stream, [(delivered, _fields)]),) = client.xreadgroup(group, "worker", {topic: ">"}, count=1)
+    assert delivered == entry, f"{group} was delivered {delivered}, not the entry seeded here"
 
     def times_delivered() -> int:
         (pending,) = client.xpending_range(topic, group, min=entry, max=entry, count=1)
