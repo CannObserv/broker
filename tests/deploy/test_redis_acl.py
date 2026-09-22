@@ -638,7 +638,7 @@ def test_replicator_holds_the_xpending_its_delivery_ceiling_reads(users) -> None
 
     The dedupe namespace's shape (CannObserv/broker#9) a second time. The grant
     was built from what `MONITOR` saw, and this path runs only after a failure
-    nothing had produced. On the root permission set, which already names every
+    no capture had seen. On the root permission set, which already names every
     command stream: the selectors confine `XADD`, `XTRIM`, `SET` and `XDEL` to
     the keys each may change, and `XPENDING` changes nothing.
 
