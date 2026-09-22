@@ -231,7 +231,12 @@ def test_no_unit_runs_the_wheelhouse_sync() -> None:
     """
     units = sorted(_DEPLOY.glob("*.service"))
     assert units, "the glob found no units - the guard would pass by finding nothing"
-    running = [u.name for u in units if "sync_wheelhouse" in u.read_text()]
+    # A drop-in is where a step gets added to a unit without editing it, and
+    # deploy/ already ships them.
+    dropins = sorted(_DEPLOY.glob("*.service.d/*.conf"))
+    running = [
+        str(u.relative_to(_DEPLOY)) for u in units + dropins if "sync_wheelhouse" in u.read_text()
+    ]
     assert not running, f"units running the wheelhouse sync: {running}"
 
 
