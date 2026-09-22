@@ -274,6 +274,7 @@ def test_a_group_at_the_streams_last_id_is_caught_up() -> None:
             last_delivered_id="1000-0",
             oldest_undelivered_id=None,
             now_ms=10_000_000,
+            pending=0,
         )
         == []
     )
@@ -290,6 +291,7 @@ def test_a_group_behind_by_a_fresh_entry_is_healthy() -> None:
             last_delivered_id="9000000-0",
             oldest_undelivered_id=f"{now_ms - 1000}-0",
             now_ms=now_ms,
+            pending=0,
         )
         == []
     )
@@ -303,6 +305,7 @@ def test_a_group_behind_by_a_stale_entry_warns() -> None:
         last_delivered_id="9000000-0",
         oldest_undelivered_id=f"{now_ms - 301_000}-0",
         now_ms=now_ms,
+        pending=0,
     )
     assert finding.check == "group-undelivered"
     assert finding.subject == "t/g"
@@ -323,6 +326,7 @@ def test_undelivered_entries_that_no_longer_exist_are_their_own_condition() -> N
         last_delivered_id="1000-0",
         oldest_undelivered_id=None,
         now_ms=10_000_000,
+        pending=0,
     )
     assert finding.check == "group-undelivered-lost"
 
@@ -336,6 +340,7 @@ def test_a_group_row_without_a_threshold_says_nothing() -> None:
             last_delivered_id="1000-0",
             oldest_undelivered_id=None,
             now_ms=10_000_000,
+            pending=0,
         )
         == []
     )
@@ -358,6 +363,7 @@ def test_a_group_ahead_of_the_last_id_the_probe_read_is_caught_up() -> None:
             last_delivered_id="1001-0",
             oldest_undelivered_id=None,
             now_ms=10_000_000,
+            pending=0,
         )
         == []
     )
@@ -378,8 +384,55 @@ def test_positions_are_compared_as_numbers_not_strings() -> None:
         last_delivered_id="9-0",
         oldest_undelivered_id=f"{now_ms - 301_000}-0",
         now_ms=now_ms,
+        pending=0,
     )
     assert finding.check == "group-undelivered"
+
+
+def test_behind_and_holding_nothing_is_a_stopped_reader() -> None:
+    """The 2026-09-16 shape: behind, and nothing delivered is outstanding.
+
+    A consumer inside a handler holds the entry it is handling - the loops on
+    this node read, handle, then ack - so a pending count of 0 means nothing is
+    in flight, and what is left to explain the age is a consumer not reading.
+    """
+    now_ms = 10_000_000
+    (finding,) = evaluate_undelivered(
+        _GROUPED,
+        last_generated_id="9999999-0",
+        last_delivered_id="9000000-0",
+        oldest_undelivered_id=f"{now_ms - 301_000}-0",
+        now_ms=now_ms,
+        pending=0,
+    )
+    assert "stopped READING" in finding.message
+
+
+def test_behind_a_held_delivery_is_not_called_a_stopped_reader() -> None:
+    """The states no handler duration sizes (CannObserv/broker#30).
+
+    Replicator named two in CannObserv/replicator#96: one stalled-provider
+    attempt, and recovery re-claiming its own failing entry every cycle so that
+    ``XREADGROUP`` is never issued (CannObserv/replicator#98) - a live consumer,
+    logging, whose group has not moved. Both hold a delivered entry. "XPENDING
+    reads the healthy 0" is false there, and "check it is connected" sends the
+    reader to the one thing that will look fine.
+    """
+    now_ms = 10_000_000
+    (finding,) = evaluate_undelivered(
+        _GROUPED,
+        last_generated_id="9999999-0",
+        last_delivered_id="9000000-0",
+        oldest_undelivered_id=f"{now_ms - 301_000}-0",
+        now_ms=now_ms,
+        pending=1,
+    )
+    assert finding.check == "group-undelivered"
+    assert "healthy 0" not in finding.message
+    assert "stopped READING" not in finding.message
+    assert "holds 1 delivered" in finding.message
+    assert "replicator#98" in finding.message
+    assert "XPENDING t g - + 10" in finding.message
 
 
 # --- inventory ---
@@ -658,7 +711,26 @@ async def test_collect_warns_when_a_group_stopped_reading(fake_redis) -> None:
     findings, _ = await collect_broker_findings(fake_redis, previous_state={})
     (finding,) = [f for f in findings if f.check == "group-undelivered"]
     assert finding.subject == f"{CONTENT_REVISIONS}/archiver.revisions"
+    assert "stopped READING" in finding.message
     assert not any(f.check == "pending" for f in findings)
+
+
+async def test_collect_words_the_finding_by_the_pending_count_it_already_read(fake_redis) -> None:
+    """One entry delivered and never acked, a stale one behind it never offered.
+
+    The pending count rides the same ``XINFO GROUPS`` row as the position
+    (CannObserv/broker#29), so telling a held delivery from a stopped reader
+    costs no read (CannObserv/broker#30).
+    """
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="2000-0")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+    await fake_redis.xreadgroup("archiver.revisions", "c1", {CONTENT_REVISIONS: ">"}, count=1)
+
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    (finding,) = [f for f in findings if f.check == "group-undelivered"]
+    assert "holds 1 delivered" in finding.message
+    assert "stopped READING" not in finding.message
 
 
 async def test_collect_says_nothing_once_the_group_has_read(fake_redis) -> None:

@@ -741,6 +741,7 @@ def evaluate_undelivered(
     last_delivered_id: str | None,
     oldest_undelivered_id: str | None,
     now_ms: int,
+    pending: int,
 ) -> list[Finding]:
     """How long the group's oldest undelivered entry has been waiting.
 
@@ -760,6 +761,14 @@ def evaluate_undelivered(
     A row with no threshold says nothing at all: the consumer contract is what
     the threshold *is*, and a stream whose group nobody has sized a threshold
     for is one this repo has no opinion about yet.
+
+    ``pending`` words the finding, and never decides it. A group holding
+    nothing has nothing in a handler, so its consumer has stopped reading. A
+    group holding a delivery has a consumer that took one and has not read
+    since - inside one long attempt, re-claiming its own retry instead of
+    reading (CannObserv/replicator#98), or gone while holding it. The position
+    cannot tell those apart, and the message says so rather than naming the
+    first (CannObserv/broker#30).
     """
     if check.warn_undelivered_age_seconds is None:
         return []
@@ -782,18 +791,28 @@ def evaluate_undelivered(
     age = (now_ms - _entry_ms(oldest_undelivered_id)) / 1000.0
     if age <= check.warn_undelivered_age_seconds:
         return []
-    return [
-        Finding(
-            check="group-undelivered",
-            subject=subject,
-            message=f"oldest UNDELIVERED entry {oldest_undelivered_id} is {age:.0f}s old "
-            f"(warn over {check.warn_undelivered_age_seconds:.0f}s) - the group is at "
-            f"{last_delivered_id}, the stream at {last_generated_id}. Nothing was delivered, "
-            "so XPENDING reads the healthy 0: this is a consumer that has stopped READING, "
-            "not one that is slow to ack. Check it is running and connected "
-            '(CLIENT LIST, `user=`); see docs/BUS-HEALTH.md, "A consumer that stopped reading"',
+    head = (
+        f"oldest UNDELIVERED entry {oldest_undelivered_id} is {age:.0f}s old "
+        f"(warn over {check.warn_undelivered_age_seconds:.0f}s) - the group is at "
+        f"{last_delivered_id}, the stream at {last_generated_id}. "
+    )
+    if pending == 0:
+        body = (
+            "Nothing was delivered, so XPENDING reads the healthy 0: this is a consumer that "
+            "has stopped READING, not one that is slow to ack. Check it is running and "
+            "connected (CLIENT LIST, `user=`)"
         )
-    ]
+    else:
+        body = (
+            f"The group holds {pending} delivered and not acked, so its consumer took delivery "
+            "and has not read since: inside one long handler, re-claiming its own retry "
+            "instead of reading (CannObserv/replicator#98), or gone while holding it. A "
+            "connected consumer is not the all-clear here; run "
+            f"`XPENDING {check.topic} {check.pending_group} - + 10` twice - a delivery count "
+            "that climbs is a consumer alive and retrying"
+        )
+    tail = '; see docs/BUS-HEALTH.md, "A consumer that stopped reading"'
+    return [Finding(check="group-undelivered", subject=subject, message=head + body + tail)]
 
 
 def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int) -> list[Finding]:
@@ -1230,6 +1249,7 @@ async def _collect_undelivered(
         last_delivered_id=last_delivered_id,
         oldest_undelivered_id=oldest_undelivered_id,
         now_ms=int(time.time() * 1000),
+        pending=int(position["pending"]),
     )
 
 
