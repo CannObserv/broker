@@ -345,7 +345,7 @@ async def test_a_reload_keeps_the_position_and_loses_lags_input(restartable) -> 
     assert after["last-delivered-id"] == stream["last-generated-id"], "and it is caught up"
     assert after["entries-read"] is None, (
         "entries-read survived the reload on this Redis - re-read this test's docstring "
-        "and the lag paragraph in docs/BUS-HEALTH.md before trusting lag anyway"
+        "and the lag paragraph in docs/UNDELIVERED-CONSUMERS.md before trusting lag anyway"
     )
 
     probe = AsyncRedis(port=restartable.port, decode_responses=True)

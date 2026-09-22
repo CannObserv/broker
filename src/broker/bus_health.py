@@ -131,7 +131,7 @@ MEMORY_WARN_FRACTION = 0.75
 # the protection silently becomes inert, both arrive as a live `CONFIG SET` that
 # no file records, and a policy is the one an operator is most likely to reach
 # for under memory pressure - "evict something" reads safer than "refuse
-# writes" and is the opposite. See docs/BUS-HEALTH.md, "`noeviction` is
+# writes" and is the opposite. See docs/MEMORY-PROTECTION.md, "`noeviction` is
 # load-bearing beyond refusing writes" (CannObserv/broker#9).
 BROKER_EVICTION_POLICY = "noeviction"
 
@@ -678,7 +678,7 @@ def _evaluate_eviction_policy(policy: str | None) -> list[Finding]:
             check="eviction-policy",
             subject="redis",
             message=f"maxmemory-policy is {policy!r}, not {BROKER_EVICTION_POLICY!r} - "
-            f"{consequence}; see docs/BUS-HEALTH.md, "
+            f"{consequence}; see docs/MEMORY-PROTECTION.md, "
             '"noeviction is load-bearing beyond refusing writes"',
         )
     ]
@@ -1059,7 +1059,7 @@ def evaluate_undelivered(
             f"`XPENDING {check.topic} {check.pending_group} - + 10` twice - a delivery count "
             "that climbs is a consumer alive and retrying"
         )
-    tail = '; see docs/BUS-HEALTH.md, "A consumer that stopped reading"'
+    tail = '; see docs/UNDELIVERED-CONSUMERS.md, "Consumers that stopped reading"'
     return [Finding(check="group-undelivered", subject=subject, message=head + body + tail)]
 
 

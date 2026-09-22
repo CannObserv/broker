@@ -14,8 +14,9 @@ a row names a service's constant or module, that is a pointer across a repo
 boundary, and the pointer is the only thing keeping the two in step.
 
 How each stream is monitored - the probe and its thresholds, the per-stream
-monitoring contracts, loss detection, the `noeviction` contract, *Mirrored
-constants* and *Who watches what* - is [BUS-HEALTH.md](BUS-HEALTH.md).
+monitoring contracts, loss detection, *Mirrored constants* and *Who watches
+what* - is [BUS-HEALTH.md](BUS-HEALTH.md). The `noeviction` contract is
+[MEMORY-PROTECTION.md](MEMORY-PROTECTION.md).
 
 ## Streams on this broker
 
@@ -32,7 +33,7 @@ of positions instead; `lag` survives as a dashboard number in archiver, where it
 is read rather than alarmed on. `XPENDING` in that column names the **signal** -
 a group's pending count - not the command this repo's probe issues: it reads the
 same number out of `XINFO GROUPS`, beside the position (CannObserv/broker#29).
-[BUS-HEALTH.md](BUS-HEALTH.md), *A consumer that stopped reading*.
+[UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md).
 
 **The `Producer → consumer` column is enforced, not only documented.** Since
 CannObserv/broker#14 each service holds a `+xadd` **selector** naming the

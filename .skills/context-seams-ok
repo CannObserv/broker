@@ -97,3 +97,37 @@ docs/NETWORK-PATHS.md :: [STREAMS.md](STREAMS.md), *Participants, hosts and path
 docs/NETWORK-PATHS.md :: measurement half of that section, moved out when STREAMS.md ran past the
 docs/NETWORK-PATHS.md :: exact position with nothing pending ([RESTART-WINDOW.md](RESTART-WINDOW.md))
 docs/INCIDENT-2026-09-10.md :: [RESTART-WINDOW.md](RESTART-WINDOW.md). Moved out of it when that file ran
+
+# --- 2026-09-22 split of docs/BUS-HEALTH.md into + MEMORY-PROTECTION.md and
+# --- UNDELIVERED-CONSUMERS.md -------------------------------------------------
+# Only two topics left the doc: producer behaviour under the `maxmemory` cap
+# (with the `noeviction` argument), and the `group-undelivered` check's
+# reasoning. Everything every line below points at - the probe and its per-tick
+# checks, *Mirrored constants*, *The one cap that is read, not mirrored*,
+# *Detecting loss*, *Who watches what* - stayed. The three that did NOT still
+# point at what they name were retargeted rather than acked: AGENTS.md's
+# `noeviction` rule, STREAMS.md's monitoring sentence, and the two runtime
+# finding messages in src/broker/bus_health.py.
+#
+# The two new docs pointing back at the probe that runs what they describe.
+docs/MEMORY-PROTECTION.md :: `eviction-policy` finding - is [BUS-HEALTH.md](BUS-HEALTH.md).
+docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md); which stream carries which group is
+# Their provenance lines - a demotion naming where it came from.
+docs/MEMORY-PROTECTION.md :: Moved out of BUS-HEALTH.md on 2026-09-22, when it ran past the per-doc
+docs/UNDELIVERED-CONSUMERS.md :: Moved out of BUS-HEALTH.md on 2026-09-22, when it ran past the per-doc
+# STREAMS.md: the monitoring sentence after its noeviction clause was repointed,
+# and the two LWW rows naming *The one cap that is read, not mirrored*.
+docs/STREAMS.md :: what* - is [BUS-HEALTH.md](BUS-HEALTH.md). The `noeviction` contract is
+docs/STREAMS.md :: | `content.fetch-policy` | Watcher → Replicator workers
+docs/STREAMS.md :: | `info.watch-status` | Watcher → **Archiver**
+# The index entry for the doc itself, which did not move.
+.socraticodecontextartifacts.json :: "path": "./docs/BUS-HEALTH.md",
+# Source and tests naming sections that stayed. The last is pinned every run by
+# test_the_doc_section_a_finding_points_at_exists.
+src/broker/bus_health.py :: Outbox monitoring is therefore archiver's; see `docs/BUS-HEALTH.md` for the
+src/broker/bus_health.py :: # See docs/BUS-HEALTH.md, "Mirrored constants".
+src/broker/bus_health.py :: and docs/BUS-HEALTH.md for the measured tables.
+src/broker/bus_health.py :: tail = 'See docs/BUS-HEALTH.md, "The bus-health probe"'
+tests/test_bus_health.py :: set sizes docs/BUS-HEALTH.md says it was measured at, so the claim there
+tests/test_bus_health.py :: named on each (docs/BUS-HEALTH.md, "Mirrored constants")."""
+tests/test_bus_health.py :: three causes (docs/BUS-HEALTH.md), and a message asserting it would send

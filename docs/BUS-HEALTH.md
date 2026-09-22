@@ -136,13 +136,12 @@ Per tick it probes:
   and the one the 2026-09-16 event asked for; see *A consumer that stopped
   reading* below;
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
-  named and the entries captured; see *Who drains a DLQ* in [STREAMS.md](STREAMS.md);
-The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
-`XTRIM MAXLEN 0`, which was the only tool the broker had before
-CannObserv/broker#12 and which takes every *other* entry with it - on a queue
-that reached 110, emptying it to remove one triaged frame destroys 109 audits
-nobody did. `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table.
-
+  named and the entries captured; see *Who drains a DLQ* in [STREAMS.md](STREAMS.md).
+  The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
+  `XTRIM MAXLEN 0`, which was the only tool the broker had before
+  CannObserv/broker#12 and which takes every *other* entry with it - on a queue
+  that reached 110, emptying it to remove one triaged frame destroys 109 audits
+  nobody did. `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table;
 - **`entries-added` going backwards on any stream** - the one check here that is
   not an upper bound. See *Detecting loss* below. On a **dead-letter queue** it
   means the queue was deleted rather than drained, so any evidence dump still on
@@ -180,184 +179,16 @@ abstention, installed-copy parity, and what the unit inherits (broker#37).
 
 ## A consumer that stopped reading
 
-Provenance: CannObserv/broker#20.
+Why a pending count cannot see a consumer that stopped calling
+`XREADGROUP`, and what the probe compares instead, are
+[UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md).
 
-**A group whose consumer is gone was invisible to every other check here**, and
-the probe said so out loud: after the node's reboot on 2026-09-16
-(redis-server up 15:26:34Z, AOF intact) replicator never reconnected,
-`replicator.fetch` held one undelivered command from 15:27:00Z onwards, and the
-tick at 15:38 and every tick after it reported **0 findings**. It was found by
-hand.
+## Behaviour under the `noeviction` cap
 
-Each existing signal is blind to a consumer that has stopped *reading*:
-
-- **`pending` counts what was delivered and not acked.** A consumer that never
-  calls `XREADGROUP` is delivered nothing, so its pending count sits at `0` -
-  which is the healthy value. The two-tick rule above catches a consumer wedged
-  *after* delivery; this is the half before it.
-- **Last-entry age catches a stopped producer**, and exists only for the
-  permanently-groupless streams.
-- **Consumer `idle` is useless right after a restart** - exactly when it is most
-  wanted. It read 869 s for every consumer on every group at 15:41: the time
-  since the AOF load, not since each consumer's last read.
-
-### Positions, not counters - and why not `lag`
-
-`XINFO GROUPS` reports a `lag` per group, which looks like the answer and is
-not. Measured that morning:
-
-| Group | `lag` | Where it actually stood |
-|---|---|---|
-| `watcher.blobs` | 152 | at the stream's `last-generated-id` - caught up |
-| `archiver.revisions` | 147 | at the stream's `last-generated-id` - caught up |
-| `replicator.fetch` | 153 | behind by **one** entry - the real fault |
-
-A lag-based check would have raised three findings, two of them false, and
-misstated the third. The cause is structural rather than a quirk: `lag` is
-`entries-added` minus the group's `entries-read`, and **`entries-read` does not
-survive a reload** - `test_a_reload_keeps_the_position_and_loses_lags_input`
-restarts a server to show it. `last-delivered-id` does survive, because it is
-what the consumer's next read resumes from.
-
-So the check compares positions and dates one entry:
-
-1. `XINFO STREAM <stream>` -> `last-generated-id`, which the length and
-   continuity checks already read;
-2. `XINFO GROUPS <stream>` -> that group's `last-delivered-id`, plus the
-   `pending` count and the group names the checks above read out of the same
-   reply - one round trip, one observation (CannObserv/broker#29);
-3. equal - or the group *ahead*, which happens when an `XADD` lands between the
-   two replies - and the group is caught up, whatever `lag` says. Nothing
-   further is read;
-4. behind, and `XRANGE <stream> (<last-delivered-id> + COUNT 1` gives the oldest
-   entry it has not been offered. The timestamp in that id is its age.
-
-**The threshold is 5 minutes on every group, and it is not a mirrored
-constant.** Every other threshold in this probe copies a retention cap owned in
-another repo; this one is owned here, because it describes the consumer's read
-loop as this node can observe it. All five groups are blocking `XREADGROUP`
-readers, so delivery is immediate - `replicator.fetch` answered the 14:18:00Z
-command at 14:18:01Z - and five minutes is two orders of magnitude of slack over
-that, and ~55x the slowest handler: `content.replicate`'s, 5.4 s at the 64 MiB
-blob ceiling (CannObserv/replicator#96, broker#30). A consumer that ever moves
-to a schedule rather than a blocking read needs its own value on its row: that
-schedule's period plus margin, with the source named the way a mirrored constant
-names its owner. `test_every_probed_group_carries_an_undelivered_threshold`
-fails if a sixth group arrives without one, and `StreamCheck` refuses the other
-direction - a threshold on a row with no group - at import.
-
-**What no duration sizes: a consumer alive and not reading**, since a reader
-inside a handler is not reading - one stalled-provider attempt, or recovery
-re-claiming its own failing entry every cycle so `XREADGROUP` never runs
-(CannObserv/replicator#98). Both hold a delivered entry, so the finding words
-itself by the group's `pending` count: at 0, a stopped reader (for a consumer
-that acks after handling, as replicator's does); above 0, run `XPENDING <stream>
-<group> - + 10` twice. A delivery count that climbs is a consumer alive and
-retrying; one that stands still is one long attempt or a dead holder, which
-`CLIENT LIST` separates.
-
-**A stream trimmed past its group's position is its own finding**
-(`group-undelivered-lost`), not an age. The group is behind and the entries it
-is behind by are gone - trimmed or deleted before delivery - so there is nothing
-to date and nothing that will ever arrive. Reported as an age it would read as
-either healthy or as a stopped consumer, and the remedy is neither: it is the
-hazard `content.replicate` is carved out of every trim path for, happening on a
-stream that is not carved out.
-
-**It costs no grant, no round trip, and joins nothing.** `XINFO STREAM`,
-`XINFO GROUPS` and `XRANGE` are all read-only introspection `brokeradmin`
-already held, so the check shipped without touching `deploy/redis-acl.conf`;
-since CannObserv/broker#29 that `XINFO GROUPS` is the one the pending count
-comes from; `test_the_probe_can_read_a_groups_position_without_joining_it`
-asserts both halves - that the reads are permitted, and that `XREADGROUP` and
-`XGROUP CREATE` are still refused. A probe that joined a group would take delivery of another
-service's messages, which is the rule it exists on the other side of.
-
-**Corroboration, not contract.** Zero `user=replicator` connections in
-`CLIENT LIST` was the first visible sign on the day, and it is the right thing
-to check next when this finding fires on a group holding nothing. It is not the
-check itself: a connection count is not what a consumer promises, and a
-connected process that has stopped reading looks identical to a healthy one.
-
-## Behaviour under the `noeviction` cap - verified for all three producers
-
-CannObserv/broker#1 R5 asked whether the cap protects the broker at the cost of
-breaking its clients. It does not: **all three producers survive `OOM command
-not allowed`, and none of them drops or dead-letters.** Measured against
-scratch instances at `maxmemory 1mb`, never against this broker - the cap is
-instance-wide, so forcing it here would be an outage.
-
-Per-stream answers are in the `Producer durability under OOM` column of [STREAMS.md](STREAMS.md).
-Three broker-level facts came out of that work and belong here rather than in
-any one participant's repo:
-
-**Only `denyoom` commands are refused, which makes an OOM a *publishing*
-incident rather than a total one.** `XADD` and `SET` are refused; `XREADGROUP`,
-`XACK`, `XAUTOCLAIM`, `XPENDING`, `XRANGE`, `XREAD`, `XLEN`, `EXISTS` and
-`PING` are all admitted at the cap. So consumers keep draining their backlogs
-throughout, which is why every loop re-arms instead of wedging, and why the
-bus-health probe keeps reporting - every command it issues is on the admitted
-side.
-
-**`XGROUP CREATE ... MKSTREAM` is `denyoom`; `XGROUP CREATE` against an
-existing key is not.** A cold boot into a latched cap therefore succeeds
-wherever the stream already exists and fails at `ensure_group` only where it
-does not. First-boot hazard only, and it self-heals when the cap clears - but
-it presents as a service that will not start rather than as a memory incident.
-
-**OOM is a threshold, not a latch**, and the client's argument buffer counts
-toward `used_memory` when a `denyoom` command runs. So at the boundary a large
-entry can be refused and free enough on the error reply to put usage back under
-the cap, and a naive fill-then-probe sees `XADD` succeed two commands after it
-was refused. Anyone reproducing this should fill to the first refusal, then
-lower `maxmemory` below the current `used_memory` so the state holds still.
-
-### `noeviction` is load-bearing beyond refusing writes (CannObserv/broker#9)
-
-**Replicator's `replicator:cmd:*` keys are the only volatile keys on this
-instance.** Every other tenant writes streams, and a stream never carries a TTL.
-So under any `volatile-*` policy - `volatile-lru`, `volatile-ttl`,
-`volatile-random` - that one namespace is the *entire* eviction candidate set,
-and memory pressure would evict precisely it and nothing else: every stream,
-every consumer group and every PEL left intact, and every issuer none the wiser.
-
-The two failure modes are not comparable, and the worse one is the one that
-looks safer:
-
-| | `noeviction` at the cap | any `volatile-*` at the cap |
-|---|---|---|
-| What happens | the `denyoom` write is refused | replicator's dedupe keys are deleted |
-| How it presents | `OOM command not allowed`, instance-wide | **nothing** - eviction is not an error anyone sees |
-| What it costs | producers retry through it; verified for all three (broker#1 R5) | a TTL window of duplicate fetches against live origins |
-| How you learn | immediately, from every producer's journal | from the origins, or not at all |
-
-So "evict something rather than refuse writes" - the obvious change to reach for
-under memory pressure - buys a silent failure in exchange for a loud one, and
-picks the one namespace on the instance nobody would choose to lose. If a future
-tuning pass moves off `noeviction`, that trade has to be made deliberately, and
-`allkeys-*` is not the escape either.
-
-**Archiver's argument against it is the sharper one: silence**
-(CannObserv/archiver#234). Eviction takes a whole key, so `info.registry` comes
-back with the next delta but not its replay-from-`0-0` floor, and a consumer
-booting before the next snapshot converges to a partial set and **reports
-success**. *Detecting loss* flags the reset after the fact; the wrong answer is
-in the consumer. The dedupe keys cost re-work; this costs correctness.
-
-All three claims are checked rather than trusted, and the third is the one
-that matters at 3am:
-
-- `test_tracked_config_sets_an_explicit_nonzero_maxmemory` pins the policy in
-  the tracked config, with the hazard in the failing test's own docstring so
-  whoever changes it deliberately reads why;
-- `test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance` pins the
-  keyspace claim against the live broker: the day a second service writes a key
-  with a TTL is the day this section stops being true;
-- **the probe reports a wrong policy every tick**, which is what closes the gap
-  the other two leave. A `CONFIG SET maxmemory-policy volatile-lru` is live and
-  persisted nowhere, so until this check existed the only detector was a test
-  suite someone had to remember to run on the node. The finding names the
-  family, because the two fail differently, as above.
+What the cap does to the producers when it is reached, and why the policy
+beside it is `noeviction`, are [MEMORY-PROTECTION.md](MEMORY-PROTECTION.md).
+The probe's own two checks on them - the 75% warning and the
+`eviction-policy` finding - are in *The bus-health probe* above.
 
 ## Detecting loss - the one check that is not an upper bound
 

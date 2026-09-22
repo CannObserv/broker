@@ -18,7 +18,17 @@
     {
       "name": "bus-health-contract",
       "path": "./docs/BUS-HEALTH.md",
-      "description": "The WARN-only health probe: per-stream retention contracts and their mirrored constants, stream, group, DLQ, loss, memory, disk and backup-freshness checks, and why noeviction is load-bearing beyond refusing writes."
+      "description": "The WARN-only health probe: per-stream retention contracts and their mirrored constants, the one threshold read off the stream rather than mirrored, stream, group, DLQ, loss, memory, disk and backup-freshness checks."
+    },
+    {
+      "name": "memory-protection-doc",
+      "path": "./docs/MEMORY-PROTECTION.md",
+      "description": "The maxmemory cap on this instance: that all three producers survive OOM command not allowed without dropping or dead-lettering, which commands stay admitted at the cap, and why noeviction is load-bearing beyond refusing writes."
+    },
+    {
+      "name": "undelivered-consumers-doc",
+      "path": "./docs/UNDELIVERED-CONSUMERS.md",
+      "description": "The group-undelivered check: why a pending count, XINFO GROUPS lag and consumer idle are each blind to a consumer that stopped calling XREADGROUP, the positions the probe compares instead, and the 5-minute threshold this repo owns."
     },
     {
       "name": "recovery-runbook",

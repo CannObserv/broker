@@ -57,3 +57,24 @@ AGENTS.md :: retarget :: - [docs/STREAMS.md](docs/STREAMS.md) - which streams ex
 AGENTS.md :: retarget :: - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting
 # AGENTS.md - Layout line: the incident it named is now its own entry below it
 AGENTS.md :: retarget :: the cohort restart window, its identities, the 2026-09-10 incident
+
+# 2026-09-22 curation (BUS-HEALTH.md -> + MEMORY-PROTECTION.md,
+# UNDELIVERED-CONSUMERS.md). The doc was 12,021 tokens against a 10,000 per-doc
+# budget; two topics that were not "what the probe watches" left it.
+#
+# The DLQ bullet and the XDEL paragraph under it: that paragraph sat at column 0
+# INSIDE the bullet list, which ends the list early wherever it renders. Fixing
+# it indented the paragraph into its bullet and moved the terminator from the
+# first line to the last. Same claims, and --claims confirms 0 atoms dropped.
+docs/BUS-HEALTH.md :: tighten :: named and the entries captured; see *Who drains a DLQ* in [STREAMS.md](STREAMS.md);
+docs/BUS-HEALTH.md :: tighten :: nobody did. `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table.
+# The moved subsection's heading. `###` -> `##` is normalised; dropping the
+# provenance from the heading text is not, and it is what check-seams requires
+# (a `#\d{2,}` in a permanent anchor slug). The ref survives in the new doc's
+# opening, and AGENTS.md and the eviction-policy finding already named this
+# heading WITHOUT the ref - so the rename is what makes those two resolve.
+docs/BUS-HEALTH.md :: rename :: ### `noeviction` is load-bearing beyond refusing writes (CannObserv/broker#9)
+# AGENTS.md - the `noeviction` rule's pointer. The section it names moved to
+# docs/MEMORY-PROTECTION.md in this same change, so the corrected line is a
+# different line; the words it points AT are unchanged over there.
+AGENTS.md :: retarget :: `docs/BUS-HEALTH.md`, *`noeviction` is load-bearing beyond refusing writes*;

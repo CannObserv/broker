@@ -89,7 +89,7 @@ silently corrupts values.
   keys on the instance** - which is what makes `noeviction` load-bearing beyond
   refusing writes, since any `volatile-*` policy would make that one namespace
   the whole eviction candidate set. Do not change the policy without reading
-  `docs/BUS-HEALTH.md`, *`noeviction` is load-bearing beyond refusing writes*;
+  `docs/MEMORY-PROTECTION.md`, *`noeviction` is load-bearing beyond refusing writes*;
   tests pin it on the config and on the live keyspace.
 - **Mirrored constants.** The retention caps in `src/broker/bus_health.py`
   are copies of numbers owned elsewhere, each with its source named. A mirrored
@@ -122,6 +122,10 @@ deploy/          the artifacts the node deploys + the bus-health and backup unit
 docs/STREAMS.md  the cluster stream inventory - who produces, consumes, drains
 docs/BUS-HEALTH.md
                  the probe: per-stream contracts, stream and DLQ checks, loss detection
+docs/MEMORY-PROTECTION.md
+                 the maxmemory cap: what it does to the producers, why `noeviction`
+docs/UNDELIVERED-CONSUMERS.md
+                 the group-undelivered check: positions, not pending or lag
 docs/RECOVERY.md node loss: the backup, the restore, the rehearsal record
 docs/RESTART-WINDOW.md
                  the cohort restart window and its identities
@@ -185,6 +189,8 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - the measured latency from each participant, the path beside every number, and the accepted DERP risk
 - [docs/CONSUMER-REGISTRATIONS.md](docs/CONSUMER-REGISTRATIONS.md) - the one-time reap of orphaned consumer registrations, and why it cannot recur
 - [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
+- [docs/MEMORY-PROTECTION.md](docs/MEMORY-PROTECTION.md) - the `maxmemory` cap: that all three producers survive it, and why `noeviction` is load-bearing beyond refusing writes
+- [docs/UNDELIVERED-CONSUMERS.md](docs/UNDELIVERED-CONSUMERS.md) - a consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and what the probe compares instead
 - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record
 - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook and its symptom playbook
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
