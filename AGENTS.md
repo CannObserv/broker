@@ -161,7 +161,9 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   its row in `docs/STREAMS.md` says why (CannObserv/archiver#234 answered).
 - Open follow-on: CannObserv/replicator#98 (recovery re-claiming its own
   failing retry starves `XREADGROUP` - a live consumer the undelivered check
-  cannot tell from a gone one).
+  cannot tell from a gone one). #43 (each grouped stream's producer holds the
+  group commands on its root, so it can `XACK` its consumer's work away -
+  #14's hole the other way round).
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
 - CannObserv/archiver#196 - archiver's half of the OOM seam, repointed after the
   cap moved to `deploy/redis.conf.broker`
