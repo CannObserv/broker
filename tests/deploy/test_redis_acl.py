@@ -1130,8 +1130,10 @@ def test_replicator_can_count_a_commands_deliveries_on_every_command_stream(
     """The delivery ceiling's read, in the form `_delivery_count` sends it.
 
     One entry, delivered to replicator's own group and then reclaimed the way
-    `claim_stale` reclaims it: `times_delivered` must read 1 and then 2, because
-    the ceiling counts reclaims and advances on nothing else. A refused
+    `claim_stale` reclaims it: `times_delivered` must read 1 and then 2. In
+    replicator a reclaim is the only thing that advances it, because
+    co-core-aio's consumer reads `>` and nothing else; a history read
+    (`XREADGROUP ... 0`) would advance it too, measured on 7.0.15. A refused
     `XPENDING` here is a ceiling that cannot fire (CannObserv/broker#39).
 
     The group is created at `$` by replicator itself - it holds
