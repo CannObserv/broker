@@ -12,8 +12,6 @@ Moved out of BUS-HEALTH.md on 2026-09-22, when it ran past the per-doc
 context budget. The one-line contract stayed there, in *The bus-health
 probe*; this is the reasoning behind it.
 
-## A consumer that stopped reading
-
 Provenance: CannObserv/broker#20.
 
 **A group whose consumer is gone was invisible to every other check on this

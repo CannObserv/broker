@@ -2216,7 +2216,15 @@ async def _finding_with_a_doc_pointer(fake_redis, check: str) -> bus_health.Find
         (finding,) = evaluate_memory(used_memory=100, maxmemory=1000, policy="volatile-lru")
         return finding
     previous_state: dict[str, int] = {}
-    if check == "dlq":
+    if check == "group-undelivered":
+        # a group at 0-0 on a stream holding one entry older than the threshold:
+        # behind by position, delivered nothing, so pending stays at the healthy 0
+        stale = int(time.time() * 1000) - int(
+            (bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS + 60) * 1000
+        )
+        await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id=f"{stale}-0")
+        await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+    elif check == "dlq":
         await fake_redis.xadd("content.revisions.dlq", {"k": "v"})
     elif check == "dlq-unobserved":
         dlq = "content.fetch.dlq"
@@ -2229,7 +2237,9 @@ async def _finding_with_a_doc_pointer(fake_redis, check: str) -> bus_health.Find
     return next(f for f in findings if f.check == check)
 
 
-@pytest.mark.parametrize("check", ["eviction-policy", "dlq", "dlq-unobserved", "group-missing"])
+@pytest.mark.parametrize(
+    "check", ["eviction-policy", "dlq", "dlq-unobserved", "group-missing", "group-undelivered"]
+)
 async def test_the_doc_section_a_finding_points_at_exists(fake_redis, check) -> None:
     """A finding that says ``see docs/X.md, "Title"`` is the operator's first
     step, and the only one this repo writes for them at the moment it matters.
@@ -2238,6 +2248,10 @@ async def test_the_doc_section_a_finding_points_at_exists(fake_redis, check) -> 
     2026-09-11 split of STREAMS.md moved the section the eviction-policy finding
     names, and its message was retargeted by hand. The next split will not
     necessarily be done by someone who greps for it.
+
+    Every check that carries one is listed, which is the property that matters:
+    the 2026-09-22 split of BUS-HEALTH.md moved the section `group-undelivered`
+    names, and `group-undelivered` was the one check missing from this list.
     """
     finding = await _finding_with_a_doc_pointer(fake_redis, check)
     pointers = _DOC_POINTER.findall(finding.message)
