@@ -26,7 +26,7 @@ imported by any service; the services reach the broker over the network, by URL.
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Losing the node: what is exposed, the backup's design and its grant, the rebuild runbook, the rehearsal record |
 | [`docs/RESTART-WINDOW.md`](docs/RESTART-WINDOW.md) | The cohort restart window: the identities and the steps as run |
 | [`docs/INCIDENT-2026-09-10.md`](docs/INCIDENT-2026-09-10.md) | What `databases 1` did to db0, and why `BGREWRITEAOF` comes before it |
-| [`docs/ACL-CUTOVER.md`](docs/ACL-CUTOVER.md) | The per-service credential cutover around that window: the passwords, the dry run, each service onto its own user, retiring `default`, and the `nopass` trap |
+| [`docs/ACL-CUTOVER.md`](docs/ACL-CUTOVER.md) | The per-service credential cutover around that window: the passwords, the dry run, each service onto its own user, retiring `default`, the `nopass` trap - and **rotating `default`**, the four writes it takes, and why `CONFIG GET requirepass` reports a value that does not authenticate (broker#46) |
 
 ## Provenance
 
