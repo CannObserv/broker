@@ -336,6 +336,7 @@ Prefer applying it live - no restart, no dropped client connections - then
 persist it in both places:
 
 ```bash
+# `pw` and `rcli` as defined under "Changing a grant" above.
 rcli default CONFIG SET maxmemory <value>   # applies now; window-only, see below
 sudo sed -i 's/^maxmemory .*/maxmemory <value>/' /etc/redis/redis.conf
 sed -i 's/^maxmemory .*/maxmemory <value>/' deploy/redis.conf.broker
