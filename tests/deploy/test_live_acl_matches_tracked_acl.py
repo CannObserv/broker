@@ -66,10 +66,13 @@ clones pass. On the broker node, source the env first - and as
 ``set -a; . /etc/broker/.env; set +a``, never ``export $(cat ... | xargs)``.
 """
 
+import subprocess
+from pathlib import Path
+
 import pytest
 import redis as redis_pkg
 
-from tests.deploy.conftest import ACL_FILE, parse_users
+from tests.deploy.conftest import ACL_FILE, RENDER_SCRIPT, parse_users
 
 TRACKED = parse_users(ACL_FILE.read_text())
 TRACKED_USERS = tuple(sorted(TRACKED))
@@ -89,8 +92,14 @@ RETIRED_USERS = frozenset(name for name, rules in TRACKED.items() if "off" in ru
 # assertion that was actually worth having. The same exclusion is what lets a
 # credential be rotated live without a commit or a red suite
 # (CannObserv/broker#46); the count assertion below still bites on a rotation
-# that adds a password without removing the old one.
+# that adds a password without removing the old one. The real credentials are
+# compared too, just not against the tracked file: against the node's own
+# passwords file, by ``test_the_nodes_passwords_file_renders_the_credentials_that_are_live``.
 NOT_COMPARED = "passwords"
+
+# The node's own passwords file - `0400 root:root`, so read only through `sudo -n`,
+# and only ever by the render, which emits digests (CannObserv/broker#49).
+NODE_PASSWORDS = Path("/etc/redis/broker-acl-passwords")
 
 # The grant this module needs, named here so the failure message can say it.
 REQUIRED_GRANT = "+acl|getuser"
@@ -320,6 +329,75 @@ def test_every_tracked_user_still_carries_a_password(live_rules, tracked_rules) 
                 f"{len(tracked_rules[user]['passwords'])} in {ACL_FILE.name}"
             )
     assert not findings, "credentials on the running broker: " + "; ".join(findings)
+
+
+@pytest.fixture(scope="module")
+def node_render(live_client) -> str:
+    """The node's real passwords file, rendered through the tracked script as root.
+
+    **The first test in this repo to call ``sudo``**, and bounded so that is
+    all it is: ``-n``, so it can never prompt, and skipped where passwordless
+    sudo is absent. Taking ``live_client`` first means a host with sudo but no
+    broker credentials - a CI runner - skips before it gets here. What crosses
+    back into pytest is the render's stdout, which is digests only by the
+    render's own contract (``test_render_acl.py``), and its stderr, which
+    names placeholders and never values.
+    """
+    if subprocess.run(["sudo", "-n", "true"], capture_output=True, check=False).returncode:
+        pytest.skip("no passwordless sudo - not the broker node")
+    if subprocess.run(
+        ["sudo", "-n", "test", "-f", str(NODE_PASSWORDS)], capture_output=True, check=False
+    ).returncode:
+        pytest.skip(f"{NODE_PASSWORDS} absent - not the broker node")
+    result = subprocess.run(
+        ["sudo", "-n", str(RENDER_SCRIPT), str(NODE_PASSWORDS)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"{RENDER_SCRIPT.name} refuses the node's {NODE_PASSWORDS} - so the dry run in "
+        "docs/ACL-CUTOVER.md step 2, and a rebuild's re-render, would both fail:\n" + result.stderr
+    )
+    return result.stdout
+
+
+def test_the_nodes_passwords_file_renders_the_credentials_that_are_live(
+    node_render, live_rules
+) -> None:
+    """The half of ``NOT_COMPARED`` that can be compared: the node, with itself.
+
+    The throwaway server cannot say anything about real credentials, but the
+    node can. Its passwords file is what a rebuild re-renders and what the
+    dry run loads, and nothing compared it with what the broker actually
+    authenticates until CannObserv/broker#49 - which is how a digest-only
+    ``archiver`` left the render refusing the file with nobody told, and how a
+    rotation that skipped one of ``__DEFAULT_PW__``'s four writes
+    (``docs/ACL-CUTOVER.md``) would have gone unseen until the restart that
+    reverted it.
+
+    Mid-rotation - a new password added live, the old one not yet retired -
+    this fails on that user by design: the rotation is not finished.
+    """
+    rendered = parse_users(node_render)
+    findings = []
+    for user in TRACKED_USERS:
+        live = live_rules[user]
+        if live is None:
+            continue  # reported by the rule comparison above
+        want = {rule[1:] for rule in rendered.get(user, []) if rule.startswith("#")}
+        got = set(live["passwords"])
+        if want != got:
+            findings.append(
+                f"{user}: the passwords file renders {sorted(h[:12] for h in want)}, "
+                f"live has {sorted(h[:12] for h in got)}"
+            )
+    assert not findings, (
+        f"{NODE_PASSWORDS} and the live ACL disagree (digest prefixes):\n  "
+        + "\n  ".join(findings)
+        + "\nA rotation left half-done, or a passwords-file edit never applied live. "
+        "Whichever is stale, a re-render from this file would install it."
+    )
 
 
 def test_no_connection_authenticates_as_an_undeclared_user(live_client) -> None:

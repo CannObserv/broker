@@ -25,6 +25,7 @@ what it is, and the test that compares the two is exactly where a reader must
 not have to guess which is which.
 """
 
+import hashlib
 import os
 import re
 import shutil
@@ -42,6 +43,12 @@ RENDER_SCRIPT = DEPLOY / "render-acl.sh"
 
 # Throwaway, for the spawned server below. Never a real credential.
 PASSWORD = "throwaway-password"
+
+# Rendered from a `__X_PW_SHA256__` digest line rather than a plaintext one, as
+# the node holds `archiver` since CannObserv/archiver#251's hash-only handoff -
+# so every test below that connects as `archiver` also exercises the digest path
+# end to end (CannObserv/broker#49).
+DIGEST_PLACEHOLDERS = ("__ARCHIVER_PW__",)
 
 # The three participants. Each holds its own ACL user of the same name, and each
 # is a peer on the tailnet; both facts are asserted from this one tuple.
@@ -155,7 +162,15 @@ def tracked_acl_broker(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp("acl")
     passwords = tmp_path / "passwords"
     placeholders = sorted(set(re.findall(r"__[A-Z]+_PW__", ACL_FILE.read_text())))
-    passwords.write_text("".join(f"{m}={PASSWORD}\n" for m in placeholders))
+    digest = hashlib.sha256(PASSWORD.encode()).hexdigest()
+    passwords.write_text(
+        "".join(
+            f"{m.removesuffix('__')}_SHA256__={digest}\n"
+            if m in DIGEST_PLACEHOLDERS
+            else f"{m}={PASSWORD}\n"
+            for m in placeholders
+        )
+    )
     acl = tmp_path / "users.acl"
     # Rendered through the same script the install uses, so what is tested is
     # what is installed - including the comment strip, which is not cosmetic.
