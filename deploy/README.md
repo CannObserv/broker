@@ -60,7 +60,10 @@ by reading it:
 ## Installing the ACL users
 
 ```bash
-# passwords file: __ARCHIVER_PW__=... one per line, 0400 root:root
+# passwords file, 0400 root:root, one line per placeholder:
+#   __ACLADMIN_PW__=<plaintext>           a credential this node uses
+#   __ARCHIVER_PW_SHA256__=<64-hex>       one only its service holds (broker#49)
+# every user renders as #<sha256>; the output carries no plaintext
 sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
     | sudo install -m 0640 -o root -g redis /dev/stdin /etc/redis/users.acl
 # then, in the restart window, add `aclfile /etc/redis/users.acl` to redis.conf
@@ -152,9 +155,10 @@ for the case where the whole line is being re-declared anyway.
 credential, which is the whole of the distinction. Verified on a scratch 7.0.15: `!<hash>` removes exactly that
 password and keeps the others, `#<hash>` adds one that then authenticates, and
 neither disturbs an `off` flag. The digest is
-`printf %s "$pw" | sha256sum | cut -d' ' -f1` over the value in
-`/etc/redis/broker-acl-passwords` - the `cut` is not optional, `sha256sum`
-prints `<hash>  -` and redis refuses the trailing filename:
+`printf %s "$pw" | sha256sum | cut -d' ' -f1` over the plaintext - the `cut`
+is not optional, `sha256sum` prints `<hash>  -` and redis refuses the trailing
+filename. For a user `/etc/redis/broker-acl-passwords` holds by digest
+(`__X_PW_SHA256__`), the old digest is that line's value:
 
 ```bash
 rcli acladmin ACL SETUSER <user> "#<new-sha256>" "!<old-sha256>"   # rotate, no plaintext
@@ -166,6 +170,16 @@ rcli brokeradmin ACL GETUSER <user>        # -> exactly one hash, and it is the 
 fallback, for the case where the digest is not to hand - not the default, and
 on a rotation it is often not even available: a hash-only handoff leaves this
 node holding no plaintext for that user at all (CannObserv/archiver#251).
+
+**A rotation is not done until the passwords file says so.** Replace the user's
+line with `__X_PW_SHA256__=<new-sha256>` - through a pipe, not a `sed -i`
+command line - or the next re-render reinstates the old credential.
+`test_the_nodes_passwords_file_renders_the_credentials_that_are_live` renders
+the node's file under `sudo -n` and compares every user's digest with
+`ACL GETUSER`, so a forgotten line fails the suite rather than waiting for a
+rebuild (CannObserv/broker#49). The four service users - `archiver`, `watcher`,
+`replicator`, `citest` - are held by digest alone since 2026-09-23; nothing on
+this node needs their plaintext.
 
 **The third line is the one that gets skipped.** Until broker#11 nothing
 checked it, and it rested on someone remembering four times: eleven corrections

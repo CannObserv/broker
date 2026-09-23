@@ -65,7 +65,11 @@ last line is the point, whichever source you draw from.
 
 `tests/deploy/test_redis_acl.py` already does this with throwaway passwords on
 every test run. This repeats it with the **real** passwords file, which is the
-only thing that catches a malformed passwords file.
+only thing that catches a malformed passwords file - and since
+CannObserv/broker#49 the suite repeats that too, on the node, as
+`test_the_nodes_passwords_file_renders_the_credentials_that_are_live`. The
+rendered file is `#<sha256>` for every user, plaintext or digest line alike, so
+the check file below holds no secret; it is shredded anyway.
 
 ```bash
 sudo install -m 0600 -o root -g root /dev/null /root/users.acl.check
@@ -204,7 +208,7 @@ redis-cli PING                                             # -> NOAUTH Authentic
 rcli default PING                                          # -> WRONGPASS ... or user is disabled
 for u in archiver watcher replicator brokeradmin acladmin citest; do
     if [ -z "$(pw "${u^^}")" ]; then
-        echo "$u: no plaintext on this node (rotated by digest) - verify from its own host"
+        echo "$u: held by digest on this node - verify from its own host"
         continue
     fi
     printf '%-13s %s\n' "$u" "$(rcli "$u" PING)"           # -> PONG, each one it can reach
@@ -220,8 +224,10 @@ digest and no plaintext, `pw` returns empty, and what used to print `PONG`
 prints `WRONGPASS` - which also writes an `AUTH` / `reason: auth` entry into
 `ACL LOG` naming the service whose credential was just rotated, the most
 alarming thing that log can say about a node where nothing is wrong. That is
-what `archiver` did on 2026-09-23 (CannObserv/archiver#251), and it is what the
-next rotated user will do. The replacements are verification **from the
+what `archiver` did on 2026-09-23 (CannObserv/archiver#251), and since
+CannObserv/broker#49 converted the rest the same day, it is what **every**
+service user does: `archiver`, `watcher`, `replicator` and `citest` are all
+held by digest alone. The replacements are verification **from the
 service's own host**, or an assertion about the ACL rather than about
 authentication - `rcli brokeradmin ACL GETUSER <user>` showing exactly one
 password hash, which `brokeradmin` can already do.
