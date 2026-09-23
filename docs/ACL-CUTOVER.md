@@ -63,8 +63,9 @@ last line is the point, whichever source you draw from.
 
 **Then take the service plaintexts off this node.** The mint writes all six in
 plaintext because each has to be handed to its service. Once `archiver`,
-`watcher` and `replicator` hold theirs (step 2 below), and `citest` is wherever
-CannObserv/broker#53 puts it, replace each of those four lines with
+`watcher` and `replicator` hold theirs - *Step 2 - each service onto its own
+credential*, after the window, not preparation item 2 below - and `citest` is
+wherever CannObserv/broker#53 puts it, replace each of those four lines with
 `__<USER>_PW_SHA256__=<its digest>` - deploy/README.md, *Changing a grant*.
 Nothing here authenticates as them, and
 `test_the_node_holds_no_plaintext_for_a_service_user` fails until it is done
