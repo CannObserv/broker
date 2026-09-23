@@ -355,6 +355,17 @@ def node_passwords(live_client) -> Path:
     return NODE_PASSWORDS
 
 
+def _plaintext_line(user: str) -> str:
+    """An ERE for ``user``'s plaintext line, commented out or not.
+
+    Commented counts: that is the shape #49 found archiver's leaked secret in,
+    kept "as the rollback path", and the render's comment skip hides it from
+    every other test. The ``=`` straight after the placeholder is what spares
+    prose that merely names it.
+    """
+    return rf"^[[:space:]]*#?[[:space:]]*__{user.upper()}_PW__="
+
+
 def _digests_only(rendered: str) -> str:
     """The render's output, refused unread if it is not what its contract says.
 
@@ -440,6 +451,28 @@ def test_the_nodes_passwords_file_renders_the_credentials_that_are_live(
     )
 
 
+@pytest.mark.parametrize(
+    ("line", "is_plaintext"),
+    [
+        ("__WATCHER_PW__=value", True),
+        ("#__WATCHER_PW__=value", True),
+        ("  # __WATCHER_PW__=value", True),
+        ("__WATCHER_PW_SHA256__=" + "a" * 64, False),
+        ("# __WATCHER_PW__ was rotated 2026-09-23", False),
+    ],
+    ids=["live", "commented", "commented-indented", "digest", "prose"],
+)
+def test_a_commented_plaintext_line_counts_as_plaintext(tmp_path, line, is_plaintext) -> None:
+    """#49 found archiver's leaked secret kept as ``#__ARCHIVER_PW__=<value>``,
+    "the rollback path". The render skips comments, so nothing else sees one."""
+    held = tmp_path / "passwords"
+    held.write_text(line + "\n")
+    status = subprocess.run(
+        ["grep", "-qE", _plaintext_line("watcher"), str(held)], check=False
+    ).returncode
+    assert status == (0 if is_plaintext else 1)
+
+
 def test_the_node_holds_no_plaintext_for_a_service_user(node_passwords) -> None:
     """The digest-only state #49 set up, pinned - by exit status, so no line is read.
 
@@ -451,13 +484,14 @@ def test_the_node_holds_no_plaintext_for_a_service_user(node_passwords) -> None:
     """
     found = []
     for user in DIGEST_ONLY_USERS:
-        status = _sudo("grep", "-q", f"^__{user.upper()}_PW__=", str(node_passwords)).returncode
+        status = _sudo("grep", "-qE", _plaintext_line(user), str(node_passwords)).returncode
         assert status in (0, 1), f"grep over {node_passwords} failed (exit {status})"
         if status == 0:
             found.append(user)
     assert not found, (
-        f"{node_passwords} holds plaintext for {found}. Nothing on this node authenticates "
-        "as them; replace each line with __<USER>_PW_SHA256__=<its digest> "
+        f"{node_passwords} holds plaintext for {found}, live or commented out. Nothing on "
+        "this node authenticates as them, and a commented secret is not a rollback; "
+        "replace each line with __<USER>_PW_SHA256__=<its digest> "
         '(deploy/README.md, "Changing a grant").'
     )
 
