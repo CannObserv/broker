@@ -137,6 +137,19 @@ this is where the window is opened - `ACL SETUSER default on` as `acladmin`,
 step 4's rollback in [ACL-CUTOVER.md](ACL-CUTOVER.md) - and that step is repeated to close it once the verification in
 1d is done.
 
+**What that `on` enables is a rotatable credential, and rotating it is four
+writes.** `default` holds every command no other user does, so opening a window
+is the same act as making the cluster's break-glass live again - and that
+credential is the one thing here that must be assumed to leak, because every
+service held it before the 2026-09-10 cutover. It did leak, into another host's
+journald (CannObserv/archiver#251), and CannObserv/broker#46 rotated it on
+2026-09-23. **There is no schedule; the trigger is exposure.** The four writes -
+the live ACL by digest, `/etc/redis/broker-acl-passwords`,
+`/etc/redis/broker-password` and `redis.conf`'s `requirepass` - and why missing
+any one of them lets a restart silently revert part of the rotation, are
+[ACL-CUTOVER.md](ACL-CUTOVER.md), *Rotating `__DEFAULT_PW__`*. Rotate **before**
+opening a window whose reason is that something leaked, not after.
+
 The rewrite destroys the AOF history, which is what recovered the incident
 recorded there. That is acceptable now that broker#4 ships an hourly snapshot to
 `co-gcs-broker-backup`, with one step first. The backup job ships whatever

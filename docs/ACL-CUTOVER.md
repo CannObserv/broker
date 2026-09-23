@@ -24,25 +24,40 @@ per-doc context budget.
 
 ### 1. Mint the ACL passwords
 
-Six, one per placeholder, plus `default`. `__DEFAULT_PW__` is **the current
-`requirepass` value**, not a new one - that is what makes the first restart a
-no-op for every service, and it stays on the line after `default` is retired so
-that the rollback can never land on `nopass`.
+Six, one per placeholder, plus `default`. **On a migrating cluster**
+`__DEFAULT_PW__` is the current `requirepass` value, not a new one - that is what
+makes the first restart a no-op for every service, and it stays on the line after
+`default` is retired so that the rollback can never land on `nopass`. On this
+cluster that was true from 2026-09-10 until CannObserv/broker#46 rotated it;
+`__DEFAULT_PW__` is now a value that was never a live `requirepass` anywhere, and
+the section below is how it got there and how it is done again.
 
 ```bash
+mint() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40; }
 sudo install -m 0400 -o root -g root /dev/null /etc/redis/broker-acl-passwords
 for p in ARCHIVER WATCHER REPLICATOR BROKERADMIN ACLADMIN CITEST; do
-    echo "__${p}_PW__=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40)"
+    echo "__${p}_PW__=$(mint)"
 done | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
 echo "__DEFAULT_PW__=$(sudo cat /etc/redis/broker-password)" \
     | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
 sudo chmod 0400 /etc/redis/broker-acl-passwords
+awk -F= '{ printf "%-16s %s chars\n", $1, length($2) }' \
+    <(sudo cat /etc/redis/broker-acl-passwords)     # -> 40 each, and CHECK IT
 ```
 
 `tr -dc 'A-Za-z0-9'` is not fussiness: these end up in `redis://user:pass@host`
 URLs in three `.env` files, and a `/`, `+`, `@` or `#` in a password is a URL
 that parses as something else. `default:` already cost this cohort one silent
 outage (CannObserv/archiver#195); do not spend another on percent-encoding.
+
+**Draw from a stream, not from `openssl rand -base64 32`.** This line read
+`openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40` until broker#46, and
+that spelling cannot keep its promise: base64 of 32 bytes is 44 characters, `tr`
+drops every `+`, `/` and `=`, and `head` has no shortfall to make up from. It
+mints under 40 about one time in twenty-five and says nothing - it produced 39
+on broker#46's first attempt. The six minted in 2026-09-10's run are all 40, so
+nothing here is short; the recipe was lucky six times. The length check on the
+last line is the point, whichever source you draw from.
 
 ### 2. Dry-run the real file against a throwaway server
 
@@ -246,6 +261,105 @@ Verified live: `acladmin` can run `ACL LIST` and `ACL SETUSER` and is refused
 is still `redis-server`'s own config - restart with the `aclfile` line commented
 out, restoring `requirepass` behaviour - and that is a cohort-wide event, which
 is exactly why `acladmin` is the path you want to reach for first.
+
+---
+
+## Rotating `__DEFAULT_PW__` - a supported operation, and four writes
+
+`default` being `off` is not the end of its exposure, which is why this section
+exists (CannObserv/broker#46). One secret wears three hats here by construction:
+step 1 mints `__DEFAULT_PW__` **as** the current `requirepass`, so
+`/etc/redis/broker-acl-passwords`, `/etc/redis/broker-password` and
+`redis.conf`'s `requirepass` line all carry the same value, and the live
+`default` password is that value's hash. Three documented paths turn it back
+into a live credential, and all three are what you reach for when something is
+already wrong: opening **any** restart window (`ACL SETUSER default on` - no
+other user holds `BGREWRITEAOF`, `CONFIG SET` or `SHUTDOWN`), step 4's rollback,
+and the last-resort restart with `aclfile` commented out, which does not even
+need `default` to be `on`. So the break-glass for every window, and the
+break-glass behind it, are one string; if it leaks, it is rotated, and `off`
+buys nothing.
+
+It leaked on 2026-09-23: CannObserv/archiver#251 found `ARCHIVER_REDIS_URL`
+logged unredacted at every archiver publisher start, which put **the credential
+every service used before the 2026-09-10 cutover** into another host's journald
+in cleartext, back to the start of retention there. Rotated the same day. Not
+vacuuming that journal is deliberate - it is the journal that answered
+CannObserv/archiver#247, and deletion costs evidence this cohort has already had
+to use once.
+
+**Four writes, or a restart silently reverts part of it.** In this order, and
+none of them puts a secret on a command line (CannObserv/broker#47):
+
+```bash
+pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
+OLD="$(pw DEFAULT)"; OLDH="$(printf %s "$OLD" | sha256sum | cut -d' ' -f1)"
+NEW="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40)"
+NEWH="$(printf %s "$NEW" | sha256sum | cut -d' ' -f1)"
+
+# 1. AUTHORITATIVE: the aclfile's own `default` line. By digest, so neither
+#    value reaches argv, and `!<hash>` keeps the `off` flag - all three verified
+#    on a scratch 7.0.15. deploy/README.md, "Changing a grant", has the forms.
+rcli acladmin ACL SETUSER default "#$NEWH" "!$OLDH"
+rcli acladmin ACL SAVE
+sudo grep -q "^user default off #$NEWH ~\* &\* +@all$" /etc/redis/users.acl   # or STOP
+
+# 2. The placeholders file - `pw DEFAULT`, and any future re-render.
+# 3. /etc/redis/broker-password - the `aclfile`-commented-out recovery path.
+# 4. /etc/redis/redis.conf's `requirepass` line - the same path's directive.
+#    Values travel on a pipe, never on a `sudo sed -i` command line:
+#      sudo cat <file> | awk ... | sudo tee <file>.new  &&  sudo mv
+```
+
+Write 2 comes before 3 and 4 on purpose: it is the only durable copy of the new
+value, so a failure after it leaves the rotation completable rather than lost.
+
+**Not `CONFIG SET requirepass`.** Verified on a scratch 7.0.15: it *replaces*
+`default`'s password rather than adding one, and does not clear `off` - so it is
+a fifth way to set the credential, wearing the name of the directive. Leave the
+running value alone. It then reports the **retired** secret until the next
+restart, which is correct and worth knowing: see *What `CONFIG GET requirepass`
+does not tell you* below.
+
+Verify by digest, printing no cleartext - all four must agree, and the live user
+must still be `off` with exactly one password:
+
+```bash
+d() { tr -d '\n' | sha256sum | cut -c1-16; }
+sudo sed -n 's/^user default off #\([0-9a-f]*\) .*/\1/p' /etc/redis/users.acl | cut -c1-16
+pw DEFAULT | d
+sudo cat /etc/redis/broker-password | d
+sudo cat /etc/redis/redis.conf | sed -n 's/^requirepass //p' | d
+rcli brokeradmin ACL GETUSER default        # -> off, one hash, the same one
+```
+
+**Nothing is committed.** `deploy/redis.conf.broker` holds `__REQUIREPASS__` and
+`deploy/redis-acl.conf` holds `>__DEFAULT_PW__`, and the two live-comparison
+tests exclude the value by name - `NOT_COMPARED` in
+`test_live_broker_matches_tracked_config.py` and in
+`test_live_acl_matches_tracked_acl.py`. The suite is the confirmation, not the
+assumption: run `uv run pytest tests/deploy` after, and `git status` should be
+clean.
+
+**Done 2026-09-23**, as `acladmin`, `default` never enabled, retired digest
+`9c4ea97f...`. No service reconnected, no window opened, 191 deploy tests green
+after.
+
+### What `CONFIG GET requirepass` does not tell you
+
+Once an aclfile declares `default`, **the aclfile's line wins and `requirepass`
+is not authoritative for authentication.** Verified on a scratch 7.0.15: a server
+started with `requirepass fromredisconf` and an aclfile saying
+`user default on >fromaclfile` authenticates `fromaclfile` and answers
+`WRONGPASS` to `fromredisconf` - while `CONFIG GET requirepass` still reports
+`fromredisconf`. **It reports a value that does not authenticate.**
+
+That is why the directive's only job here is the last-resort path where the
+`aclfile` line is commented out, and why the rotation writes the file rather
+than the running config. `tests/deploy/test_live_broker_matches_tracked_config.py`
+still asserts the live `requirepass` is neither empty nor the placeholder - an
+empty one is `nopass` by another door, on the one path where the directive does
+govern - and its docstring says which guarantee that is and which it is not.
 
 ---
 

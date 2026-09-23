@@ -185,6 +185,13 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   #14's hole the other way round). #45 (the LWW set reading absorbs one missed
   republish and not two, and `stream-age` waits for three - a ten-minute window
   where the length check warns with nothing naming the cause).
+- CannObserv/archiver#251 - a broker credential in archiver's journald, from
+  the application's start log and from one `sudo` command line. Both halves
+  landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
+  guarded by `tests/deploy/test_runbook_credentials.py`) and #46 (the `default`
+  credential rotated - four writes, `docs/ACL-CUTOVER.md`,
+  *Rotating `__DEFAULT_PW__`*). Neither is a tracked-file change; both live
+  files are templated and the value is `NOT_COMPARED` in the two live tests.
 - CannObserv/watcher#319 - the notice for the other end of #44's mirror:
   `RETAINED_FULL_SETS` and the `*/5` republish period are copied into
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*

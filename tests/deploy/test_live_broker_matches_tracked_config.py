@@ -47,7 +47,9 @@ SIZE_VALUED = {"maxmemory"}
 
 # The secret, which the tracked copy templates on purpose. Asserting the live
 # broker HAS a password is worth doing; asserting WHICH one belongs nowhere a
-# test failure could print it.
+# test failure could print it. This exclusion is also what makes a rotation of
+# `default` test-neutral by construction (CannObserv/broker#46), alongside the
+# same name in ``test_live_acl_matches_tracked_acl.py``.
 NOT_COMPARED = {"requirepass"}
 
 
@@ -76,7 +78,25 @@ def test_every_tracked_directive_is_in_force(live_config) -> None:
 def test_the_live_broker_requires_a_password(live_config) -> None:
     """D3's floor, asserted without naming the value. An empty ``requirepass``
     on a tailnet-bound broker is R2: reachable by every node the ACL admits,
-    including user-owned ones."""
+    including user-owned ones.
+
+    **This directive is not what authenticates today, and the guarantee is
+    narrower than it reads** (CannObserv/broker#46). Once an aclfile declares
+    ``default``, that line wins: verified on a scratch 7.0.15, a server started
+    with ``requirepass fromredisconf`` and an aclfile saying
+    ``user default on >fromaclfile`` answers ``PONG`` to the aclfile's value and
+    ``WRONGPASS`` to the config file's - while ``CONFIG GET requirepass`` still
+    reports ``fromredisconf``. It reports a value that does not authenticate,
+    and after a rotation it reports the *retired* one until the next restart,
+    because the rotation writes the file and never ``CONFIG SET`` (which
+    replaces ``default``'s password instead of the directive).
+
+    So what this pins is the **last-resort recovery path** - restart with the
+    ``aclfile`` line commented out, where ``requirepass`` does govern - and
+    there an empty value is ``nopass`` by another door. That is worth pinning
+    and is all this pins; it says nothing about who can authenticate now.
+    ``docs/ACL-CUTOVER.md``, *What ``CONFIG GET requirepass`` does not tell you*.
+    """
     assert live_config.get("requirepass", "") not in ("", REQUIREPASS_PLACEHOLDER)
 
 

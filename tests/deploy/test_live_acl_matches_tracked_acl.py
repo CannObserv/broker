@@ -86,7 +86,10 @@ RETIRED_USERS = frozenset(name for name, rules in TRACKED.items() if "off" in ru
 # renders every placeholder to the same test credential, so every hash differs
 # and the comparison would be nothing but noise. What is asserted about them
 # instead is ``test_every_tracked_user_still_carries_a_password``, which is the
-# assertion that was actually worth having.
+# assertion that was actually worth having. The same exclusion is what lets a
+# credential be rotated live without a commit or a red suite
+# (CannObserv/broker#46); the count assertion below still bites on a rotation
+# that adds a password without removing the old one.
 NOT_COMPARED = "passwords"
 
 # The grant this module needs, named here so the failure message can say it.
