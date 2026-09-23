@@ -43,15 +43,15 @@ need ``+acl|users`` - names only, no hashes - and is not granted.
 did. This compares the live *in-memory* ACL, so `ACL SETUSER` mirrored into the
 tracked file but never saved passes every test here and then reverts at the next
 restart - which on this instance is a cohort-wide event. Closing that means
-reading the installed ``/etc/redis/users.acl``, which is ``0640 root:redis``:
-pytest does not run as root, so such a test would skip on every host and
-therefore never run. Worth recording precisely, because the reason is **not**
-the one ``test_installed_redis_config_matches_repo.py`` gives for refusing to
-read ``redis.conf``. That file holds the credential in plaintext; this one does
+reading the installed ``/etc/redis/users.acl``, which is ``0640 root:redis``.
+That was recorded here as a reason no test could, since pytest does not run as
+root; CannObserv/broker#49's ``sudo -n`` tests below removed it, and the check
+is CannObserv/broker#54. The reason was never the one
+``test_installed_redis_config_matches_repo.py`` gives for refusing to read
+``redis.conf``: that file holds the credential in plaintext, and this one does
 not - ``ACL SAVE`` has rewritten all seven passwords to ``#<sha256>``, verified
-on the node. It is the file mode alone. Until that gap is closed, ``ACL SAVE``
-is held by the runbook and by ``deploy/README.md``, both of which put it on the
-line after ``ACL SETUSER``.
+on the node. Until #54 lands, ``ACL SAVE`` is held by the runbook and by
+``deploy/README.md``, both of which put it on the line after ``ACL SETUSER``.
 
 **And what it cannot catch at all: a grant that is wrong on both sides.**
 Correction eleven (``replicator`` without ``+exists``) and broker#9
