@@ -72,7 +72,7 @@ from pathlib import Path
 import pytest
 import redis as redis_pkg
 
-from tests.deploy.conftest import ACL_FILE, RENDER_SCRIPT, parse_users
+from tests.deploy.conftest import ACL_FILE, RENDER_SCRIPT, SERVICE_USERS, parse_users
 
 TRACKED = parse_users(ACL_FILE.read_text())
 TRACKED_USERS = tuple(sorted(TRACKED))
@@ -100,6 +100,11 @@ NOT_COMPARED = "passwords"
 # The node's own passwords file - `0400 root:root`, so read only through `sudo -n`,
 # and only ever by the render, which emits digests (CannObserv/broker#49).
 NODE_PASSWORDS = Path("/etc/redis/broker-acl-passwords")
+
+# Held on the node by digest alone: each one's plaintext belongs to its service
+# (or, for `citest`, to whatever CI target CannObserv/broker#53 settles on), and
+# nothing on this node authenticates as any of them (CannObserv/broker#49).
+DIGEST_ONLY_USERS = (*SERVICE_USERS, "citest")
 
 # The grant this module needs, named here so the failure message can say it.
 REQUIRED_GRANT = "+acl|getuser"
@@ -331,32 +336,38 @@ def test_every_tracked_user_still_carries_a_password(live_rules, tracked_rules) 
     assert not findings, "credentials on the running broker: " + "; ".join(findings)
 
 
+def _sudo(*argv: str, **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(["sudo", "-n", *argv], capture_output=True, check=False, **kwargs)
+
+
 @pytest.fixture(scope="module")
-def node_render(live_client) -> str:
+def node_passwords(live_client) -> Path:
+    """The node's passwords file, reachable through ``sudo -n``, or a skip.
+
+    Taking ``live_client`` first means a host with sudo but no broker
+    credentials - a CI runner - skips before any ``sudo`` is attempted.
+    """
+    if _sudo("true").returncode:
+        pytest.skip("no passwordless sudo - not the broker node")
+    if _sudo("test", "-f", str(NODE_PASSWORDS)).returncode:
+        pytest.skip(f"{NODE_PASSWORDS} absent - not the broker node")
+    return NODE_PASSWORDS
+
+
+@pytest.fixture(scope="module")
+def node_render(node_passwords) -> str:
     """The node's real passwords file, rendered through the tracked script as root.
 
     **The first test in this repo to call ``sudo``**, and bounded so that is
     all it is: ``-n``, so it can never prompt, and skipped where passwordless
-    sudo is absent. Taking ``live_client`` first means a host with sudo but no
-    broker credentials - a CI runner - skips before it gets here. What crosses
+    sudo is absent (``node_passwords``). What crosses
     back into pytest is the render's stdout, which is digests only by the
     render's own contract (``test_render_acl.py``), and its stderr, which
     names placeholders and never values.
     """
-    if subprocess.run(["sudo", "-n", "true"], capture_output=True, check=False).returncode:
-        pytest.skip("no passwordless sudo - not the broker node")
-    if subprocess.run(
-        ["sudo", "-n", "test", "-f", str(NODE_PASSWORDS)], capture_output=True, check=False
-    ).returncode:
-        pytest.skip(f"{NODE_PASSWORDS} absent - not the broker node")
-    result = subprocess.run(
-        ["sudo", "-n", str(RENDER_SCRIPT), str(NODE_PASSWORDS)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _sudo(str(RENDER_SCRIPT), str(node_passwords), text=True)
     assert result.returncode == 0, (
-        f"{RENDER_SCRIPT.name} refuses the node's {NODE_PASSWORDS} - so the dry run in "
+        f"{RENDER_SCRIPT.name} refuses the node's {node_passwords} - so the dry run in "
         "docs/ACL-CUTOVER.md step 2, and a rebuild's re-render, would both fail:\n" + result.stderr
     )
     return result.stdout
@@ -397,6 +408,28 @@ def test_the_nodes_passwords_file_renders_the_credentials_that_are_live(
         + "\n  ".join(findings)
         + "\nA rotation left half-done, or a passwords-file edit never applied live. "
         "Whichever is stale, a re-render from this file would install it."
+    )
+
+
+def test_the_node_holds_no_plaintext_for_a_service_user(node_passwords) -> None:
+    """The digest-only state #49 set up, pinned - by exit status, so no line is read.
+
+    The comparison above cannot see it: a plaintext line renders the same digest
+    as the digest line it replaced, so a service's plaintext could come back -
+    by the mint recipe in ``docs/ACL-CUTOVER.md`` step 1, which writes all six,
+    or by re-minting ``citest`` for CannObserv/broker#53 - and every other test
+    would stay green.
+    """
+    found = []
+    for user in DIGEST_ONLY_USERS:
+        status = _sudo("grep", "-q", f"^__{user.upper()}_PW__=", str(node_passwords)).returncode
+        assert status in (0, 1), f"grep over {node_passwords} failed (exit {status})"
+        if status == 0:
+            found.append(user)
+    assert not found, (
+        f"{node_passwords} holds plaintext for {found}. Nothing on this node authenticates "
+        "as them; replace each line with __<USER>_PW_SHA256__=<its digest> "
+        '(deploy/README.md, "Changing a grant").'
     )
 
 
