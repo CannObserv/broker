@@ -288,31 +288,61 @@ vacuuming that journal is deliberate - it is the journal that answered
 CannObserv/archiver#247, and deletion costs evidence this cohort has already had
 to use once.
 
-**Four writes, or a restart silently reverts part of it.** In this order, and
-none of them puts a secret on a command line (CannObserv/broker#47):
+**Four writes, or a restart silently reverts part of it** - and the ACL is
+touched twice, at both ends, so that no crash in between leaves this node
+without a credential it knows. None of it puts a secret on a command line
+(CannObserv/broker#47). **Run it as a script, not pasted line by line:** the
+guard below exits, and `set +o pipefail` only means something where a script set
+it.
 
 ```bash
 pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
+rcli() { local u=$1; shift
+         REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+
 OLD="$(pw DEFAULT)"; OLDH="$(printf %s "$OLD" | sha256sum | cut -d' ' -f1)"
-NEW="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40)"
+# `set +o pipefail`: `head` closing the pipe SIGPIPEs `tr`, and under pipefail
+# that is exit 141 for a command that did exactly its job. It is what this
+# rotation hit on the day, inside a `set -euo pipefail` script.
+NEW="$(set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40)"
+[ "${#NEW}" -eq 40 ] || { echo "minted ${#NEW} chars, want 40"; exit 1; }
 NEWH="$(printf %s "$NEW" | sha256sum | cut -d' ' -f1)"
 
-# 1. AUTHORITATIVE: the aclfile's own `default` line. By digest, so neither
-#    value reaches argv, and `!<hash>` keeps the `off` flag - all three verified
-#    on a scratch 7.0.15. deploy/README.md, "Changing a grant", has the forms.
-rcli acladmin ACL SETUSER default "#$NEWH" "!$OLDH"
+# 1a. ADD the new password to the live `default`, keeping the old one. Both
+#     authenticate from here until 1b - verified on a scratch 7.0.15, as is
+#     `!<hash>` keeping the `off` flag. deploy/README.md, "Changing a grant".
+rcli acladmin ACL SETUSER default "#$NEWH"
 rcli acladmin ACL SAVE
-sudo grep -q "^user default off #$NEWH ~\* &\* +@all$" /etc/redis/users.acl   # or STOP
 
 # 2. The placeholders file - `pw DEFAULT`, and any future re-render.
 # 3. /etc/redis/broker-password - the `aclfile`-commented-out recovery path.
 # 4. /etc/redis/redis.conf's `requirepass` line - the same path's directive.
 #    Values travel on a pipe, never on a `sudo sed -i` command line:
 #      sudo cat <file> | awk ... | sudo tee <file>.new  &&  sudo mv
+
+# 1b. Only once 2, 3 and 4 are verified below: RETIRE the old password.
+rcli acladmin ACL SETUSER default "!$OLDH"
+rcli acladmin ACL SAVE
+sudo grep -q "^user default off #$NEWH ~\* &\* +@all$" /etc/redis/users.acl   # or STOP
 ```
 
-Write 2 comes before 3 and 4 on purpose: it is the only durable copy of the new
-value, so a failure after it leaves the rotation completable rather than lost.
+**Why the ACL is written at both ends.** A single `"#$NEWH" "!$OLDH"` leaves a
+window in either order: crash after it and `NEW` is lost with `OLD` already
+gone, so the break-glass for every restart window is a string nobody holds;
+crash before it, with the files already written, and the same is true the other
+way round. Adding first costs nothing - `ACL SETUSER` ADDS, which is the same
+property `deploy/README.md` warns about for rules - and between 1a and 1b the
+user simply carries two passwords, both live. **The live suite is legitimately
+red in that interval**: `test_every_tracked_user_still_carries_a_password`
+compares password *counts*, and two-against-one is what it is there to notice.
+Finish 1b before reading anything into it.
+
+**`[ "${#NEW}" -eq 40 ]` is not belt and braces.** An empty `NEW` hashes to
+`e3b0c442...`, a perfectly valid 64-hex digest that `ACL SETUSER` accepts, and
+the verification below would then compare an empty `pw DEFAULT` against an empty
+file against an empty directive and report four agreeing digests. It is the one
+failure in this procedure that ends with every check green and the instance's
+break-glass set to the hash of the empty string.
 
 **Not `CONFIG SET requirepass`.** Verified on a scratch 7.0.15: it *replaces*
 `default`'s password rather than adding one, and does not clear `off` - so it is
