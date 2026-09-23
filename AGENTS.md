@@ -78,7 +78,7 @@ silently corrupts values.
   this repo's exposure was entirely that half (broker#47). A password comes off
   a user by digest, `!<64-hex>`, with the plaintext form as the fallback.
   `tests/deploy/test_runbook_credentials.py` fails on either spelling, over
-  `docs/` and `deploy/`.
+  `docs/`, `deploy/` and `scripts/`.
 - **The backup holds no Redis credential, and its identity cannot delete.**
   `broker-backup.service` reads `dump.rdb` - the server's own atomic snapshot -
   and creates objects under `objectCreator` + `objectViewer`; retention is the
