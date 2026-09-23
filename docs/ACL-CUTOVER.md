@@ -77,6 +77,8 @@ sudo redis-server --port 6399 --bind 127.0.0.1 --save '' --appendonly no \
     --aclfile /root/users.acl.check
 sleep 1
 redis-cli -p 6399 PING                                  # -> NOAUTH  (not PONG!)
+# Spelled out, NOT `rcli`: that helper is pinned to 6379, and reaching for it
+# here would talk to production instead of the throwaway server.
 REDISCLI_AUTH="$(pw ACLADMIN)" redis-cli --user acladmin -h 127.0.0.1 -p 6399 ACL LIST
 sudo kill "$(sudo cat /root/aclcheck.pid)"              # no user holds +shutdown, by design
 sudo shred -u /root/users.acl.check /root/aclcheck.log
