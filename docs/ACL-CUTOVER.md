@@ -33,7 +33,9 @@ cluster that was true from 2026-09-10 until CannObserv/broker#46 rotated it;
 the section below is how it got there and how it is done again.
 
 ```bash
-mint() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40; }
+# In a script that sets pipefail, `head` closing the pipe SIGPIPEs `tr` and the
+# subshell exits 141 - so the mint disables it for itself and asserts the length.
+mint() { set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40; }
 sudo install -m 0400 -o root -g root /dev/null /etc/redis/broker-acl-passwords
 for p in ARCHIVER WATCHER REPLICATOR BROKERADMIN ACLADMIN CITEST; do
     echo "__${p}_PW__=$(mint)"
