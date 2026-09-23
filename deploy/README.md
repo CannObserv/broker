@@ -172,14 +172,21 @@ on a rotation it is often not even available: a hash-only handoff leaves this
 node holding no plaintext for that user at all (CannObserv/archiver#251).
 
 **A rotation is not done until the passwords file says so,** or the next
-re-render reinstates the old credential. For a service user the new line is its
-digest, and a digest may sit on a command line; the old line's value, plaintext
-or digest, is matched by `.*` and never spelled:
+re-render reinstates the old credential. For a **service** user the new line is
+its digest, and a digest may sit on a command line; the old line's value,
+plaintext or digest, is matched by `.*` and never spelled:
 
 ```bash
 sudo sed -i 's/^__<USER>_PW\(_SHA256\)\?__=.*/__<USER>_PW_SHA256__=<new-sha256>/' \
     /etc/redis/broker-acl-passwords      # GNU sed -i keeps the 0400 root:root
+sudo grep -c '^__<USER>_PW_SHA256__=<new-sha256>$' \
+    /etc/redis/broker-acl-passwords      # -> 1; sed says nothing when no line matched
 ```
+
+Not for an **operator** user - `acladmin`, `brokeradmin`, `default`. Those keep a
+plaintext line, because `pw` reads it to authenticate, and a digest there locks
+`rcli` out of the user just rotated. Their line is replaced through a pipe, as
+[docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md), *Rotating `__DEFAULT_PW__`*, does.
 
 `test_the_nodes_passwords_file_renders_the_credentials_that_are_live` renders
 the node's file under `sudo -n` and compares every user's digest with
