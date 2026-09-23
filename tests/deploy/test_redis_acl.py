@@ -461,8 +461,9 @@ def test_a_service_can_publish_exactly_the_streams_it_produces(users, user) -> N
     """The selector, checked against the inventory rather than against itself.
 
     The sharpest case is `content.replicate`, whose row in ../docs/STREAMS.md
-    reads "**Never XTRIMmed by Archiver**". That carve-out lived in *archiver's*
-    source (`no_trim_topics`), so the broker permitted the one thing its own
+    read "**Never XTRIMmed by Archiver**". That carve-out lived in *archiver's*
+    source (`no_trim_topics`, since replaced by the `trim_topics` allowlist in
+    CannObserv/archiver#239), so the broker permitted the one thing its own
     inventory says must never happen - and both parties could do it: archiver
     could trim the stream, and so could replicator, whose PEL entries would be
     the ones orphaned.
@@ -539,11 +540,13 @@ def test_no_user_holds_xadd_or_xtrim_on_its_root_permission_set(users) -> None:
 
 
 def test_no_selector_can_trim_a_stream_the_inventory_never_xtrims(users) -> None:
-    """The assertion that replaces `no_trim_topics` in archiver's source.
+    """The broker-side backing for archiver's trim allowlist.
 
     Capping a command stream deletes commands the consumer group has not
     delivered and orphans the PEL entries naming them, so ../docs/STREAMS.md
-    carves `content.replicate` out of the drain loop's trim set. `info.registry`
+    says `content.replicate` is never trimmed, and archiver's `trim_topics`
+    (CannObserv/archiver#239) leaves it out. This makes that a refusal rather
+    than one participant's allowlist. `info.registry`
     joined it in CannObserv/broker#34 for a different reason: it is capped, but
     only by the `MAXLEN` riding each of its producer's publishes, because
     consumers boot by replaying it from `0-0` and a trim from anywhere else
@@ -561,12 +564,13 @@ def test_no_selector_can_trim_a_stream_the_inventory_never_xtrims(users) -> None
             )
 
 
-#: What archiver itself trims, as archiver verified at every call site answering
-#: CannObserv/archiver#234 (2026-09-18): one `XTRIM` in the process, its outbox
-#: drain loop's, whose production trim set is exactly this. Nothing in archiver,
-#: co-core or co-core-aio issues `XDEL`. Mirrored, not derived - the broker
-#: cannot read another repository's call sites - so it names its source the way
-#: the retention caps in `src/broker/bus_health.py` do.
+#: What archiver itself trims: `trim_topics`, the allowlist its outbox drain
+#: loop trims and nothing else (CannObserv/archiver#239), passed as a literal in
+#: archiver's `src/api/main.py`. One `XTRIM` in the process, verified at every
+#: call site answering CannObserv/archiver#234 (2026-09-18); nothing in
+#: archiver, co-core or co-core-aio issues `XDEL`. Mirrored, not derived - the
+#: broker cannot read another repository's call sites - so it names its source
+#: the way the retention caps in `src/broker/bus_health.py` do.
 ARCHIVER_TRIMS = frozenset({INFO_CHANGES})
 
 #: The caller archiver's dead-letter disposals are held for. Both its `+xtrim`
@@ -575,30 +579,50 @@ ARCHIVER_TRIMS = frozenset({INFO_CHANGES})
 ARCHIVER_DLQ_TRIAGE = "CannObserv/archiver#238"
 
 
-def test_archiver_may_trim_the_streams_it_trims_and_its_queues_name_their_caller(
-    users,
-) -> None:
-    """CannObserv/archiver#234's answer, held against the selector.
+def test_archiver_trim_grant_is_its_trim_allowlist(users) -> None:
+    """Archiver's `+xtrim` equals `trim_topics`, on every pattern but its queues.
 
-    The `+xtrim` selector was derived as "what archiver produces, minus what the
-    inventory never trims", and that left `info.registry` in it on the strength
-    of an inventory that did not yet say so. Archiver's answer is the other
-    derivation - what it actually issues - and the two now have to agree on
-    every canonical stream: `info.changes`, and nothing else.
+    One decision held in two repositories, each pinning its own half and citing
+    the other's (CannObserv/broker#55):
 
-    The dead-letter queues are the part of the selector the answer does not
-    cover, and they stay (`test_a_dlq_writer_can_also_drain_it`). What this adds
-    is the rule `brokeradmin`'s stanza is already held to: a grant nothing
-    issues names its caller, or the next reader cannot tell a decision from an
-    oversight.
+    - archiver's `trim_topics` literal, pinned at the call site by
+      `tests/api/test_lifespan_bus_wiring.py::test_trim_allowlist_is_info_changes_only`
+      and at the default by
+      `tests/core/changes/test_publisher.py::test_run_trim_allowlist_defaults_to_info_changes_only`;
+    - the `+xtrim` selector in ../deploy/redis-acl.conf, pinned here.
+
+    Widening either alone fails a test in the other repository's review. The
+    grant narrower than the allowlist is a NOPERM archiver logs as one WARNING
+    per ~20 drain iterations; wider is a trim nobody issues, on a stream the
+    inventory may say is never trimmed.
+
+    Exact over the whole selector, pattern for pattern, where
+    `test_a_service_can_trim_only_what_it_publishes` only bounds it by publish
+    and CannObserv/archiver#234's check here asked only the canonical streams.
+    The rest of the selector is the queues archiver drains (`DLQ_DRAINERS`) -
+    its drainer role, not its drain loop, so outside `trim_topics` - and the
+    test below holds them to a named caller.
+    """
+    queues = {dlq for dlq, drainer in DLQ_DRAINERS.items() if drainer == "archiver"}
+    assert queues, "archiver drains no queue - has the drainer assignment moved?"
+    trimmable = selector_patterns(users["archiver"], "+xtrim")
+    assert trimmable == ARCHIVER_TRIMS | queues, (
+        f"archiver may trim {sorted(trimmable - queues)} beside its queues, and its "
+        f"trim_topics allowlist is {sorted(ARCHIVER_TRIMS)} (CannObserv/archiver#239) - "
+        "widen both or neither"
+    )
+
+
+def test_archiver_dead_letter_disposals_name_their_caller(users) -> None:
+    """The part of archiver's disposal grant `trim_topics` does not cover.
+
+    `+xtrim` and `+xdel` on the two queues it drains stay
+    (`test_a_dlq_writer_can_also_drain_it`). What this adds is the rule
+    `brokeradmin`'s stanza is already held to: a grant nothing issues names its
+    caller, or the next reader cannot tell a decision from an oversight.
     """
     rules = users["archiver"]
     trimmable = selector_patterns(rules, "+xtrim")
-    assert trimmable & CANONICAL_STREAMS == ARCHIVER_TRIMS, (
-        f"archiver may trim {sorted(trimmable & CANONICAL_STREAMS)} and trims "
-        f"{sorted(ARCHIVER_TRIMS)} (CannObserv/archiver#234)"
-    )
-
     prose = stanza("archiver")
     held = sorted((trimmable - ARCHIVER_TRIMS) | selector_patterns(rules, "+xdel"))
     assert held, "archiver holds no dead-letter disposal - has the drainer assignment moved?"
@@ -1020,13 +1044,14 @@ def test_a_service_is_served_the_streams_it_produces_and_refused_the_rest(
 
 
 def test_nobody_can_xtrim_a_stream_the_inventory_never_xtrims(tracked_acl_broker, users) -> None:
-    """The assertion that replaces a carve-out in another repository's source.
+    """The broker-side backing for archiver's trim allowlist, against a live server.
 
     `content.replicate` is a command stream: an `XTRIM` there deletes commands
     the consumer group has not been delivered and orphans the PEL entries naming
     them. ../docs/STREAMS.md says it is never trimmed, and archiver's drain loop
-    keeps `no_trim_topics` to honour that - one participant's convention, in a
-    repo the broker does not see, for a stream two participants could both cap.
+    leaves it out of `trim_topics` (CannObserv/archiver#239) - one participant's
+    allowlist, in a repo the broker does not see, for a stream two participants
+    could both cap.
 
     Over every stream the inventory says is never XTRIMmed, which since
     CannObserv/broker#34 includes `info.registry` - capped by its producer on
