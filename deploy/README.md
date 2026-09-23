@@ -114,7 +114,7 @@ pw()   { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
 # $1 is the ACL user. The password reaches redis-cli's ENVIRONMENT and never its
 # argv - CannObserv/broker#47, and the reason no line here says `-u`.
 rcli() { local u=$1; shift
-         REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h 127.0.0.1 -p 6379 "$@"; }
+         REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
 
 rcli acladmin ACL SETUSER <user> <rule>   # applies now
 rcli acladmin ACL SAVE                    # -> /etc/redis/users.acl
