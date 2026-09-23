@@ -759,6 +759,37 @@ def test_only_the_probe_can_read_an_acl(users) -> None:
         assert "+acl|getuser" not in rules, f"{name} can read every user's password hash"
 
 
+# A service still holding `+config|get`, and the issue that retires its caller.
+# Each entry is a debt with an addressee: cut it the day the grant comes off.
+CONFIG_GET_OWED = {"archiver": "CannObserv/archiver#257"}
+
+
+def test_no_service_can_read_the_break_glass_credential(users) -> None:
+    """`+config|get` is also `CONFIG GET requirepass` (CannObserv/broker#50).
+
+    Redis 7.0 refuses a first-arg rule on a subcommand, so the grant cannot be
+    narrowed to `maxmemory`: whoever can read the cap can read the `default`
+    user's break-glass password, and a restart makes the running value the
+    current one. The one service caller, archiver's floor check, reads the cap -
+    which `INFO memory` serves to `+info`, already held by every service.
+
+    An owed grant is allowed only while its stanza names the issue retiring it,
+    and only while the grant is still there, so the allowance cannot outlive it.
+    """
+    for user in SERVICE_USERS:
+        held = granted_commands(users[user]) & {"+config", "+config|get", "+@all"}
+        if user in CONFIG_GET_OWED:
+            assert held == {"+config|get"}, f"{user} no longer owes +config|get: cut the allowance"
+            assert CONFIG_GET_OWED[user] in stanza(user), (
+                f"{user}'s stanza does not name {CONFIG_GET_OWED[user]}, which retires its caller"
+            )
+        else:
+            assert not held, f"{user} can CONFIG GET requirepass: {sorted(held)}"
+    assert "requirepass" in stanza("brokeradmin"), (
+        "brokeradmin keeps +config|get, and its stanza has to say the credential is readable to it"
+    )
+
+
 def test_no_user_holds_xdel_on_its_root_permission_set(users) -> None:
     """Deletion is selector-scoped or it is not granted, for every user.
 
@@ -1083,6 +1114,21 @@ def test_each_service_can_read_the_version_and_be_health_checked(tracked_acl_bro
     client = tracked_acl_broker(user)
     assert client.info("server")["redis_version"]
     assert client.ping()
+
+
+@pytest.mark.parametrize("user", SERVICE_USERS)
+def test_each_service_reads_the_cap_without_reading_the_config(tracked_acl_broker, user) -> None:
+    """`INFO memory` is the floor check's cap read, and `CONFIG GET` is refused.
+
+    The first half is what makes revoking `+config|get` free: a service that
+    loses it still sees `maxmemory` (CannObserv/broker#50).
+    """
+    client = tracked_acl_broker(user)
+    assert client.info("memory")["maxmemory"] is not None
+    if user in CONFIG_GET_OWED:
+        return
+    with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+        client.config_get("requirepass")
 
 
 def test_the_probe_can_sweep_but_cannot_publish(tracked_acl_broker) -> None:

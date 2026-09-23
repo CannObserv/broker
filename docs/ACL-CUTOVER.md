@@ -411,6 +411,15 @@ still asserts the live `requirepass` is neither empty nor the placeholder - an
 empty one is `nopass` by another door, on the one path where the directive does
 govern - and its docstring says which guarantee that is and which it is not.
 
+**Who can read it is who holds `+config|get`**, and Redis 7.0 cannot narrow that
+grant to a parameter (CannObserv/broker#50). After a restart the running value is
+the current break-glass password, so each holder is a reader of it. Watcher and
+replicator lost the grant on 2026-09-23 - neither ever issued `CONFIG`.
+Archiver keeps it until CannObserv/archiver#257 moves its floor check's cap read
+to `INFO memory`. `brokeradmin` keeps it for the config mirror test, and that is
+accepted on its stanza in `deploy/redis-acl.conf`: a rotation is not a secret
+from this node's own identity.
+
 ---
 
 ## The `nopass` trap
