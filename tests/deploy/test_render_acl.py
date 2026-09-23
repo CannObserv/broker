@@ -159,6 +159,27 @@ def test_an_empty_plaintext_is_refused(tmp_path) -> None:
     assert p in result.stderr
 
 
+@pytest.mark.parametrize(
+    "suffix", [" ", "\r", "\t"], ids=["trailing-space", "carriage-return", "tab"]
+)
+def test_a_value_carrying_whitespace_is_refused_not_hashed(tmp_path, suffix) -> None:
+    """A CRLF file or a pasted trailing space hashes to a credential no service
+    holds. Against a live broker the node test catches it; on a rebuild there is
+    no live broker, and every such user is locked out with nothing saying why."""
+    p, q = PLACEHOLDERS[0], PLACEHOLDERS[1]
+    lines = _all_plaintext(
+        **{
+            p: f"{p}={_plaintext(p)}{suffix}",
+            q: f"{_digest_key(q)}={_sha256('x')}{suffix}",
+        }
+    )
+    result = _render(tmp_path, lines)
+    assert result.returncode != 0
+    assert p in result.stderr
+    assert _digest_key(q) in result.stderr
+    assert _plaintext(p) not in result.stderr
+
+
 def test_an_unrecognised_line_is_refused_without_echoing_it(tmp_path) -> None:
     """A bare value on a line of its own - a password pasted without its key -
     is the likeliest malformed line, and printing it would publish it."""

@@ -67,6 +67,11 @@ for p in "${placeholders[@]}"; do
         if [[ -z ${plain[$p]} ]]; then
             errors+=("$p: empty")
             continue
+        elif [[ ${plain[$p]} =~ [[:space:][:cntrl:]] ]]; then
+            # A CRLF file or a pasted trailing space hashes to a credential no
+            # service holds - on a rebuild, a lockout nothing explains.
+            errors+=("$p: contains whitespace or a control character")
+            continue
         fi
         # printf is a builtin: the value travels on a pipe, never on an argv.
         hash=$(printf %s "${plain[$p]}" | sha256sum | cut -d' ' -f1)
