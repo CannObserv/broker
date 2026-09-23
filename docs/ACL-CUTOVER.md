@@ -417,9 +417,8 @@ the current break-glass password, so each holder is a reader of it. All three
 services lost the grant on 2026-09-23: watcher and replicator first - neither
 ever issued `CONFIG` - then archiver, once CannObserv/archiver#257 moved its
 floor check's cap read to `INFO memory`. `brokeradmin` keeps it for the config
-mirror test, and that is
-accepted on its stanza in `deploy/redis-acl.conf`: a rotation is not a secret
-from this node's own identity.
+mirror test, and that is accepted on its stanza in `deploy/redis-acl.conf`: a
+rotation is not a secret from this node's own identity.
 
 ---
 
