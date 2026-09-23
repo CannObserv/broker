@@ -21,11 +21,14 @@ The replacement is ``REDISCLI_AUTH`` plus ``--user``, verified on a scratch
 off with the URL - its presence in a diff is itself the tell that the old form
 is back.
 
-**What is scanned, and what is not.** ``docs/`` and ``deploy/`` plus the two
-root Markdown files: everything an operator copies from. ``tests/`` is
-deliberately out of reach, because a pattern that scanned its own directory
-would match the pattern strings in this module and the escape would have to be
-uglier than the rule.
+**What is scanned, and what is not.** ``docs/``, ``deploy/`` and ``scripts/``
+plus the two root Markdown files: everything an operator copies from, and the
+one directory a convenience one-liner would land in. ``scripts/`` holds no
+``redis-cli`` today and is scanned anyway, because the rule in ``AGENTS.md`` is
+stated generally and a guard narrower than its rule teaches the wrong boundary.
+``tests/`` is deliberately out of reach, because a pattern that scanned its own
+directory would match the pattern strings in this module and the escape would
+have to be uglier than the rule.
 """
 
 from __future__ import annotations
@@ -35,10 +38,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: Every file an operator copies a command out of.
+#: Every file an operator copies a command out of. ``docs/`` by extension because
+#: it holds nothing else; ``deploy/`` and ``scripts/`` whole, because the command
+#: could be in a ``.conf`` comment or a ``.sh`` line as easily as in prose.
 SCANNED = (
     sorted((REPO_ROOT / "docs").rglob("*.md"))
     + sorted(p for p in (REPO_ROOT / "deploy").rglob("*") if p.is_file())
+    + sorted(p for p in (REPO_ROOT / "scripts").rglob("*") if p.is_file())
     + [REPO_ROOT / "AGENTS.md", REPO_ROOT / "README.md"]
 )
 
@@ -59,7 +65,10 @@ CREDENTIAL_FLAG = re.compile(r"redis-cli\b[^\n]*?\s(?:-u|-a|--pass)\b")
 def _hits(pattern: re.Pattern[str]) -> list[str]:
     findings = []
     for path in SCANNED:
-        for number, line in enumerate(path.read_text().splitlines(), start=1):
+        # ``errors="replace"``: a non-UTF-8 file under ``deploy/`` should make this
+        # test FAIL with a finding, not error out before it has read anything.
+        text = path.read_text(errors="replace")
+        for number, line in enumerate(text.splitlines(), start=1):
             if pattern.search(line):
                 findings.append(f"{path.relative_to(REPO_ROOT)}:{number}")
     return findings
