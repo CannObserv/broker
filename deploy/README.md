@@ -171,9 +171,16 @@ fallback, for the case where the digest is not to hand - not the default, and
 on a rotation it is often not even available: a hash-only handoff leaves this
 node holding no plaintext for that user at all (CannObserv/archiver#251).
 
-**A rotation is not done until the passwords file says so.** Replace the user's
-line with `__X_PW_SHA256__=<new-sha256>` - through a pipe, not a `sed -i`
-command line - or the next re-render reinstates the old credential.
+**A rotation is not done until the passwords file says so,** or the next
+re-render reinstates the old credential. For a service user the new line is its
+digest, and a digest may sit on a command line; the old line's value, plaintext
+or digest, is matched by `.*` and never spelled:
+
+```bash
+sudo sed -i 's/^__<USER>_PW\(_SHA256\)\?__=.*/__<USER>_PW_SHA256__=<new-sha256>/' \
+    /etc/redis/broker-acl-passwords      # GNU sed -i keeps the 0400 root:root
+```
+
 `test_the_nodes_passwords_file_renders_the_credentials_that_are_live` renders
 the node's file under `sudo -n` and compares every user's digest with
 `ACL GETUSER`, so a forgotten line fails the suite rather than waiting for a
