@@ -1116,6 +1116,24 @@ def test_each_service_reads_the_cap_without_reading_the_config(tracked_acl_broke
         client.config_get("requirepass")
 
 
+@pytest.mark.parametrize(
+    "user",
+    sorted(set(parse_users(ACL_FILE.read_text())) - {"brokeradmin", "default"}),
+)
+def test_only_the_probe_can_read_requirepass(tracked_acl_broker, user) -> None:
+    """Every declared user but `brokeradmin` is refused `CONFIG GET requirepass`.
+
+    The services above are three of them; this is the claim the brokeradmin
+    stanza makes, over every user the file declares. Asked of redis rather than
+    of the rules, because `citest` holds `+@all` and is kept off `CONFIG` only by
+    `-@admin -@dangerous` - a subtraction the parsing helpers here do not model.
+    `default` is `off`, so it cannot authenticate to be asked.
+    """
+    client = tracked_acl_broker(user)
+    with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+        client.config_get("requirepass")
+
+
 def test_the_probe_can_sweep_but_cannot_publish(tracked_acl_broker) -> None:
     """`brokeradmin` holds `~*` because `INFO memory` has no key and the DLQ
     sweep must find queues nobody declared. Wide keys make the command list the
