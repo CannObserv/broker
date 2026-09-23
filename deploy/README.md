@@ -151,8 +151,9 @@ for the case where the whole line is being re-declared anyway.
 on a command line. Verified on a scratch 7.0.15: `!<hash>` removes exactly that
 password and keeps the others, `#<hash>` adds one that then authenticates, and
 neither disturbs an `off` flag. The digest is
-`printf %s "$pw" | sha256sum` over the value in
-`/etc/redis/broker-acl-passwords`:
+`printf %s "$pw" | sha256sum | cut -d' ' -f1` over the value in
+`/etc/redis/broker-acl-passwords` - the `cut` is not optional, `sha256sum`
+prints `<hash>  -` and redis refuses the trailing filename:
 
 ```bash
 rcli acladmin ACL SETUSER <user> "#<new-sha256>" "!<old-sha256>"   # rotate, no plaintext
