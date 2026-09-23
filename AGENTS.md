@@ -70,6 +70,15 @@ silently corrupts values.
   purpose: `brokeradmin`'s `+xtrim` stops at `~*.dlq`, the only thing keeping an
   operator off a **Never XTRIMmed** stream (broker#34). Do not widen it in an
   incident.
+- **Credentials never reach a command line.** Runbooks authenticate with
+  `REDISCLI_AUTH` plus `--user`, never a `redis://user:<pw>@host` URL and never
+  `-u`, `-a` or `--pass`: `argv` is readable from `ps`, kept in root's shell
+  history, and logged by `sudo` whatever the caller does. That last half is what
+  application-side redaction could not reach in CannObserv/archiver#251, and
+  this repo's exposure was entirely that half (broker#47). A password comes off
+  a user by digest, `!<64-hex>`, with the plaintext form as the fallback.
+  `tests/deploy/test_runbook_credentials.py` fails on either spelling, over
+  `docs/` and `deploy/`.
 - **The backup holds no Redis credential, and its identity cannot delete.**
   `broker-backup.service` reads `dump.rdb` - the server's own atomic snapshot -
   and creates objects under `objectCreator` + `objectViewer`; retention is the
@@ -145,7 +154,8 @@ src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  logging.py (service-local, not a mirror)
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/,
                  rehearses the restore against a real redis-server, and guards the
-                 SocratiCode config (#17) and ruff's reach into the docs (#38)
+                 SocratiCode config (#17), ruff's reach into the docs (#38) and
+                 credentials out of every runbook's argv (#47)
 ```
 
 ## Agent Skills

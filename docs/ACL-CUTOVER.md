@@ -13,8 +13,9 @@ a grant on this one, see [deploy/README.md](../deploy/README.md), *Changing a gr
 
 Steps 2 to 4 below continue from Step 1 (1a to 1d) in RESTART-WINDOW.md; the
 numbered items under *Before the window* are preparation, not steps. Commands use
-the `pw` helper and `$A`, `$B` and `$U`, all defined at the top of
-RESTART-WINDOW.md; `$U` (`default:`) authenticates only while a window is open.
+the `pw` and `rcli` helpers defined at the top of RESTART-WINDOW.md; `rcli` takes
+the ACL user as its first argument, and `rcli default` authenticates only while a
+window is open.
 
 Moved out of RESTART-WINDOW.md on 2026-09-11, when the runbook ran past the
 per-doc context budget.
@@ -59,7 +60,7 @@ sudo redis-server --port 6399 --bind 127.0.0.1 --save '' --appendonly no \
     --aclfile /root/users.acl.check
 sleep 1
 redis-cli -p 6399 PING                                  # -> NOAUTH  (not PONG!)
-redis-cli -u "redis://acladmin:$(sudo sed -n 's/^__ACLADMIN_PW__=//p' /etc/redis/broker-acl-passwords)@127.0.0.1:6399" ACL LIST
+REDISCLI_AUTH="$(pw ACLADMIN)" redis-cli --user acladmin -h 127.0.0.1 -p 6399 ACL LIST
 sudo kill "$(sudo cat /root/aclcheck.pid)"              # no user holds +shutdown, by design
 sudo shred -u /root/users.acl.check /root/aclcheck.log
 ```
@@ -126,8 +127,8 @@ grant degrades to a backing-off publisher rather than dead-lettering valid
 events. Widen the grant live:
 
 ```bash
-redis-cli -u "$A" --no-auth-warning ACL SETUSER <service> +<command>
-redis-cli -u "$A" --no-auth-warning ACL SAVE      # persists to /etc/redis/users.acl
+rcli acladmin ACL SETUSER <service> +<command>
+rcli acladmin ACL SAVE                            # persists to /etc/redis/users.acl
 ```
 
 Then add the same grant to `deploy/redis-acl.conf` and commit it, or the next
@@ -166,28 +167,45 @@ check is not "the services look fine"; it is that no connection is
 authenticated as `default`:
 
 ```bash
-redis-cli -u "$B" --no-auth-warning CLIENT LIST | grep -oE 'user=[^ ]+' | sort | uniq -c
+rcli brokeradmin CLIENT LIST | grep -oE 'user=[^ ]+' | sort | uniq -c
 #   4 user=archiver  1 user=brokeradmin  3 user=replicator  3 user=watcher  - and no user=default
-redis-cli -u "$B" --no-auth-warning ACL LOG 5             # quiet: nothing newer than the last fix
-redis-cli -u "$A" --no-auth-warning ACL LIST | grep '^user acladmin'   # precondition, not optional
+rcli brokeradmin ACL LOG 5                                # quiet: nothing newer than the last fix
+rcli acladmin ACL LIST | grep '^user acladmin'            # precondition, not optional
 ```
 
 ```bash
-redis-cli -u "$A" --no-auth-warning ACL SETUSER default off
-redis-cli -u "$A" --no-auth-warning ACL SAVE
+rcli acladmin ACL SETUSER default off
+rcli acladmin ACL SAVE
 ```
 
 Then verify every axis, not only the one that changed:
 
 ```bash
-redis-cli --no-auth-warning PING                           # -> NOAUTH Authentication required.
-redis-cli -u "$U" --no-auth-warning PING                   # -> WRONGPASS ... or user is disabled
+redis-cli PING                                             # -> NOAUTH Authentication required.
+rcli default PING                                          # -> WRONGPASS ... or user is disabled
 for u in archiver watcher replicator brokeradmin acladmin citest; do
-    redis-cli -u "redis://$u:$(pw "$(echo "$u" | tr a-z A-Z)")@localhost:6379/0" --no-auth-warning PING   # -> PONG, each
+    if [ -z "$(pw "${u^^}")" ]; then
+        echo "$u: no plaintext on this node (rotated by digest) - verify from its own host"
+        continue
+    fi
+    printf '%-13s %s\n' "$u" "$(rcli "$u" PING)"           # -> PONG, each one it can reach
 done
-redis-cli -u "$B" --no-auth-warning CLIENT LIST | grep -c 'flags=b'    # same count as before the flip
+rcli brokeradmin CLIENT LIST | grep -c 'flags=b'           # same count as before the flip
 sudo grep '^user default' /etc/redis/users.acl             # -> user default off #<hash> ~* &* +@all
 ```
+
+**The skip in that loop is the general case, not an archiver exception.** Any
+verification that authenticates *as* a service stops working the moment that
+service's credential is rotated by a hash-only handoff: this node then holds a
+digest and no plaintext, `pw` returns empty, and what used to print `PONG`
+prints `WRONGPASS` - which also writes an `AUTH` / `reason: auth` entry into
+`ACL LOG` naming the service whose credential was just rotated, the most
+alarming thing that log can say about a node where nothing is wrong. That is
+what `archiver` did on 2026-09-23 (CannObserv/archiver#251), and it is what the
+next rotated user will do. The replacements are verification **from the
+service's own host**, or an assertion about the ACL rather than about
+authentication - `rcli brokeradmin ACL GETUSER <user>` showing exactly one
+password hash, which `brokeradmin` can already do.
 
 `ACL SETUSER default off` does **not** disconnect clients already authenticated
 as `default` on this Redis (7.0): they keep working until they reconnect, and
@@ -203,11 +221,11 @@ Reversing step 4 - and, from now on, **opening any restart window**, since no
 other user can `BGREWRITEAOF`, `CONFIG SET` or shut the server down:
 
 ```bash
-redis-cli -u "$A" --no-auth-warning ACL SETUSER default on     # the password survives 'off'
-redis-cli -u "$A" --no-auth-warning ACL SAVE
+rcli acladmin ACL SETUSER default on      # the password survives 'off'
+rcli acladmin ACL SAVE
 # ... the window ...
-redis-cli -u "$A" --no-auth-warning ACL SETUSER default off
-redis-cli -u "$A" --no-auth-warning ACL SAVE
+rcli acladmin ACL SETUSER default off
+rcli acladmin ACL SAVE
 ```
 
 **Why `acladmin` exists at all**, because this was nearly got wrong: `ACL

@@ -18,18 +18,24 @@ The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
 > before-snapshot, `default off`. Zero `DB index is out of range` on the
 > restart, every group at its position, 2 seconds of downtime.
 >
-> Consequence for every command below: `$U` (`default:`) was the identity of the
-> first window and **no longer authenticates between windows**. Read as
-> `brokeradmin`, change ACLs as `acladmin`, and for anything needing
+> Consequence for every command below: `default` was the identity of the first
+> window and **no longer authenticates between windows**. Read as `brokeradmin`,
+> change ACLs as `acladmin`, and for anything needing
 > `CONFIG SET`, `BGREWRITEAOF` or a shutdown, open the window by re-enabling
 > `default` and close it by disabling it again - step 4 of [ACL-CUTOVER.md](ACL-CUTOVER.md), both directions.
 >
 > ```bash
 > pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
-> B="redis://brokeradmin:$(pw BROKERADMIN)@localhost:6379/0"   # read, sweep, diagnose
-> A="redis://acladmin:$(pw ACLADMIN)@localhost:6379/0"         # ACL changes only
-> U="redis://default:$(pw DEFAULT)@localhost:6379/0"           # window-only; refused while off
+> # $1 is the ACL user. The password reaches redis-cli's ENVIRONMENT and never
+> # its argv - CannObserv/broker#47, and the reason no line here says `-u`.
+> rcli() { local u=$1; shift
+>          REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
 > ```
+>
+> `rcli brokeradmin` reads, sweeps and diagnoses; `rcli acladmin` changes ACLs
+> and nothing else; `rcli default` is window-only and is refused while `default`
+> is off. `REDISCLI_AUTH` emits no "may not be safe" warning, so
+> `--no-auth-warning` comes off with the URL - verified on a scratch 7.0.15.
 
 Restarting `redis-server` on `co-broker` disconnects all three participants, so
 it is a cohort-wide event rather than a maintenance detail. This window carries
@@ -141,7 +147,7 @@ The object is named by the save's own time, so the run reports `uploaded` and
 the journal line's `snapshot_at` is the minute just gone:
 
 ```bash
-redis-cli -u "$U" --no-auth-warning SAVE                   # -> OK
+rcli default SAVE                                          # -> OK
 sudo systemctl start broker-backup.service
 journalctl -u broker-backup -n 1 -o cat --no-pager         # THIS run's line, not the state file:
 #   "message": "Backup uploaded: gs://co-gcs-broker-backup/co-broker/<now>.rdb.gz", ..., "snapshot_at": "<now>"
@@ -159,10 +165,10 @@ Now the rewrite:
 
 ```bash
 sudo ls /var/lib/redis/appendonlydir/                      # note the base number, <n>
-redis-cli -u "$U" --no-auth-warning BGREWRITEAOF           # -> Background append only file rewriting started
-while redis-cli -u "$U" --no-auth-warning INFO persistence | tr -d '\r' \
+rcli default BGREWRITEAOF                                  # -> Background append only file rewriting started
+while rcli default INFO persistence | tr -d '\r' \
       | grep -E '^aof_rewrite_(in_progress|scheduled):' | grep -qv ':0$'; do sleep 1; done
-redis-cli -u "$U" --no-auth-warning INFO persistence \
+rcli default INFO persistence \
     | grep -E '^aof_(rewrites|rewrite_scheduled|rewrite_in_progress|last_bgrewrite_status):'
 #   aof_rewrites:1                  <- a counter, up by one from what it was
 #   aof_rewrite_scheduled:0
@@ -275,12 +281,10 @@ journalctl -u redis-server --no-pager | grep -i 'tailnet address'   # only after
 # Anonymous must still be refused.
 redis-cli PING                                   # -> NOAUTH
 
-pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
-U="redis://default:$(pw DEFAULT)@localhost:6379/0"       # window-only; open at this point
-B="redis://brokeradmin:$(pw BROKERADMIN)@localhost:6379/0"
-redis-cli -u "$U" --no-auth-warning SELECT 15    # -> ERR DB index is out of range
-redis-cli -u "$U" --no-auth-warning SELECT 1     # -> ERR too: `databases 1` means db0 alone
-redis-cli -u "$U" --no-auth-warning SELECT 0     # -> OK
+# `pw` and `rcli` as defined at the top of this file; `default` is on at this point.
+rcli default SELECT 15                           # -> ERR DB index is out of range
+rcli default SELECT 1                            # -> ERR too: `databases 1` means db0 alone
+rcli default SELECT 0                            # -> OK
 
 # The data, against the snapshot taken before the window. Lengths alone are not
 # enough - entries-added is the counter that tells a trim from a wipe.
@@ -288,11 +292,11 @@ for s in info.changes info.registry info.watch-status content.fetch \
          content.fetch-policy content.blobs content.revisions \
          content.artifacts content.replicate content.fetch.dlq; do
     printf '%-22s XLEN=%s entries-added=%s\n' "$s" \
-        "$(redis-cli -u "$B" --no-auth-warning XLEN $s)" \
-        "$(redis-cli -u "$B" --no-auth-warning XINFO STREAM $s 2>/dev/null | grep -A1 entries-added | tail -1)"
+        "$(rcli brokeradmin XLEN $s)" \
+        "$(rcli brokeradmin XINFO STREAM $s 2>/dev/null | grep -A1 entries-added | tail -1)"
 done
 for s in content.fetch content.blobs content.revisions content.artifacts content.replicate; do
-    echo "== $s"; redis-cli -u "$B" --no-auth-warning XINFO GROUPS $s
+    echo "== $s"; rcli brokeradmin XINFO GROUPS $s
 done
 
 set -a; . /etc/broker/.env; set +a
@@ -366,7 +370,7 @@ data*).
 | `check_redis_floor.sh` says `could not read redis_version` | missing `+info`; warn-only, so nothing else reports it | `ACL SETUSER <user> +info` |
 | `AuthenticationError` on connect | the service's own credential is wrong | check the URL's username half, not just the password |
 | `ERR DB index is out of range` from a test suite | `databases 1` working as intended | fix the test's URL; do not widen `databases` |
-| `redis-cli -u .../15` prints that error **and then `PONG`** | redis-cli falls back to db0 and carries on; redis-py raises instead | not a fault - but never verify `databases 1` with a URL suffix, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
+| `rcli default -n 15 PING` prints that error **and then `PONG`** | redis-cli falls back to db0 and carries on; redis-py raises instead | not a fault - but never verify `databases 1` by selecting the database at connect time, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
 | Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u redis-server` |
 | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
 | `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |

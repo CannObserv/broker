@@ -190,24 +190,25 @@ sudo systemctl start redis-server
 ### 4. Verify the positions, not the key count
 
 ```bash
-pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
-B="redis://brokeradmin:$(pw BROKERADMIN)@localhost:6379/0"
+pw()   { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
+rcli() { local u=$1; shift
+         REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
 
 journalctl -u redis-server -n 20 -o cat --no-pager | grep -E 'loaded from base file|DB index'
-redis-cli -u "$B" --no-auth-warning INFO keyspace   # db0:keys=N,expires=M - the rule is below
+rcli brokeradmin INFO keyspace                      # db0:keys=N,expires=M - the rule is below
 
 for s in info.changes info.registry info.watch-status content.fetch content.fetch-policy \
          content.blobs content.revisions content.artifacts content.replicate; do
-    printf '%-22s %s\n' "$s" "$(redis-cli -u "$B" --no-auth-warning XLEN "$s")"
+    printf '%-22s %s\n' "$s" "$(rcli brokeradmin XLEN "$s")"
 done
 for s in content.fetch content.revisions content.artifacts content.replicate content.blobs; do
-    echo "== $s"; redis-cli -u "$B" --no-auth-warning XINFO GROUPS "$s"    # last-delivered-id, pending, lag
+    echo "== $s"; rcli brokeradmin XINFO GROUPS "$s"    # last-delivered-id, pending, lag
 done
 
 # Only where a `pending` count above is non-zero and does not fall - any stream
 # and group from that loop. Per entry: who holds it, its idle time, and how many
 # times it has been delivered, which no XINFO reply carries (CannObserv/broker#32):
-redis-cli -u "$B" --no-auth-warning XPENDING content.fetch replicator.fetch - + 10
+rcli brokeradmin XPENDING content.fetch replicator.fetch - + 10
 ```
 
 `DB loaded from base file appendonly.aof.1.base.rdb` in the journal is the

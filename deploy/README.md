@@ -110,13 +110,25 @@ cohort-wide restart is an ACL nobody will dare tighten, which is the whole
 reason the grants are in a separate `aclfile` rather than in `redis.conf`:
 
 ```bash
-pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
-A="redis://acladmin:$(pw ACLADMIN)@127.0.0.1:6379/0"
+pw()   { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
+# $1 is the ACL user. The password reaches redis-cli's ENVIRONMENT and never its
+# argv - CannObserv/broker#47, and the reason no line here says `-u`.
+rcli() { local u=$1; shift
+         REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h 127.0.0.1 -p 6379 "$@"; }
 
-redis-cli -u "$A" --no-auth-warning ACL SETUSER <user> <rule>   # applies now
-redis-cli -u "$A" --no-auth-warning ACL SAVE                    # -> /etc/redis/users.acl
+rcli acladmin ACL SETUSER <user> <rule>   # applies now
+rcli acladmin ACL SAVE                    # -> /etc/redis/users.acl
 # then mirror the same rule into deploy/redis-acl.conf, with its reason, and commit
 ```
+
+**Credentials never reach a command line.** `REDISCLI_AUTH` is the whole of it:
+a `redis://user:<plaintext>@host` URL lands the secret in `argv`, readable from
+`ps` by any local user for the life of the call, in root's shell history, and -
+under `sudo` - in journald, which is what cost CannObserv/archiver#251 a
+rotation. Verified on a scratch 7.0.15: `REDISCLI_AUTH` authenticates
+identically and emits no "may not be safe" warning, so a `--no-auth-warning` in
+a diff here is itself the tell that the old form is back.
+`tests/deploy/test_runbook_credentials.py` fails on either spelling.
 
 **`ACL SETUSER` ADDS; it does not replace.** `-xadd`, `clearselectors` and the
 like are how a rule comes *off*. The obvious shortcut - `ACL SETUSER <user>
@@ -132,6 +144,26 @@ one `redis-cli` invocation so the gap was sub-millisecond: all three services
 reconnected, `ACL LOG` recorded no denial, and no group lost its position. Cheap
 here, but a disconnect is not nothing - prefer the delta rules, and keep `reset`
 for the case where the whole line is being re-declared anyway.
+
+**A password comes off by digest, and the plaintext is the fallback.** The same
+"ADDS, does not replace" applies to `>secret`, so a rotation is two rules in one
+`SETUSER` - and `#<64-hex>` / `!<64-hex>` are the forms of both that put nothing
+on a command line. Verified on a scratch 7.0.15: `!<hash>` removes exactly that
+password and keeps the others, `#<hash>` adds one that then authenticates, and
+neither disturbs an `off` flag. The digest is
+`printf %s "$pw" | sha256sum` over the value in
+`/etc/redis/broker-acl-passwords`:
+
+```bash
+rcli acladmin ACL SETUSER <user> "#<new-sha256>" "!<old-sha256>"   # rotate, no plaintext
+rcli acladmin ACL SAVE
+rcli brokeradmin ACL GETUSER <user>        # -> exactly one hash, and it is the new one
+```
+
+`>newsecret <oldsecret` is the plaintext spelling of the same pair. It is the
+fallback, for the case where the digest is not to hand - not the default, and
+on a rotation it is often not even available: a hash-only handoff leaves this
+node holding no plaintext for that user at all (CannObserv/archiver#251).
 
 **The third line is the one that gets skipped.** Until broker#11 nothing
 checked it, and it rested on someone remembering four times: eleven corrections
@@ -303,10 +335,20 @@ Prefer applying it live - no restart, no dropped client connections - then
 persist it in both places:
 
 ```bash
-redis-cli -u "$BROKER_REDIS_URL" CONFIG SET maxmemory <value>   # applies now
+rcli default CONFIG SET maxmemory <value>   # applies now; window-only, see below
 sudo sed -i 's/^maxmemory .*/maxmemory <value>/' /etc/redis/redis.conf
 sed -i 's/^maxmemory .*/maxmemory <value>/' deploy/redis.conf.broker
 ```
+
+**`CONFIG SET` is `default`'s, not `brokeradmin`'s.** This line handed the probe's
+own `BROKER_REDIS_URL` straight to `redis-cli` until CannObserv/broker#47 swept
+the credential out of `argv`, and that URL is `brokeradmin`, which holds
+`+config|get` and nothing else - so it has been a `NOPERM` since the 2026-09-10
+cutover and nothing said so. Raising the cap therefore opens a window:
+`ACL SETUSER default on` as `acladmin`, the `CONFIG SET`, then `off` again -
+[`../docs/ACL-CUTOVER.md`](../docs/ACL-CUTOVER.md) step 4, both directions. The
+restart the section's first sentence saves is still saved; only the identity
+was wrong.
 
 Pass the value **exactly as the config file spells it** - `CONFIG SET` accepts
 the same unit suffixes, so there is no byte conversion to get wrong.

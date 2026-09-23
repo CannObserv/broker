@@ -861,7 +861,7 @@ def test_a_probe_grant_nothing_issues_says_why_it_is_kept(users) -> None:
     `src/broker/` never issues is NAMED in the stanza above the rule, because
     the reason to keep one is always the caller the source tree cannot show:
     `brokeradmin` is also the operator's read-only identity, the
-    `redis-cli -u "$B"` of every runbook under `docs/`.
+    `rcli brokeradmin` of every runbook under `docs/`.
     """
     prose = stanza("brokeradmin")
     unexplained = sorted(
