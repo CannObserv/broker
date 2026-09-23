@@ -66,6 +66,7 @@ clones pass. On the broker node, source the env first - and as
 ``set -a; . /etc/broker/.env; set +a``, never ``export $(cat ... | xargs)``.
 """
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -354,6 +355,34 @@ def node_passwords(live_client) -> Path:
     return NODE_PASSWORDS
 
 
+def _digests_only(rendered: str) -> str:
+    """The render's output, refused unread if it is not what its contract says.
+
+    The fixture below runs the *working tree's* script as root, so a broken
+    branch is a real input. Were its output to carry a plaintext rule, or a line
+    that is not a user line, ``parse_users``' own assertion would repeat that
+    line into the test report. So this fails first, and says nothing about what
+    it saw.
+    """
+    lines = rendered.splitlines()
+    if any(not line.startswith("user ") for line in lines) or re.search(r"(^|\s)>", rendered):
+        pytest.fail(
+            f"{RENDER_SCRIPT.name} emitted a plaintext rule or a non-user line - not "
+            "shown, since it may be a credential. Run it by hand into /dev/null to "
+            "reproduce, and fix the render before this test."
+        )
+    return rendered
+
+
+def test_a_render_carrying_a_plaintext_rule_is_refused_without_echoing_it() -> None:
+    secret = "would-be-secret-0123456789"
+    for rendered in (f"user x on >{secret} ~*", f"user x on #{'a' * 64} ~*\n{secret}"):
+        with pytest.raises(pytest.fail.Exception) as refused:
+            _digests_only(rendered)
+        assert secret not in str(refused.value)
+    assert _digests_only(f"user x on #{'a' * 64} ~*") == f"user x on #{'a' * 64} ~*"
+
+
 @pytest.fixture(scope="module")
 def node_render(node_passwords) -> str:
     """The node's real passwords file, rendered through the tracked script as root.
@@ -370,7 +399,7 @@ def node_render(node_passwords) -> str:
         f"{RENDER_SCRIPT.name} refuses the node's {node_passwords} - so the dry run in "
         "docs/ACL-CUTOVER.md step 2, and a rebuild's re-render, would both fail:\n" + result.stderr
     )
-    return result.stdout
+    return _digests_only(result.stdout)
 
 
 def test_the_nodes_passwords_file_renders_the_credentials_that_are_live(
