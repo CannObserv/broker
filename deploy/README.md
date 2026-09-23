@@ -147,8 +147,9 @@ for the case where the whole line is being re-declared anyway.
 
 **A password comes off by digest, and the plaintext is the fallback.** The same
 "ADDS, does not replace" applies to `>secret`, so a rotation is two rules in one
-`SETUSER` - and `#<64-hex>` / `!<64-hex>` are the forms of both that put nothing
-on a command line. Verified on a scratch 7.0.15: `!<hash>` removes exactly that
+`SETUSER` - and `#<64-hex>` / `!<64-hex>` are the forms of both that put no
+*secret* on a command line. The digest is on it; the digest is not the
+credential, which is the whole of the distinction. Verified on a scratch 7.0.15: `!<hash>` removes exactly that
 password and keeps the others, `#<hash>` adds one that then authenticates, and
 neither disturbs an `off` flag. The digest is
 `printf %s "$pw" | sha256sum | cut -d' ' -f1` over the value in
