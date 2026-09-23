@@ -56,8 +56,8 @@ outage (CannObserv/archiver#195); do not spend another on percent-encoding.
 `openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 40` until broker#46, and
 that spelling cannot keep its promise: base64 of 32 bytes is 44 characters, `tr`
 drops every `+`, `/` and `=`, and `head` has no shortfall to make up from. It
-mints under 40 about one time in twenty-five and says nothing - it produced 39
-on broker#46's first attempt. The six minted in 2026-09-10's run are all 40, so
+mints under 40 about one time in twenty and says nothing - `P(X>=4)` for
+`X ~ Bin(43, 2/64)` is 0.045 - and it produced 39 on broker#46's first attempt. The six minted in 2026-09-10's run are all 40, so
 nothing here is short; the recipe was lucky six times. The length check on the
 last line is the point, whichever source you draw from.
 
