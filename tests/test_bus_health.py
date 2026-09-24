@@ -214,6 +214,11 @@ async def test_collect_memory_finding_names_the_streams_the_tick_read(fake_redis
         async def xlen(self, *a, **kw):
             raise AssertionError("the length is already in XINFO STREAM's reply")
 
+        async def xinfo_stream(self, topic, *a, **kw):
+            reads[topic] = reads.get(topic, 0) + 1
+            return await self._delegate.xinfo_stream(topic, *a, **kw)
+
+    reads: dict[str, int] = {}
     findings, _ = await collect_broker_findings(_NearTheCap(fake_redis), previous_state={})
 
     (memory,) = [f for f in findings if f.check == "memory"]
@@ -221,6 +226,8 @@ async def test_collect_memory_finding_names_the_streams_the_tick_read(fake_redis
     # Longer than both, and not named: its depth is its own finding.
     assert dlq not in memory.message
     assert any(f.check == "dlq" and f.subject == dlq for f in findings)
+    # The length check's own read, not a second one for the name.
+    assert reads[CONTENT_BLOBS] == reads[CONTENT_REVISIONS] == 1
 
 
 async def test_collect_memory_reads_the_policy_from_the_section_it_already_fetches(
