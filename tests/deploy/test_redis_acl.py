@@ -607,10 +607,11 @@ def test_archiver_trim_grant_is_its_trim_allowlist(users) -> None:
     queues = {dlq for dlq, drainer in DLQ_DRAINERS.items() if drainer == "archiver"}
     assert queues, "archiver drains no queue - has the drainer assignment moved?"
     trimmable = selector_patterns(users["archiver"], "+xtrim")
-    assert trimmable == ARCHIVER_TRIMS | queues, (
-        f"archiver may trim {sorted(trimmable - queues)} beside its queues, and its "
-        f"trim_topics allowlist is {sorted(ARCHIVER_TRIMS)} (CannObserv/archiver#239) - "
-        "widen both or neither"
+    expected = ARCHIVER_TRIMS | queues
+    assert trimmable == expected, (
+        f"archiver's +xtrim selector is missing {sorted(expected - trimmable)} and adds "
+        f"{sorted(trimmable - expected)}; its trim_topics allowlist is "
+        f"{sorted(ARCHIVER_TRIMS)} (CannObserv/archiver#239) - widen both or neither"
     )
 
 
