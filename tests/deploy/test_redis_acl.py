@@ -637,12 +637,21 @@ def test_archiver_dead_letter_disposals_name_their_caller(users) -> None:
     consumes, is held to these two queues by
     `test_triage_dlqs_are_the_two_queues_broker_grants_xdel_on`
     (CannObserv/archiver#238). A queue added there without the grant here is a
-    NOPERM on the discard route, which archiver returns as a 503.
+    NOPERM on the discard route, which archiver returns as a 503. So this pin is
+    exact, like `test_archiver_trim_grant_is_its_trim_allowlist`: the queues
+    archiver drains (`DLQ_DRAINERS`), no fewer and no more.
     """
     rules = users["archiver"]
     prose = stanza("archiver")
-    held = sorted(selector_patterns(rules, "+xdel"))
-    assert held, "archiver holds no dead-letter disposal - has the drainer assignment moved?"
+    queues = {dlq for dlq, drainer in DLQ_DRAINERS.items() if drainer == "archiver"}
+    assert queues, "archiver drains no queue - has the drainer assignment moved?"
+    deletable = selector_patterns(rules, "+xdel")
+    assert deletable == queues, (
+        f"archiver's +xdel selector is missing {sorted(queues - deletable)} and adds "
+        f"{sorted(deletable - queues)}; it is the queues archiver drains, which archiver's "
+        "TRIAGE_DLQS is pinned to - widen both or neither"
+    )
+    held = sorted(deletable)
     unexplained = [queue for queue in held if queue not in prose]
     assert not unexplained and ARCHIVER_DLQ_TRIAGE in prose, (
         f"archiver holds +xdel on {held}; the stanza in {ACL_FILE.name} must name each "
