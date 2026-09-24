@@ -1068,7 +1068,11 @@ class _SimStream:
 
 
 def _replay(
-    republishes: list[tuple[int, int, bool]], *, until_ms: int, history: bool = True
+    republishes: list[tuple[int, int, bool]],
+    *,
+    until_ms: int,
+    history: bool = True,
+    offset_ms: int = _TICK_OFFSET_MS,
 ) -> list[tuple[int, list[str]]]:
     """``(at_ms, set_size, capped)`` per republish -> ``(tick_ms, findings)`` per
     tick, for ticks after the first hour (the stream is still filling before).
@@ -1082,7 +1086,7 @@ def _replay(
     pending = next(events, None)
     state: dict[str, int] = {}
     out: list[tuple[int, list[str]]] = []
-    tick = _TICK_OFFSET_MS
+    tick = offset_ms
     while tick <= until_ms:
         while pending is not None and pending[0] <= tick:
             at, size, capped = pending
@@ -1213,6 +1217,28 @@ def test_replay_a_cap_lost_just_after_a_shrink_is_not_reported_later(before: int
     assert first_finding(_replay(schedule, until_ms=_DAY_MS)) <= first_finding(
         _replay(schedule, until_ms=_DAY_MS, history=False)
     )
+
+
+@pytest.mark.parametrize("into_burst_ms", [1, 300, 500, 999])
+@pytest.mark.parametrize(
+    "schedule",
+    [
+        _cron(1000, end_ms=_DAY_MS),
+        [r for r in _cron(1000, end_ms=_DAY_MS) if not 30 * _PERIOD_MS <= r[0] < 32 * _PERIOD_MS],
+        _cron(500, end_ms=30 * _PERIOD_MS) + _cron(1000, start_ms=30 * _PERIOD_MS, end_ms=_DAY_MS),
+        _cron(2000, end_ms=30 * _PERIOD_MS) + _cron(1000, start_ms=30 * _PERIOD_MS, end_ms=_DAY_MS),
+    ],
+    ids=["steady", "gap-of-2", "steps-up-2x", "shrinks-2x"],
+)
+def test_replay_a_tick_that_lands_mid_burst_is_absorbed(
+    schedule: list[tuple[int, int, bool]], into_burst_ms: int
+) -> None:
+    """Every other replay ticks off the cron's phase. A 1,000-entry republish
+    takes a second in the model, and a tick inside it reads a partial set -
+    the one place the since-last-tick reading is documented as reading high,
+    and the span as reading a fragment it did not expect."""
+    ticks = _replay(schedule, until_ms=_DAY_MS, offset_ms=2 * _PERIOD_MS + into_burst_ms)
+    assert _length_findings(ticks) == []
 
 
 @pytest.mark.parametrize("per_period", [2, 3, 5, 10])
