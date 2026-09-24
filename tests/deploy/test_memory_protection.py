@@ -227,7 +227,7 @@ def test_system_slice_protects_at_least_what_its_children_claim() -> None:
 
 
 @pytest.mark.parametrize("tracked", list(OOM_UNITS), ids=lambda p: OOM_UNITS[p])
-def test_the_bus_scores_below_what_exe_dev_starts(tracked: Path) -> None:
+def test_the_bus_is_out_of_earlyooms_reach_but_not_exempt(tracked: Path) -> None:
     """``--avoid`` alone left the bus inside earlyoom's reach, and dev tooling never is.
 
     exe.dev's ``exe-init`` and ``sshd`` run at ``oom_score_adj`` -1000, and every
@@ -274,7 +274,7 @@ def test_earlyoom_regexes_carry_no_backslash() -> None:
 def test_earlyoom_avoid_list_covers_the_bus(name: str) -> None:
     """A ranking, not an exclusion: earlyoom 1.7 has no ``--ignore``, and ``--avoid``
     only subtracts ``AVOID_PENALTY`` from ``oom_score``. The regex is half of it;
-    ``test_the_bus_scores_below_what_exe_dev_starts`` is the other half.
+    ``test_the_bus_is_out_of_earlyooms_reach_but_not_exempt`` is the other half.
     """
     args = earlyoom_args()
     assert re.search(flag(args, "--avoid"), name), f"--avoid does not cover {name}"
