@@ -309,7 +309,7 @@ On 2026-09-16 the then-2 GB node ran out of memory under dev tooling (broker#17)
 Nothing was OOM-killed. The kernel failed **atomic** allocations in `kswapd0`,
 `tailscaled` and `ksoftirqd`, so the bus's network path degraded while every
 process stayed alive, and the probe was silent for most of an hour. The VM is 8
-GB now; these defences are the part that does not depend on size, and three
+GB now; these defences are the part that does not depend on size, and these
 things about this node shaped them:
 
 - **Dev tooling runs in `init.scope`, not `user.slice`.** exe.dev's agent starts
