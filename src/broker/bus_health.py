@@ -95,7 +95,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -127,6 +127,12 @@ logger = get_logger("src.broker.bus_health")
 # stop is the noeviction cap, where XADD fails instance-wide for every
 # producer and each one starts its retry flood.
 MEMORY_WARN_FRACTION = 0.75
+
+# How many streams the headroom finding names, longest first. Since #60 the
+# five `content.*` streams have no length finding and `maxmemory` is their only
+# bound, so without these names the warning arrives with headroom left and no
+# culprit (CannObserv/broker#61). A naming aid, not a threshold.
+MEMORY_NAMED_STREAMS = 3
 
 # The policy the cap is only safe under, mirrored from deploy/redis.conf.broker.
 # It is checked every tick for the same reason `maxmemory 0` is: both are ways
@@ -720,7 +726,11 @@ def _evaluate_eviction_policy(policy: str | None) -> list[Finding]:
 
 
 def evaluate_memory(
-    *, used_memory: int, maxmemory: int, policy: str | None = None
+    *,
+    used_memory: int,
+    maxmemory: int,
+    policy: str | None = None,
+    stream_lengths: Mapping[str, int] | None = None,
 ) -> list[Finding]:
     """Warn on headroom pressure, on ``maxmemory 0`` - which makes the policy
     inert and re-opens the whole-broker OOM-kill tail - and on a policy the cap
@@ -729,6 +739,11 @@ def evaluate_memory(
     All three are independent, so none of them returns early over another: a
     broker can be uncapped *and* set to evict, and hiding the second behind the
     first would report half a misconfiguration.
+
+    ``stream_lengths`` only names the longest streams on a headroom finding
+    already raised; a length never raises one (CannObserv/broker#61). Entries,
+    not bytes: a ``content.blobs`` entry is far larger than an ``info.*`` one,
+    so the list says where to look first, not which stream holds the memory.
     """
     findings = _evaluate_eviction_policy(policy)
     if maxmemory == 0:
@@ -743,15 +758,19 @@ def evaluate_memory(
         return findings  # the fraction below is undefined without a ceiling
     fraction = used_memory / maxmemory
     if fraction >= MEMORY_WARN_FRACTION:
-        findings.append(
-            Finding(
-                check="memory",
-                subject="redis",
-                message=f"used_memory {used_memory} is {fraction:.0%} of "
-                f"maxmemory {maxmemory} (warn at {MEMORY_WARN_FRACTION:.0%}); "
-                "at 100% XADD fails instance-wide for every producer",
-            )
+        message = (
+            f"used_memory {used_memory} is {fraction:.0%} of "
+            f"maxmemory {maxmemory} (warn at {MEMORY_WARN_FRACTION:.0%}); "
+            "at 100% XADD fails instance-wide for every producer"
         )
+        longest = sorted(
+            ((topic, length) for topic, length in (stream_lengths or {}).items() if length > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:MEMORY_NAMED_STREAMS]
+        if longest:
+            named = ", ".join(f"{topic} {length}" for topic, length in longest)
+            message += f"; longest streams: {named} (entries, not bytes)"
+        findings.append(Finding(check="memory", subject="redis", message=message))
     return findings
 
 
@@ -1541,7 +1560,9 @@ async def _collect_undelivered(
     )
 
 
-async def _collect_memory(client: Redis) -> list[Finding]:
+async def _collect_memory(
+    client: Redis, *, stream_lengths: Mapping[str, int] | None = None
+) -> list[Finding]:
     try:
         info = await client.info("memory")
     except ResponseError:
@@ -1554,6 +1575,7 @@ async def _collect_memory(client: Redis) -> list[Finding]:
         # Rides the section the headroom check already pays for - no second
         # call, and no grant beyond the +info brokeradmin already holds.
         policy=info.get("maxmemory_policy"),
+        stream_lengths=stream_lengths,
     )
 
 
@@ -1844,13 +1866,25 @@ async def collect_broker_findings(
     report the outage as a drain.
     """
     try:
-        findings = await _collect_memory(client)
-        findings.extend(await _collect_persistence(client))
         state: dict[str, int] = {}
+        stream_findings: list[Finding] = []
+        stream_lengths: dict[str, int] = {}
         for check in STREAM_CHECKS:
-            stream_findings, stream_pending = await _collect_stream(client, check, previous_state)
-            findings.extend(stream_findings)
+            findings_for_stream, stream_pending = await _collect_stream(
+                client, check, previous_state
+            )
+            stream_findings.extend(findings_for_stream)
             state.update(stream_pending)
+            # The length baseline is the XINFO STREAM reply's own length, so the
+            # memory finding names streams at no extra round trip (#61). Absent
+            # for a stream with no key.
+            length = stream_pending.get(CONTINUITY_LENGTH_KEY.format(topic=check.topic))
+            if length is not None:
+                stream_lengths[check.topic] = length
+        # Built after the streams so it can name them; still reported first.
+        findings = await _collect_memory(client, stream_lengths=stream_lengths)
+        findings.extend(await _collect_persistence(client))
+        findings.extend(stream_findings)
         dlq_findings, dlq_totals = await _collect_dlqs(
             client, previous_state=previous_state, evidence_dir=evidence_dir
         )

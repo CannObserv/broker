@@ -154,6 +154,69 @@ def test_memory_reports_the_policy_and_the_absent_cap_together() -> None:
     assert {f.check for f in findings} == {"eviction-policy", "memory"}
 
 
+def test_memory_finding_names_the_largest_streams_by_length() -> None:
+    """Since #60 nothing else names the five ``content.*`` streams, so the 75%
+    finding says which streams are longest, and the operator starts there rather
+    than at an ``XLEN`` sweep as ``brokeradmin`` (CannObserv/broker#61)."""
+    (finding,) = evaluate_memory(
+        used_memory=750,
+        maxmemory=1000,
+        stream_lengths={
+            INFO_CHANGES: 40_000,
+            CONTENT_BLOBS: 900_000,
+            CONTENT_REVISIONS: 120_000,
+            CONTENT_FETCH: 7,
+            CONTENT_REPLICATE: 0,
+        },
+    )
+    assert finding.subject == "redis"
+    assert (
+        f"longest streams: {CONTENT_BLOBS} 900000, {CONTENT_REVISIONS} 120000, "
+        f"{INFO_CHANGES} 40000" in finding.message
+    )
+    assert CONTENT_FETCH not in finding.message
+
+
+def test_memory_stream_lengths_are_a_naming_aid_not_a_threshold() -> None:
+    """No retention opinion on the ``content.*`` streams (AGENTS.md): a length
+    alone never raises a finding, only rides on one the headroom already
+    raised."""
+    assert (
+        evaluate_memory(used_memory=100, maxmemory=1000, stream_lengths={CONTENT_BLOBS: 10**9})
+        == []
+    )
+
+
+def test_memory_finding_without_stream_lengths_names_none() -> None:
+    (finding,) = evaluate_memory(
+        used_memory=750, maxmemory=1000, stream_lengths={CONTENT_REPLICATE: 0}
+    )
+    assert "longest streams" not in finding.message
+
+
+async def test_collect_memory_finding_names_the_streams_the_tick_read(fake_redis) -> None:
+    """The lengths come out of the ``XINFO STREAM`` each stream check already
+    reads: no ``XLEN``, no new grant, no extra round trip."""
+    for _ in range(3):
+        await fake_redis.xadd(CONTENT_BLOBS, {"k": "v"})
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
+
+    class _NearTheCap(_DelegatingClient):
+        async def info(self, section=None, *a, **kw):
+            assert section in {"memory", "persistence"}
+            if section == "memory":
+                return {"used_memory": 800, "maxmemory": 1000, "maxmemory_policy": "noeviction"}
+            return await self._delegate.info(section, *a, **kw)
+
+        async def xlen(self, *a, **kw):
+            raise AssertionError("the length is already in XINFO STREAM's reply")
+
+    findings, _ = await collect_broker_findings(_NearTheCap(fake_redis), previous_state={})
+
+    (memory,) = [f for f in findings if f.check == "memory"]
+    assert f"longest streams: {CONTENT_BLOBS} 3, {CONTENT_REVISIONS} 1" in memory.message
+
+
 async def test_collect_memory_reads_the_policy_from_the_section_it_already_fetches(
     monkeypatch,
 ) -> None:
