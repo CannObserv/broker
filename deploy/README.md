@@ -337,14 +337,16 @@ things about this node shaped them:
   find no victim. So it is **installed and disabled** (broker#58), its config kept
   current: if exe.dev ever stops exempting sessions, `test_live_prefer_reaches_nothing`
   fails, and `systemctl enable --now earlyoom` is the whole change.
-- **The bus is out of earlyoom's reach and last for the kernel.** A unit at the
-  default adj 0 reads ~667, which `--avoid` only takes to ~367, so as first
+- **The bus is out of earlyoom's reach and near-last for the kernel.** A unit at
+  the default adj 0 reads ~667, which `--avoid` only takes to ~367, so as first
   installed earlyoom's dry run would have killed tailscaled and redis-server.
   Both run at -900 now: `oom_score` under 300, so `--avoid` puts them below the
   badness-0 victim earlyoom starts each scan with, and never picks. Not -1000,
-  so the kernel's own OOM killer, once the small daemons are gone, still has a
-  restartable victim instead of a panic that `kernel.panic = 0` turns into a
-  hung node. Check the order with
+  so the kernel's own OOM killer still has a restartable victim instead of a
+  panic that `kernel.panic = 0` turns into a hung node. Its order, measured
+  2026-09-24: every small daemon, then `tailscaled` (~72), then `redis-server`
+  (~68) - the network path before the bus - with only the system `dbus-daemon`
+  (~67, also -900) behind them. Check the order with
   `earlyoom --dryrun -d -m 99,99 -s 100,100 <the regexes>`, which kills nothing,
   and read its `new victim` lines, not the badness column.
 - **earlyoom's regexes carry no backslash.** The unit runs
