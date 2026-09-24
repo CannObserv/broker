@@ -1031,19 +1031,29 @@ def test_a_not_a_fault_row_is_still_a_denial(users) -> None:
     key row names the command that was refused on the key: the user holds that
     command - otherwise Redis logs `reason command`, not `key` - and no route
     that grants it admits the key. Once either stops being true the entry has
-    moved to the other half, the grant provenance in the user's stanza, and the
-    row has to follow it rather than explain a denial that can no longer occur.
+    moved to the other half - the file's grant provenance, in its header or the
+    user's stanza - and the row has to follow it rather than explain a denial
+    that can no longer occur.
+
+    A `-` rule (`citest`'s `+@all -@dangerous`) is refused rather than guessed
+    at: `holds` reads `+` rules only, so it would call an excluded command held
+    and fail the row for the wrong reason.
     """
     stale = []
     for row in not_a_fault_rows():
         rules = users[row["user"]]
+        subtractions = [rule for rule in rules if rule.startswith("-")]
+        assert not subtractions, (
+            f"{row['user']} carries {subtractions}; teach this test to resolve them "
+            "before a not-a-fault row for that user can be judged"
+        )
         root, _ = split_rules(rules)
         if row["reason"] == "command":
             if row["command"] != row["object"] or holds(granted_commands(rules), row["object"]):
                 stale.append(row)
         elif row["reason"] == "key":
             command = row["command"]
-            on_root = holds({r for r in root if r.startswith("+")}, command)
+            on_root = holds(granted_commands(root), command)
             reaches = (on_root and admits(root_key_patterns(rules), row["object"])) or admits(
                 selector_patterns(rules, f"+{command}"), row["object"]
             )
