@@ -42,8 +42,9 @@ silently corrupts values.
 - **No retention opinion on the five `content.*` streams.** No *retention*
   length or age row for any of them: nothing trims them, this repo owns no cap,
   and a threshold with no owner cries wolf - `maxmemory` is their only bound.
-  They are `content.fetch`, `.revisions`, `.artifacts`, `.replicate`, `.blobs`
-  (`content.fetch-policy` is LWW and capped).
+  They are `content.fetch`, `content.revisions`, `content.artifacts`,
+  `content.replicate` and `content.blobs` (`content.fetch-policy` is LWW and
+  capped).
   `content.blobs` had the rule first (broker#20); the other four joined it when
   they lost `info.changes`'s borrowed 110k (broker#60). `docs/STREAMS.md`'s
   **No retention cap** is pinned to the probe's unthresholded rows; a cap
