@@ -3,11 +3,13 @@
 # A shedder of the node's small daemons, NOT a killer of dev tooling (broker#58).
 # VSCode Server, Claude Code and SocratiCode inherit exe.dev's oom_score_adj
 # -1000, which earlyoom 1.7 skips outright, as the kernel does: nothing on this
-# node can kill them. What it can reach is adj-0 and adj-positive daemons - the
-# session dbus-daemon, (sd-pam), cron, polkitd, logind, timesyncd, journald -
-# tens of MiB in all, journald's evidence included. So it is INSTALLED AND
-# DISABLED (broker#58); this file is kept current for the day sessions stop
-# being exempt, when `systemctl enable --now earlyoom` is the whole change.
+# node can kill them. What it can reach is any process above -1000 whose
+# oom_score stays above 0 after --avoid - small daemons: the session
+# dbus-daemon, (sd-pam), cron, polkitd, logind, timesyncd, and journald, which
+# is at adj -250 and still scores 202 - tens of MiB in all, journald's evidence
+# included. So it is INSTALLED AND DISABLED (broker#58); this file is kept
+# current for the day sessions stop being exempt, when
+# `systemctl enable --now earlyoom` is the whole change.
 #
 #   -r 3600   one memory report an hour in the journal (the package default)
 #   -m 10     SIGTERM below 10% available (~790 MiB at 8 GB), SIGKILL below 5%.

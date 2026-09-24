@@ -328,9 +328,11 @@ things about this node shaped them:
   `-d` dry run prints a session at 300, but that is the score before the skip
   (broker#58). So `--prefer` reaches nothing here, and neither killer can take
   the processes that exhausted the node in broker#17.
-- **What earlyoom can reach is small daemons.** At adj 0 or above: the session
-  `dbus-daemon` (~800, 500 after `--avoid`), `(sd-pam)` (~733), cron and polkitd
-  (~666), then logind, timesyncd and journald. Under sustained pressure it would
+- **What earlyoom can reach is small daemons.** Anything above -1000 whose
+  `oom_score` stays above 0 after `--avoid` - adj alone does not decide it,
+  since journald at -250 still scores 502 (202 after `--avoid`). Measured: the
+  session `dbus-daemon` (~800, 500 after `--avoid`), `(sd-pam)` (~733), cron and
+  polkitd (~666), then logind, timesyncd and journald. Under sustained pressure it would
   work through all of them - tens of MiB, journald's evidence included - and then
   find no victim. So it is **installed and disabled** (broker#58), its config kept
   current: if exe.dev ever stops exempting sessions, `test_live_prefer_reaches_nothing`
