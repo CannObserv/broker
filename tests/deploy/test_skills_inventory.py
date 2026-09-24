@@ -93,6 +93,15 @@ def _committable() -> list[Path]:
     return [p for p in paths if p.is_file() and not p.is_symlink()]
 
 
+def test_the_channel_url_pattern_is_live() -> None:
+    """A positive control, built at runtime so this file never holds a live URL:
+    a pattern edited into matching nothing would otherwise pass the scan below."""
+    live = "https://example.test/c/" + "A" * 22 + "#" + "b" * 43
+    assert CHANNEL_URL.search(live)
+    assert not CHANNEL_URL.search("https://example.test/c/" + "A" * 22)
+    assert not CHANNEL_URL.search("https://example.test/c/<ID>#<key>")
+
+
 def test_no_channel_url_is_committable() -> None:
     leaks = [
         str(path.relative_to(REPO_ROOT))
