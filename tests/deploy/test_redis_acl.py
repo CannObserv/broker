@@ -42,8 +42,8 @@ from co_core.pure.adapters.bus.streams import (
 )
 
 from src.broker.bus_health import (
+    CHANGES_PRODUCER_MAXLEN,
     DLQ_DRAINERS,
-    FACT_PRODUCER_MAXLEN,
     REGISTRY_PRODUCER_MAXLEN,
     STREAM_CHECKS,
 )
@@ -382,6 +382,9 @@ PRODUCER_CELL = 1
 NEVER_XTRIMMED = "**Never XTRIMmed"
 """The phrase a row of that table carries when no identity may ``XTRIM`` it."""
 
+NO_RETENTION_CAP = "**No retention cap"
+"""The phrase a row of that table carries when nothing trims it at all."""
+
 
 def inventory_rows() -> dict[str, list[str]]:
     """``stream -> its cells`` in the *Streams on this broker* table.
@@ -433,6 +436,33 @@ def documented_never_xtrimmed() -> frozenset[str]:
     """
     return frozenset(
         topic for topic, cells in inventory_rows().items() if NEVER_XTRIMMED in " | ".join(cells)
+    )
+
+
+def documented_no_retention_cap() -> frozenset[str]:
+    """The streams whose inventory row says **No retention cap** - nothing
+    trims them, so ``maxmemory`` is their only bound (CannObserv/broker#60)."""
+    return frozenset(
+        topic for topic, cells in inventory_rows().items() if NO_RETENTION_CAP in " | ".join(cells)
+    )
+
+
+def test_the_probe_and_the_inventory_agree_on_which_streams_have_no_cap() -> None:
+    """A length threshold with no cap behind it is what CannObserv/broker#60
+    removed: four `content.*` rows borrowed `info.changes`'s 100k, which trims
+    nothing else, and would have reported traffic growth as a broken cap.
+
+    Both directions. A row the inventory calls uncapped that still carries a
+    threshold is that bug again. A stream the probe leaves unthresholded that
+    the inventory does not call uncapped is a cap the probe has stopped
+    watching with nothing saying why.
+    """
+    uncapped = documented_no_retention_cap()
+    unthresholded = {c.topic for c in STREAM_CHECKS if c.warn_length is None}
+    assert uncapped, "the inventory marks no stream uncapped - has the phrase moved?"
+    assert unthresholded == uncapped, (
+        f"probe without a length threshold: {sorted(unthresholded)}; inventory rows "
+        f"saying {NO_RETENTION_CAP}**: {sorted(uncapped)}"
     )
 
 
@@ -1243,7 +1273,7 @@ def test_archiver_caps_the_registry_by_publishing_and_info_changes_by_trimming(
     client = tracked_acl_broker("archiver")
     assert client.xadd(INFO_REGISTRY, {"k": "v"}, maxlen=REGISTRY_PRODUCER_MAXLEN, approximate=True)
     assert client.xadd(INFO_CHANGES, {"k": "v"})
-    assert client.xtrim(INFO_CHANGES, maxlen=FACT_PRODUCER_MAXLEN, approximate=True) == 0
+    assert client.xtrim(INFO_CHANGES, maxlen=CHANGES_PRODUCER_MAXLEN, approximate=True) == 0
 
 
 def test_replicator_cannot_replace_a_stream_with_a_string(tracked_acl_broker) -> None:

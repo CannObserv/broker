@@ -28,7 +28,9 @@ The checks, per tick:
   that traffic grew. Three different caps apply here - see the constants below.
   Two of them are constants; the LWW one is ``max(mirrored default, 10 x the
   set watcher republishes)``, so its threshold is read off the stream's own
-  span each tick rather than mirrored whole (CannObserv/broker#44).
+  span each tick rather than mirrored whole (CannObserv/broker#44). The five
+  ``content.*`` streams have no cap and so no threshold: ``maxmemory`` is their
+  only bound (CannObserv/broker#60).
 - last-entry age via ``XINFO STREAM`` for the permanently-groupless streams,
   which are invisible to any pending-based check.
 - the ``pending`` count of every consumer group on this node, warning only on
@@ -227,13 +229,23 @@ def with_margin(cap: int) -> int:
 # See docs/BUS-HEALTH.md, "Mirrored constants".
 #
 # Three different caps apply on this broker, and they are not interchangeable:
-# - fact streams archiver's outbox publishes ride its operator-side periodic
-#   XTRIM (ARCHIVER_REDIS_STREAM_MAXLEN);
+# - info.changes rides archiver's operator-side periodic XTRIM
+#   (ARCHIVER_REDIS_STREAM_MAXLEN) - the only stream in its `trim_topics`
+#   allowlist (CannObserv/archiver#239);
 # - info.registry is excluded from that loop and capped on every publish
 #   instead, because its retention floor is a consumer boot contract;
 # - the LWW streams are capped by their producer, Watcher.
-FACT_PRODUCER_MAXLEN = 100_000
-"""Mirrors ``DEFAULT_STREAM_MAXLEN`` in archiver's ``src/core/changes/publisher.py``."""
+#
+# The five content.* streams are capped by nothing, so they carry no length
+# threshold. Until CannObserv/broker#60 four of them borrowed the info.changes
+# number, and a breach there would have said "the retention cap is not being
+# applied" about a cap that does not exist.
+CHANGES_PRODUCER_MAXLEN = 100_000
+"""Mirrors ``DEFAULT_STREAM_MAXLEN`` in archiver's ``src/core/changes/publisher.py``.
+
+Reaches ``info.changes`` only - it was ``FACT_PRODUCER_MAXLEN`` until the name
+got it applied to four ``content.*`` streams it never trims
+(CannObserv/broker#60)."""
 
 REGISTRY_PRODUCER_MAXLEN = 50_000
 """Mirrors ``DEFAULT_REGISTRY_STREAM_MAXLEN`` in archiver's
@@ -265,7 +277,7 @@ multiplier rather than a bound, so it is also what decides *when* the mirrored
 default stops governing at all.
 """
 
-FACT_WARN_LENGTH = with_margin(FACT_PRODUCER_MAXLEN)
+CHANGES_WARN_LENGTH = with_margin(CHANGES_PRODUCER_MAXLEN)
 REGISTRY_WARN_LENGTH = with_margin(REGISTRY_PRODUCER_MAXLEN)
 LWW_WARN_LENGTH = with_margin(LWW_PRODUCER_MAXLEN)
 
@@ -451,8 +463,9 @@ class StreamCheck:
     # (CannObserv/archiver#239) and from every `+xtrim` selector in
     # deploy/redis-acl.conf (CannObserv/broker#14): capping a command stream
     # would delete commands the consumer group has not delivered and orphan the
-    # PEL entries naming them. Growth is therefore expected, and a breach is a
-    # volume milestone rather than a broken cap.
+    # PEL entries naming them. Growth is therefore expected, and such a row
+    # carries no `warn_length`: there is no cap for one to mirror
+    # (CannObserv/broker#60).
     never_trimmed: bool = False
     # The producer floors this stream's cap at N copies of the set it
     # republishes, so `warn_length` above is the threshold only while the set is
@@ -461,11 +474,19 @@ class StreamCheck:
 
     def __post_init__(self) -> None:
         """Refuse a ``pending_group`` on a config/state stream, an undelivered
-        threshold on a row with no group at all, and a ``full_set_floor`` that
-        either sits on a never-trimmed row or disagrees with ``warn_length``
-        about the mirrored cap.
+        threshold on a row with no group at all, a ``warn_length`` on a
+        never-trimmed row, and a ``full_set_floor`` that either sits on a
+        never-trimmed row or disagrees with ``warn_length`` about the mirrored
+        cap.
 
-        The third keeps one number to one spelling. A row with a floor states
+        A never-trimmed row with a ``warn_length`` is a threshold mirroring a
+        cap that does not exist, which is CannObserv/broker#60: a breach could
+        only mean traffic grew, and a length finding tells an operator the
+        opposite. The same holds for every stream nothing trims, but only this
+        flag says so on the row; the rest are pinned against
+        ``docs/STREAMS.md``'s **No retention cap** by the deploy tests.
+
+        The fourth keeps one number to one spelling. A row with a floor states
         the mirrored cap twice - once as the ``warn_length`` the length check
         compares against, once as the ``maxlen`` the floor has to beat before it
         governs - and two copies that can disagree is the shape of
@@ -505,6 +526,12 @@ class StreamCheck:
         ``test_every_canonical_stream_constant_is_classifiable`` turns that into
         a caught test failure rather than a silently disabled guard.
         """
+        if self.never_trimmed and self.warn_length is not None:
+            raise ValueError(
+                f"{self.topic} is never trimmed by design and carries a warn_length of "
+                f"{self.warn_length} - a stream nothing caps has no cap for a threshold "
+                "to mirror"
+            )
         if self.full_set_floor is not None:
             if self.never_trimmed:
                 raise ValueError(
@@ -549,33 +576,37 @@ LWW_FULL_SET_FLOOR = FullSetFloor(
 
 
 STREAM_CHECKS: tuple[StreamCheck, ...] = (
-    StreamCheck(INFO_CHANGES, warn_length=FACT_WARN_LENGTH),
+    StreamCheck(INFO_CHANGES, warn_length=CHANGES_WARN_LENGTH),
     StreamCheck(
         INFO_REGISTRY,
         warn_length=REGISTRY_WARN_LENGTH,
         warn_last_entry_age_seconds=REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS,
     ),
+    # The four content.* rows below and content.blobs further down carry no
+    # warn_length: nothing trims them. No producer passes a maxlen
+    # (CannObserv/watcher#317, CannObserv/replicator#106) and archiver's trim
+    # allowlist is info.changes alone, so maxmemory is their only bound and the
+    # memory check is the finding that bounds them (CannObserv/broker#60).
+    # Retention is each producer's to decide - content.replicate's slice is
+    # CannObserv/archiver#267 - and a cap one adopts brings a mirrored
+    # threshold back with it, not before.
     StreamCheck(
         CONTENT_FETCH,
-        warn_length=FACT_WARN_LENGTH,
         pending_group=FETCH_GROUP,
         warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
     ),
     StreamCheck(
         CONTENT_REVISIONS,
-        warn_length=FACT_WARN_LENGTH,
         pending_group=REVISIONS_GROUP,
         warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
     ),
     StreamCheck(
         CONTENT_ARTIFACTS,
-        warn_length=FACT_WARN_LENGTH,
         pending_group=ARTIFACTS_GROUP,
         warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
     ),
     StreamCheck(
         CONTENT_REPLICATE,
-        warn_length=FACT_WARN_LENGTH,
         never_trimmed=True,
         pending_group=REPLICATE_GROUP,
         warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
@@ -598,8 +629,10 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # neutral node has no role to be out of bounds of - so the group is probed
     # like every other. What survives the move is the part that was never about
     # roles: this repo owns no retention cap for this stream, so it states no
-    # opinion on its length or its age. Neither the fact cap nor the LWW cap
-    # governs it, and inventing one here would be a threshold with no owner.
+    # opinion on its length or its age. Neither the info.changes cap nor the
+    # LWW cap governs it, and inventing one here would be a threshold with no
+    # owner - the rule the four content.* rows above joined in
+    # CannObserv/broker#60.
     #
     # The undelivered threshold is not a retention opinion and does not breach
     # that rule. It is a statement about `watcher.blobs`'s read loop, which this
@@ -843,13 +876,7 @@ def evaluate_stream(
     )
     warn_length = with_margin(floored.maxlen) if floored is not None else check.warn_length
     if warn_length is not None and length > warn_length:
-        if check.never_trimmed:
-            diagnosis = (
-                "this stream is never trimmed by design (capping it would orphan "
-                "undelivered commands), so this is a volume milestone - size the "
-                "broker for it rather than looking for a broken cap"
-            )
-        elif floored is not None:
+        if floored is not None:
             diagnosis = (
                 "the retention cap for this stream is not being applied - the cap in "
                 f"force is the producer's full-set floor, {floored.retained_full_sets} x "

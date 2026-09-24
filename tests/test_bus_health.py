@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
+    CONTENT_BLOBS,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
     CONTENT_REPLICATE,
@@ -43,10 +44,10 @@ from src.broker import bus_health
 from src.broker.bus_health import (
     BACKUP_WARN_MAX_AGE_SECONDS,
     BROKER_EVICTION_POLICY,
+    CHANGES_PRODUCER_MAXLEN,
+    CHANGES_WARN_LENGTH,
     CONTINUITY_ENTRIES_KEY,
     DISK_WARN_MIN_FREE_BYTES,
-    FACT_PRODUCER_MAXLEN,
-    FACT_WARN_LENGTH,
     LWW_PRODUCER_MAXLEN,
     LWW_REPUBLISH_PERIOD_SECONDS,
     LWW_RETAINED_FULL_SETS,
@@ -546,16 +547,58 @@ def test_registry_threshold_tracks_its_own_producer_cap() -> None:
     contract broke" contract for the one stream whose retention floor is a
     consumer boot contract (CannObserv/archiver#141)."""
     assert _check_for(INFO_REGISTRY).warn_length == with_margin(REGISTRY_PRODUCER_MAXLEN)
-    assert _check_for(INFO_REGISTRY).warn_length < FACT_WARN_LENGTH
+    assert _check_for(INFO_REGISTRY).warn_length < CHANGES_WARN_LENGTH
 
 
-def test_fact_stream_threshold_tracks_the_operator_xtrim_cap() -> None:
+def test_info_changes_threshold_tracks_the_operator_xtrim_cap() -> None:
     """Derived from the mirrored cap, not written as a second literal: the
     repo split already costs one copy of each number (see the module's
     "Mirrored constants" comment), and a threshold spelled independently would
     make it two."""
-    assert _check_for(INFO_CHANGES).warn_length == with_margin(FACT_PRODUCER_MAXLEN)
-    assert FACT_WARN_LENGTH > FACT_PRODUCER_MAXLEN
+    assert _check_for(INFO_CHANGES).warn_length == with_margin(CHANGES_PRODUCER_MAXLEN)
+    assert CHANGES_WARN_LENGTH > CHANGES_PRODUCER_MAXLEN
+
+
+# The streams nothing trims: no producer passes a maxlen, and archiver's
+# `trim_topics` allowlist names `info.changes` alone (CannObserv/broker#60).
+UNCAPPED_STREAMS = (
+    CONTENT_FETCH,
+    CONTENT_REVISIONS,
+    CONTENT_ARTIFACTS,
+    CONTENT_BLOBS,
+    CONTENT_REPLICATE,
+    CONTENT_BLOBS,
+)
+
+
+def test_only_a_stream_with_a_retention_owner_carries_a_length_threshold() -> None:
+    """A length threshold is a copy of somebody's cap. Archiver's 100k trims
+    `info.changes` and nothing else, so lending it to four `content.*` streams
+    gave them a number no mechanism enforces - and a breach worded "the
+    retention cap is not being applied" on streams where no cap exists to break
+    (CannObserv/broker#60). `content.blobs` had the rule first (#20); these
+    four are the same case."""
+    thresholded = {c.topic for c in STREAM_CHECKS if c.warn_length is not None}
+    assert thresholded == {INFO_CHANGES, INFO_REGISTRY, CONTENT_FETCH_POLICY, INFO_WATCH_STATUS}
+    assert [c.topic for c in STREAM_CHECKS if c.warn_length == CHANGES_WARN_LENGTH] == [
+        INFO_CHANGES
+    ]
+
+
+@pytest.mark.parametrize("topic", UNCAPPED_STREAMS)
+def test_an_uncapped_stream_is_not_a_length_finding_at_any_size(topic: str) -> None:
+    """The only bound these streams have is `maxmemory`, which the memory check
+    watches at 75%. A per-stream number here would say traffic grew, which is
+    the opposite of what a length finding tells an operator."""
+    assert evaluate_stream(_check_for(topic), length=10**7, last_entry_ms=None, now_ms=0) == []
+
+
+def test_a_never_trimmed_row_refuses_a_length_threshold() -> None:
+    """A stream nothing may cap has no cap for a threshold to mirror, so the row
+    that says so cannot also carry one - held at import, where the floor's
+    invariant is."""
+    with pytest.raises(ValueError, match="never trimmed"):
+        StreamCheck(topic="t", warn_length=with_margin(123), never_trimmed=True)
 
 
 @pytest.mark.parametrize("topic", [CONTENT_FETCH_POLICY, INFO_WATCH_STATUS])
@@ -744,21 +787,10 @@ def test_the_floor_constants_mirror_watchers() -> None:
         assert floor.republish_period_seconds == LWW_REPUBLISH_PERIOD_SECONDS
 
 
-def test_never_trimmed_stream_does_not_claim_a_broken_cap() -> None:
-    """content.replicate is carved out of the trim set
-    (capping a command stream orphans PEL entries), so it grows monotonically;
-    a breach there is a volume milestone, not a retention failure."""
-    check = _check_for(CONTENT_REPLICATE)
-    assert check.never_trimmed
-    (finding,) = evaluate_stream(check, length=check.warn_length + 1, last_entry_ms=None, now_ms=0)
-    assert "never trimmed" in finding.message
-    assert "not being applied" not in finding.message
-
-
-def test_trimmed_stream_still_names_the_broken_cap() -> None:
+def test_trimmed_stream_names_the_broken_cap() -> None:
     check = _check_for(INFO_CHANGES)
     (finding,) = evaluate_stream(check, length=check.warn_length + 1, last_entry_ms=None, now_ms=0)
-    assert "never trimmed" not in finding.message
+    assert "retention cap for this stream is not being applied" in finding.message
 
 
 # --- collectors against fakeredis ---

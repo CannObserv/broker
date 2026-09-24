@@ -47,7 +47,11 @@ silently corrupts values.
   group's `warn_undelivered_age_seconds` is not the exception it looks like: an
   undelivered age is a statement about `watcher.blobs`'s read loop, which this
   node measures directly and therefore owns, not about how long entries are
-  kept. Retention is the axis with no owner here (broker#20).
+  kept. Retention is the axis with no owner here (broker#20). The other four
+  `content.*` streams are the same case: nothing trims them, so no `XLEN`
+  threshold either, and `maxmemory` is their only bound (broker#60).
+  `docs/STREAMS.md`'s **No retention cap** is pinned to the probe's
+  unthresholded rows; a cap comes back only with a producer that owns one.
 - **DLQs: the broker detects, captures and escalates; the consumer triages.**
   Splitting the old single "drainer" role is broker#1 Phase 5. Anything
   mechanical and suffix-keyed belongs here; reading a payload to tell residue

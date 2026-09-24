@@ -84,14 +84,20 @@ Per tick it probes:
 - `XLEN` per stream, each threshold derived as **that stream's own retention
   cap + 10%** - so a breach means the retention mechanism broke, not that
   traffic grew. Three caps apply and they are not interchangeable: 110k for
-  fact streams on archiver's operator-side `XTRIM`
+  `info.changes` on archiver's operator-side `XTRIM`
   (`ARCHIVER_REDIS_STREAM_MAXLEN`), 55k for `info.registry` (capped on publish
   instead, `ARCHIVER_REGISTRY_STREAM_MAXLEN`), and for the two LWW streams
   `max(500, 10 x the set Watcher republishes)` + 10% - the 550 while the sets are small,
   which is the state the node is in today, and the floor past ~50 entries per
   set. See *Mirrored constants* and *The one cap that is read, not mirrored*
-  below. `content.replicate` is the exception: never trimmed by design, so its
-  breach message says "volume milestone", not "broken cap";
+  below. **The five `content.*` streams get no length threshold**: nothing trims
+  them, so there is no cap to mirror and a breach could only mean traffic grew.
+  `maxmemory` is their only bound and the memory check above is the finding for
+  it. Until CannObserv/broker#60 four of them borrowed the 110k, which
+  archiver's `trim_topics` allowlist (CannObserv/archiver#239) never applied to
+  them - and the `maxmemory` derivation on CannObserv/archiver#231 summed those
+  borrowed numbers as retention. [STREAMS.md](STREAMS.md) marks each row
+  **No retention cap**, and a test holds the probe to it;
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
   is empty - the corpus-size guard);
@@ -245,7 +251,7 @@ of:
 
 | Constant in `src/broker/bus_health.py` | Source of truth |
 |---|---|
-| `FACT_PRODUCER_MAXLEN` (100k) | `DEFAULT_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/publisher.py` |
+| `CHANGES_PRODUCER_MAXLEN` (100k) | `DEFAULT_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/publisher.py` - **reaches `info.changes` only**, the one stream in archiver's `trim_topics` allowlist; `FACT_PRODUCER_MAXLEN` until CannObserv/broker#60, a name that got it lent to four `content.*` streams it never trims |
 | `REGISTRY_PRODUCER_MAXLEN` (50k) | `DEFAULT_REGISTRY_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/registry_snapshot.py` |
 | `LWW_PRODUCER_MAXLEN` (500) | Watcher's two `DEFAULT_*_STREAM_MAXLEN`, `src/core/{fetch_policy,watch_status}.py` (CannObserv/watcher#292) |
 | `LWW_RETAINED_FULL_SETS` (10) | `RETAINED_FULL_SETS`, `CannObserv/watcher:src/core/bus.py` (CannObserv/watcher#292) - the multiplier on the floor the line above is only the *default* of |
