@@ -73,7 +73,7 @@ silently corrupts values.
   The stanza above the rule in `deploy/redis-acl.conf` has to say which caller,
   and `tests/deploy/test_redis_acl.py` fails when one does not. Record it or cut
   it; do not leave it to read as residue. Archiver's DLQ `+xdel` names its
-  caller the same way (CannObserv/archiver#238's triage). The inverse is withheld on
+  caller the same way (archiver#238's triage). The inverse is withheld on
   purpose: `brokeradmin`'s `+xtrim` stops at `~*.dlq`, the only thing keeping an
   operator off a **Never XTRIMmed** stream (broker#34). Do not widen it in an
   incident.
@@ -195,7 +195,8 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   guarded by `tests/deploy/test_runbook_credentials.py`) and #46 (the `default`
   credential rotated, `docs/ACL-CUTOVER.md`,
   *Rotating `__DEFAULT_PW__`*). Neither is a tracked-file change; both live
-  files are templated and the value is `NOT_COMPARED` in `tests/deploy/test_live_*.py`.
+  files are templated and the value is `NOT_COMPARED` in
+  `tests/deploy/test_live_*.py`.
 - CannObserv/watcher#319 - the notice for the other end of #44's mirror:
   `RETAINED_FULL_SETS` and the `*/5` republish period are copied into
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*
