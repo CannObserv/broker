@@ -87,9 +87,10 @@ notifier, replicator and watcher vendor, less what does not apply here, plus
 (gregoryfoster/skills#302).
 
 **`using-mayfly-chat` needs Node.js 18+** on the host running the agent; its
-wrapper exits 4 without it. **A channel URL is never committed** - not in an
-issue, commit, doc or plan: it is read, write and delete access to the channel.
-`tests/deploy/test_skills_inventory.py` scans every tracked file for one with
+wrapper exits 4 without it. **A channel URL never reaches a durable store** -
+not an issue, commit, doc or plan: it is read, write and delete access to the
+channel. `tests/deploy/test_skills_inventory.py` scans every committable file
+(tracked, plus untracked and unignored - what `git add -A` takes) with
 upstream's pattern, so a live URL fails the suite rather than relying on
 discipline. The same pattern by hand, before committing a session's output, is
 in the skill's `references/security.md`.
