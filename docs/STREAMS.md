@@ -110,17 +110,16 @@ live nodes are in `pdx` since 2026-09-15, which closes the cross-region interval
 broker#1 R6 made unavoidable (CannObserv/broker#8). Observo's primary is a
 fifth, declared ahead of its consumer (CannObserv/broker#62): its row carries
 the address Observo's own `docs/reference/tailscale.md` states, under
-`tag:observo-primary` since observo#588, and its path is **not yet a path** -
-the node is absent from `co-broker`'s netmap, so the tailnet policy admits
-nothing between the two until a rule for it lands in the admin console, which
-is the one step of #62 this repo cannot take.
+`tag:observo-primary` since observo#588, admitted to `tag:broker` by a policy
+rule added on 2026-09-24. Observo runs Tailscale with `--accept-dns=false`, so
+its bus URL names the broker by address, `100.97.91.19`, not as `broker`.
 
 | Service | Tailnet node | VM | Region | Tailnet address | Path to broker |
 |---|---|---|---|---|---|
 | `archiver` | `archiver` | `co-registrar` | pdx | `100.109.138.101` | direct |
 | `watcher` | `watcher` | `co-watcher` | pdx | `100.66.24.24` | direct |
 | `replicator` | `replicator` | `co-replicator` | pdx | `100.114.136.20` | direct |
-| `observo` | `observo-primary` *(target)* | Observo's primary host (exe.dev; its VM name is not recorded in this repo) | not recorded | `100.105.63.31` | **none yet** - not in this node's netmap on 2026-09-24 (`tailscale ping observo-primary` resolves no such host), so no rule admits it; the rule is `tag:observo-primary` to `tag:broker` on 6379, in the admin console (CannObserv/broker#62) |
+| `observo` | `observo-primary` *(consumer target - CannObserv/observo#629)* | Observo's primary host (exe.dev; its VM name is not recorded in this repo) | not recorded | `100.105.63.31` | direct, once formed - the first pings rode DERP (sea) ([NETWORK-PATHS.md](NETWORK-PATHS.md)) |
 | broker | `broker` | `co-broker` | pdx | `100.97.91.19` | - |
 
 **This table is checked against the live broker.** `CLIENT LIST` reports each

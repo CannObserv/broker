@@ -116,22 +116,13 @@ NOT_COMPARED = "passwords"
 # and only ever by the render, which emits digests (CannObserv/broker#49).
 NODE_PASSWORDS = Path("/etc/redis/broker-acl-passwords")
 
-# A service whose plaintext is still on this node because its service has not
-# taken it yet. The node's passwords file is the handoff medium
-# (docs/ACL-CUTOVER.md, step 1: the mint writes plaintext "because each has to
-# be handed to its service"), so until observo#629 puts `observo`'s into
-# `/etc/observo/.env` the line stays plaintext here by design, and the digest-only
-# assertion below would fail on the documented interval rather than on a fault.
-# Empty once it has: replace the line with `__OBSERVO_PW_SHA256__=<digest>`
-# and take the name out of here (CannObserv/broker#62).
-PLAINTEXT_PENDING_HANDOFF = frozenset({"observo"})
-
 # Held on the node by digest alone: each one's plaintext belongs to its service
 # (or, for `citest`, to whatever CI target CannObserv/broker#53 settles on), and
 # nothing on this node authenticates as any of them (CannObserv/broker#49).
-DIGEST_ONLY_USERS = tuple(
-    user for user in (*SERVICE_USERS, "citest") if user not in PLAINTEXT_PENDING_HANDOFF
-)
+# `observo` joined on 2026-09-24, once Observo held its credential
+# (CannObserv/broker#62); a service minted later is exempt here only for the
+# interval docs/ACL-CUTOVER.md step 1 describes, and by name.
+DIGEST_ONLY_USERS = (*SERVICE_USERS, "citest")
 
 # The grant this module needs, named here so the failure message can say it.
 REQUIRED_GRANT = "+acl|getuser"

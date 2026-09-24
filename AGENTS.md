@@ -196,12 +196,10 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - CannObserv/broker#62 - Observo onboarded ahead of its consumer, 2026-09-24:
   ACL user `observo`, watcher's grants on the pair, the `content.process` /
   `content.derived` rows, two probed groups cannobserv v0.19.4 marks *pending
-  broker#62*, and the co-core pin at `>=0.19.4`. Two steps are outside this
-  repo: the tailnet rule admitting `tag:observo-primary` to `tag:broker`
-  (admin console), and the credential handoff - `observo`'s plaintext waits in
-  the node's passwords file until observo#629 takes it, named by
-  `PLAINTEXT_PENDING_HANDOFF` in `tests/deploy/test_live_acl_matches_tracked_acl.py`
-  so the live suite stays green meanwhile.
+  broker#62*, and the co-core pin at `>=0.19.4`. The tailnet rule and the
+  credential handoff (`CO_OBSERVO_BROKER_TOKEN` in `/etc/observo/.env`, the
+  node's line a digest) were done the same day. Open: observo#629's consumer,
+  then telling cannobserv both groups are live.
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,

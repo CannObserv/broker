@@ -71,13 +71,14 @@ wherever CannObserv/broker#53 puts it, replace each of those four lines with
 `__<USER>_PW_SHA256__=<its digest>` - deploy/README.md, *Changing a grant*.
 Nothing here authenticates as them, and
 `test_the_node_holds_no_plaintext_for_a_service_user` fails until it is done
-(CannObserv/broker#49). `observo`'s line is the one in that interval today:
-minted on 2026-09-24 ahead of its consumer, it stays plaintext here until
-observo#629 takes it into `/etc/observo/.env` (`pw OBSERVO` on this node is the
-handoff), and `PLAINTEXT_PENDING_HANDOFF` in
-`tests/deploy/test_live_acl_matches_tracked_acl.py` names it so the suite
-stays green meanwhile; take it out of that set when the line becomes a digest
-(CannObserv/broker#62).
+(CannObserv/broker#49). `observo`'s went through that interval on 2026-09-24,
+minted ahead of its consumer (CannObserv/broker#62): read out with `pw OBSERVO`
+into the operator's password manager, verified by a `PING` from
+`observo-primary` as `observo`, written to `/etc/observo/.env` as
+`CO_OBSERVO_BROKER_TOKEN`, and only then replaced here by its digest - in that
+order, because after the last step this node holds no plaintext and a lost copy
+on Observo's side costs a rotation. **Verify from the service's host before the
+digest line, never after.**
 
 ### 2. Dry-run the real file against a throwaway server
 
@@ -123,7 +124,7 @@ this section's own table did. The env files are each service's:
 | archiver | `/etc/archiver/.env` |
 | watcher | `/etc/watcher/.env` |
 | replicator | `/etc/replicator/.env` |
-| observo *(target)* | `/etc/observo/.env` - once observo#629 has a consumer to hold the credential (CannObserv/broker#62) |
+| observo | `/etc/observo/.env`, as `CO_OBSERVO_BROKER_TOKEN` - Observo's own name; no Observo code reads it until observo#629 ships (CannObserv/broker#62) |
 
 **As of the 2026-09-10 cutover, and no longer true:** watcher ran in `lax` on its
 own VM, and replicator shared that VM with no tailnet node of its own - inferred
@@ -247,9 +248,8 @@ alarming thing that log can say about a node where nothing is wrong. That is
 what `archiver` did on 2026-09-23 (CannObserv/archiver#251), and since
 CannObserv/broker#49 converted the rest the same day, it is what **every**
 service user does: `archiver`, `watcher`, `replicator` and `citest` are all
-held by digest alone. `observo` is the exception until observo#629 takes its
-plaintext (CannObserv/broker#62), so the loop prints its `PONG` today and
-stops the day that line becomes a digest. The replacements are verification **from the
+held by digest alone, and so is `observo` since its handoff on 2026-09-24
+(CannObserv/broker#62). The replacements are verification **from the
 service's own host**, or an assertion about the ACL rather than about
 authentication - `rcli brokeradmin ACL GETUSER <user>` showing exactly one
 password hash, which `brokeradmin` can already do.
@@ -447,9 +447,9 @@ an aclfile exists, and its built-in default is `nopass ~* &* +@all`.
 
 That is R2 - a tailnet-bound broker reachable by every node the policy admits,
 including `observo-primary` (user-owned then; `tag:observo-primary` since
-observo#588, and not admitted to this node's port at all as of
-CannObserv/broker#62) - arriving as a *side effect of enabling the mechanism
-meant to prevent it*.
+observo#588, admitted to this node's port by a policy rule on 2026-09-24 for
+CannObserv/broker#62, and authenticating as its own user) - arriving as a *side
+effect of enabling the mechanism meant to prevent it*.
 
 `deploy/redis-acl.conf` therefore always declares `default`, and
 `test_default_is_declared_disabled_and_still_carries_a_password` fails if the
