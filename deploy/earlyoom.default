@@ -1,6 +1,7 @@
 # broker#21 - installed as /etc/default/earlyoom.
 #
-# A shedder of the node's small daemons, NOT a killer of dev tooling (broker#58).
+# A shedder of the node's small daemons, NOT a killer of dev tooling
+# (broker#58).
 # VSCode Server, Claude Code and SocratiCode inherit exe.dev's oom_score_adj
 # -1000, which earlyoom 1.7 skips outright, as the kernel does: nothing on this
 # node can kill them. What it can reach is any process above -1000 whose

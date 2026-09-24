@@ -372,10 +372,10 @@ What the change costs is where a too-large allocation fails: at first touch,
 as an OOM kill in the order above, rather than up front with `ENOMEM`. That only
 reaches a process asking for more than the whole machine at once - and if that
 process is dev tooling, which neither killer can take, the kill lands on the
-daemons and then the bus instead. **The running server keeps its warning** - it is logged at start, so the
-log goes quiet at the next restart, not now. And **re-measure after a kernel
-change**: "mode 0 ignores free memory" is this kernel's behaviour, not a
-guarantee.
+daemons and then the bus instead. **The running server keeps its warning** - it
+is logged at start, so the log goes quiet at the next restart, not now. And
+**re-measure after a kernel change**: "mode 0 ignores free memory" is this
+kernel's behaviour, not a guarantee.
 
 **One VSCode Server build at a time.** After the 2026-09-16 reboot two builds
 ran side by side, about 300 MiB of dev baseline for nothing. When the client
