@@ -81,8 +81,18 @@ It measures and never curates; a budget warning in its run means someone runs
 
 ## Selection
 
-Ten of upstream's nineteen skills: the `gregoryfoster/skills` set archiver,
-notifier, replicator and watcher vendor, less what does not apply here.
+Eleven of upstream's twenty skills: the `gregoryfoster/skills` set archiver,
+notifier, replicator and watcher vendor, less what does not apply here, plus
+`using-mayfly-chat` (#63), which the cohort adopts together
+(gregoryfoster/skills#302).
+
+**`using-mayfly-chat` needs Node.js 18+** on the host running the agent; its
+wrapper exits 4 without it. **A channel URL is never committed** - not in an
+issue, commit, doc or plan: it is read, write and delete access to the channel.
+`tests/deploy/test_skills_inventory.py` scans every tracked file for one with
+upstream's pattern, so a live URL fails the suite rather than relying on
+discipline. The same pattern by hand, before committing a session's output, is
+in the skill's `references/security.md`.
 
 **Review and ship are the `-python-fastapi` variants, though broker is not a
 FastAPI service.** Their gate is this repo's gate - `pre-ship.sh` runs
@@ -111,7 +121,7 @@ Left out:
 | `reviewing-code`, `shipping-work`, `-php`, `-python-click` | Other stack variants of the two above |
 
 **No `obra/superpowers`.** Every sibling also vendors it (`brainstorming`,
-`test-driven-development`, `systematic-debugging`, ...). None of the ten below
+`test-driven-development`, `systematic-debugging`, ...). None of the eleven below
 depends on it; adding it is a second submodule by the same procedure.
 
 ## Inventory
@@ -129,4 +139,5 @@ All plain symlinks - no local overrides.
 | `reviewing-code-python-fastapi` | CR, code review, perform a review |
 | `shipping-work-python-fastapi` | ship it, push GH, close GH, wrap up |
 | `using-git-worktrees` | create worktree, destroy worktree, merge worktree, wt |
+| `using-mayfly-chat` | mayfly, open a channel, join the channel, chat with <repo>, agent chat |
 | `writing-plans` | write a plan, plan this |
