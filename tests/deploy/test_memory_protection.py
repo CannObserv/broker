@@ -137,9 +137,11 @@ def oom_score_adjust(path: Path) -> int:
 
 
 def systemd_split(value: str) -> list[str]:
-    """An unquoted ``$VAR`` in ``ExecStart=``, as systemd 255 expands it: split on
-    whitespace, quotes honoured and stripped, and a backslash dropped in favour of
-    the character after it. Measured with a transient unit on the node (broker#58).
+    """An unquoted ``$VAR`` in ``ExecStart=``, as systemd 255 expands it - for the
+    cases measured with a transient unit on the node (broker#58): split on
+    whitespace, quotes honoured and stripped, and a backslash outside quotes
+    dropped in favour of the character after it. Not a full model of systemd's
+    unquoting; escapes inside quotes were not measured.
     """
     return shlex.split(value)
 
