@@ -39,14 +39,16 @@ silently corrupts values.
 
 ## Rules
 
-- **No retention opinion on the five `content.*` streams.** No *retention*
+- **No retention opinion on the seven `content.*` streams.** No *retention*
   length or age row for any of them: nothing trims them, this repo owns no cap,
   and a threshold with no owner cries wolf - `maxmemory` is their only bound.
   They are `content.fetch`, `content.revisions`, `content.artifacts`,
-  `content.replicate` and `content.blobs` (`content.fetch-policy` is LWW and
-  capped).
-  `content.blobs` had the rule first (broker#20); the other four joined it when
-  they lost `info.changes`'s borrowed 110k (broker#60). `docs/STREAMS.md`'s
+  `content.replicate`, `content.blobs`, `content.process` and
+  `content.derived` (`content.fetch-policy` is LWW and capped).
+  `content.blobs` had the rule first (broker#20); four joined it when they lost
+  `info.changes`'s borrowed 110k (broker#60); the processing pair arrived with
+  no cap by contract (broker#62), and `content.process` is also **Never
+  XTRIMmed**, `content.replicate`'s posture. `docs/STREAMS.md`'s
   **No retention cap** is pinned to the probe's unthresholded rows; a cap
   comes back only with a producer that owns one. Their groups *are* probed -
   the old unqualified "never `content.blobs`" was archiver's role boundary,
@@ -189,7 +191,17 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   [README.md](README.md), *Provenance*.
 - Open follow-on: #43 (each grouped stream's producer holds the
   group commands on its root, so it can `XACK` its consumer's work away -
-  #14's hole the other way round).
+  #14's hole the other way round). `content.process` is the first stream that
+  does not open it: its producer's pattern rides the `+xadd` selector alone.
+- CannObserv/broker#62 - Observo onboarded ahead of its consumer, 2026-09-24:
+  ACL user `observo`, watcher's grants on the pair, the `content.process` /
+  `content.derived` rows, two probed groups cannobserv v0.19.4 marks *pending
+  broker#62*, and the co-core pin at `>=0.19.4`. Two steps are outside this
+  repo: the tailnet rule admitting `tag:observo-primary` to `tag:broker`
+  (admin console), and the credential handoff - `observo`'s plaintext waits in
+  the node's passwords file until observo#629 takes it, named by
+  `PLAINTEXT_PENDING_HANDOFF` in `tests/deploy/test_live_acl_matches_tracked_acl.py`
+  so the live suite stays green meanwhile.
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,

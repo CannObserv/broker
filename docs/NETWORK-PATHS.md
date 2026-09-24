@@ -20,6 +20,7 @@ Client-side, from each participant's own host, as its own ACL user:
 | `replicator` -> broker | **4.05 ms** (n 6, 3.96-10.48) | **0.47 ms** (n 30, 0.44-0.56) | direct | 2026-09-11, `co-replicator` (CannObserv/replicator#88) |
 | `watcher` -> broker | **7.31 ms** (n 6, 5.17-9.94) | **1.55 ms** (n 30, 0.57-2.09) | direct | 2026-09-15, `co-watcher` (CannObserv/watcher#296) |
 | `archiver` -> broker | not taken | not taken | direct | - |
+| `observo` -> broker | not takeable | not takeable | **none yet** - the policy admits nothing between `observo-primary` and this node (CannObserv/broker#62) | - |
 
 Network-side, one vantage point and one method for all three, so the rows are
 comparable with each other rather than only with themselves - `tailscale ping`
@@ -30,10 +31,18 @@ x20 from `co-broker`, 2026-09-15 21:01Z:
 | to `archiver` | 1 ms | **1 ms** | 4 ms | direct, 20 of 20 |
 | to `replicator` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 |
 | to `watcher` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 |
+| to `observo-primary` | - | - | - | **not in the netmap** - `tailscale ping observo-primary` from `co-broker` resolves no such host, 2026-09-24 |
 
 Archiver's client-side cold and warm cells were never taken with the method the
 other two used; its network path is confirmed direct above, and a Redis `PING`
 adds microseconds to it. Only archiver's host can fill those cells.
+
+Observo's cannot be taken from either end yet. Its ACL user and streams exist
+(CannObserv/broker#62), but until a rule for `tag:observo-primary` reaches
+`tag:broker` on 6379 the two nodes are not in each other's netmap, so there is
+no path to record - and a path that first forms at Observo's cutover is the
+one to measure then, with the method above, from `observo-primary` as
+`observo`.
 
 **History, kept for the comparison.** Before 2026-09-12 watcher and replicator
 shared a VM in `lax`, and that path went through DERP (sea) at 36-40 ms and never

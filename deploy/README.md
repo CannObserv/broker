@@ -193,7 +193,10 @@ the node's file under `sudo -n` and compares every user's digest with
 `ACL GETUSER`, so a forgotten line fails the suite rather than waiting for a
 rebuild (CannObserv/broker#49). The four service users - `archiver`, `watcher`,
 `replicator`, `citest` - are held by digest alone since 2026-09-23; nothing on
-this node needs their plaintext.
+this node needs their plaintext. `observo` (CannObserv/broker#62) joins them
+once its plaintext has been handed to Observo; until then its line stays
+plaintext here, because this file is the handoff medium - `pw OBSERVO` is how
+the operator reads it out.
 
 **The third line is the one that gets skipped.** Until broker#11 nothing
 checked it, and it rested on someone remembering four times: eleven corrections
@@ -299,7 +302,7 @@ set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy            # every skip becomes a real assertion here
 ```
 
-**Restarting `redis-server` is a cohort-wide event.** All three services connect
+**Restarting `redis-server` is a cohort-wide event.** Every service connects
 to this instance, so anything needing a restart waits for a window rather than
 being applied in passing.
 

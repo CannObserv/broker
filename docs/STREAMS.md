@@ -48,17 +48,20 @@ redis to prove both halves, so a row changed here without the grant following
 fails a test rather than degrading a service quietly.
 
 **A row that says No retention cap is a fact about behaviour, not about
-grants** (CannObserv/broker#60). Nothing trims the five `content.*` streams:
-no producer passes a `maxlen` (CannObserv/watcher#317, CannObserv/replicator#106)
-and archiver's trim allowlist is `info.changes` alone (CannObserv/archiver#239).
+grants** (CannObserv/broker#60). Nothing trims the seven `content.*` streams:
+no producer passes a `maxlen` (CannObserv/watcher#317, CannObserv/replicator#106;
+the processing pair has none by contract, CannObserv/broker#62) and archiver's
+trim allowlist is `info.changes` alone (CannObserv/archiver#239).
 `maxmemory` is their only bound, so the probe gives them no `XLEN` threshold -
 `test_the_probe_and_the_inventory_agree_on_which_streams_have_no_cap`, in
 the same file, pins the phrase to exactly the rows the probe leaves
-unthresholded. Only `content.replicate` is also **Never XTRIMmed**; Watcher's
-`+xtrim` selector still names `content.fetch` and `content.revisions`, and
-Replicator's names `content.blobs` and `content.artifacts`, unissued. Whether
-each stream gets a cap is its producer's call, filed on its producer's repo -
-`content.replicate`'s is CannObserv/archiver#267.
+unthresholded. `content.replicate` and `content.process` are also **Never
+XTRIMmed**; Watcher's `+xtrim` selector still names `content.fetch` and
+`content.revisions`, and Replicator's names `content.blobs` and
+`content.artifacts`, unissued; no selector names `content.derived`, whose cap
+would ride its producer's publish. Whether each stream gets a cap is its
+producer's call, filed on its producer's repo - `content.replicate`'s is
+CannObserv/archiver#267.
 
 | Stream | Producer → consumer | Kind | Consumer group | Health primitive | DLQ (writer / **drainer**) | Producer durability under OOM |
 |---|---|---|---|---|---|---|
@@ -71,6 +74,8 @@ each stream gets a cap is its producer's call, filed on its producer's repo -
 | `info.registry` | **Archiver** → Watcher *(consumer live - CannObserv/watcher#254)* | config/state, broadcast, last-write-wins per `info_item_id`, `generation`-ordered | **none, permanently - by design** (every consumer needs every message; a group accumulates a PEL nothing drains) | **last-entry age via `XINFO STREAM`** - on a non-empty corpus the snapshot guarantees ≥1 entry/hour, so an age over ~2× the snapshot interval means the producer is down; an empty or never-announced registry publishes nothing, so the alarm needs a corpus-size guard. See CannObserv/archiver#147 | **none applies** - a state message has nothing to close; quarantine is terminal and the next full set supersedes | **split by path**: deltas ride the transactional outbox and retry indefinitely (OOM transient); snapshots have **no retry** - one lost to an outage is corrected by the next period, not a re-attempt. **Never XTRIMmed - capped only on publish, and the broker refuses the rest**: consumers boot by replaying from `0-0`, so retention has a floor - one full snapshot plus every delta since (CannObserv/archiver#141) - and it is a boot contract, not housekeeping. Cut under it and the next consumer to boot converges to a partial set and reports success. The producer holds the floor with a `MAXLEN` on every publish (`ARCHIVER_REGISTRY_STREAM_MAXLEN`, sized from key count × sets retained); a trim from anywhere else cannot see where the last snapshot starts. No identity here holds `+xtrim` on it - not archiver, and not `brokeradmin`, whose trim stops at `~*.dlq` (CannObserv/broker#34) |
 | `content.replicate` | **Archiver** → Replicator *(producer live - CannObserv/archiver#169; consumer shipped for `gcs`, CannObserv/replicator#34)* | command | `replicator.replicate` (exactly one - competing consumers, `content.fetch`'s posture) | `XPENDING` + **undelivered age**, plus the issuer-side view `information.replication_commands` gives: rows still `state='requested'` past the reaper horizon, which the reaper (CannObserv/archiver#170) closes as `abandoned` and logs at WARNING. **No retention cap**: nothing trims it, so no `XLEN` threshold - `maxmemory` is its only bound (CannObserv/broker#60). | `content.replicate.dlq` - Replicator's to write; Archiver provisions nothing here / **Replicator** | **retries indefinitely** - transactional outbox, OOM classified transient. **Never XTRIMmed, and the broker now refuses it**: capping a command stream deletes commands the consumer group has not delivered and orphans the PEL entries naming them. The topic is absent from archiver's trim allowlist (`trim_topics`, CannObserv/archiver#239) *and* from every `+xtrim` selector in `deploy/redis-acl.conf` (CannObserv/broker#14), so the rule no longer rests on one participant's source - it is refused to archiver, which could trim it, and to replicator, whose PEL entries would be the ones orphaned |
 | `info.watch-status` | Watcher → **Archiver** *(consumer live - CannObserv/archiver#151; producer live - CannObserv/watcher#264, republish `*/5 * * * *`, producer-side `maxlen` 500, floored at 10 full sets - CannObserv/watcher#292)* | config/state, broadcast, last-write-wins per `info_item_id` | **none, permanently - by design** - Archiver tails groupless (`AsyncBusTailReader`), resuming from its own `bus_tail_cursors` row rather than a full `0-0` replay | consumer-side: staleness of the `watch_status` cache vs the producer's republish period; broker-side last-entry age probed by this repo's bus-health probe, WARN over 15 min, **and `XLEN`** against the cap in force - the 500 or the 10-full-set floor, whichever is larger, with the set size read off this stream rather than mirrored (CannObserv/broker#44, #45, #51; [BUS-HEALTH.md](BUS-HEALTH.md), *The one cap that is read, not mirrored*) | **none, matching `content.fetch-policy`** - **two** skip paths, both durable (the skip advances the persisted cursor) and both logged at ERROR: a frame that will not *decode*, and a decoded message the registry can never *write* (a value outside a column's domain, a constraint violation). With no DLQ and a cursor that only advances on success, retrying either forever would stall the stream silently; the periodic republish is what supersedes a skip. Everything else (broker or DB down) rewinds and retries rather than skipping | **self-correcting** - coalesced level signals, full republish on a timer (CannObserv/watcher#264) |
+| `content.process` | Watcher → Observo *(target - issuer CannObserv/watcher#325, processor CannObserv/observo#629, neither built; the contract is cannobserv#486, the design of record watcher's `docs/plans/2026-09-24-observo-extraction-and-diff-design.md`)* | command - `ContentProcessCommand`, one `source_spec` per occasion | `observo.process` (exactly one - competing consumers, `content.fetch`'s posture) | `XPENDING` + **undelivered age** - probed by this repo's bus-health probe ahead of the consumer (CannObserv/broker#62): dormant while nothing has written the stream, and `group-missing` every tick once Watcher has and Observo's group is not on it, which from this side is "Observo is down" (the design surfaces it on Watcher's as `processing_timeout`). **No retention cap**: nothing trims it, so no `XLEN` threshold - `maxmemory` is its only bound | `content.process.dlq` - Observo's to write, from the driver's `dead_letter` on an undecodable command / **Observo** | *(target)* Watcher's `process_commands` outbox is the `fetch_commands` discipline - persist-before-publish plus the every-minute publish sweep (design §2) - so `content.fetch`'s retry-indefinitely posture is the expectation, to be verified when watcher#325 ships. **Never XTRIMmed, and the broker refuses it from day one**: a cap on a command stream deletes commands the worker pool has not been delivered and orphans the PEL entries naming them, so no `+xtrim` selector in `deploy/redis-acl.conf` names it - `content.replicate`'s posture rather than `content.fetch`'s, whose producer keeps an unissued trim from the observed inventory |
+| `content.derived` | Observo → Watcher *(target - producer CannObserv/observo#629, first consumer CannObserv/watcher#325)* | fact, broadcast (both processing outcomes share it - `ProcessingCompleteEvent`, including the "spec bound nothing" result, and `ProcessingFailedEvent` - so an issuer sees success and failure in one group, `content.blobs`'s posture; an issuer discards facts for command ids it did not issue) | `watcher.derived` (one per consuming service) | `XPENDING` + **undelivered age** per group, probed ahead of the consumer as above. **No retention cap**: nothing trims it, so no `XLEN` threshold - `maxmemory` is its only bound (CannObserv/broker#62). No `+xtrim` selector names it either, and the row still does not say Never XTRIMmed: a cap here is Observo's call and would ride its publish, which needs no grant, so the phrase would promise more than the broker enforces | `content.derived.dlq` - shared by every consuming service (drainers filter on `dlq.group`) / **Watcher**, as the first consumer | **unverified** - Observo's durability under `OOM command not allowed` is observo#629's to state, the way CannObserv/watcher#245 and CannObserv/replicator#19 stated theirs. The design's rule for a transient failure - publish nothing and let the pending entry be reclaimed - covers a refused publish only if `OOM` is classified transient, and whether a completed extraction is re-run or re-published on the reclaim is the same question |
 
 ⚠️ **`content.replicate` is the one stream where a test message is not free.**
 Every other topic here carries a fact or a piece of state - the worst a stray
@@ -100,15 +105,22 @@ second process in the group silently takes half the revisions.
 
 ## Participants, hosts and paths
 
-Where each participant runs, and how its packets reach this broker. All four
-nodes are in `pdx` since 2026-09-15, which closes the cross-region interval
-broker#1 R6 made unavoidable (CannObserv/broker#8).
+Where each participant runs, and how its packets reach this broker. The four
+live nodes are in `pdx` since 2026-09-15, which closes the cross-region interval
+broker#1 R6 made unavoidable (CannObserv/broker#8). Observo's primary is a
+fifth, declared ahead of its consumer (CannObserv/broker#62): its row carries
+the address Observo's own `docs/reference/tailscale.md` states, under
+`tag:observo-primary` since observo#588, and its path is **not yet a path** -
+the node is absent from `co-broker`'s netmap, so the tailnet policy admits
+nothing between the two until a rule for it lands in the admin console, which
+is the one step of #62 this repo cannot take.
 
 | Service | Tailnet node | VM | Region | Tailnet address | Path to broker |
 |---|---|---|---|---|---|
 | `archiver` | `archiver` | `co-registrar` | pdx | `100.109.138.101` | direct |
 | `watcher` | `watcher` | `co-watcher` | pdx | `100.66.24.24` | direct |
 | `replicator` | `replicator` | `co-replicator` | pdx | `100.114.136.20` | direct |
+| `observo` | `observo-primary` *(target)* | Observo's primary host (exe.dev; its VM name is not recorded in this repo) | not recorded | `100.105.63.31` | **none yet** - not in this node's netmap on 2026-09-24 (`tailscale ping observo-primary` resolves no such host), so no rule admits it; the rule is `tag:observo-primary` to `tag:broker` on 6379, in the admin console (CannObserv/broker#62) |
 | broker | `broker` | `co-broker` | pdx | `100.97.91.19` | - |
 
 **This table is checked against the live broker.** `CLIENT LIST` reports each
@@ -134,7 +146,11 @@ came to find these by scanning the keyspace rather than by reading.
 | `replicator:cmd:<stream suffix>:<command_id>` | Replicator | string, **volatile** | `REPLICATOR_DEDUPE_TTL_SECONDS`, default 86400 | `SET .. NX EX`, `EXISTS` | De-duplication of `content.fetch` / `content.replicate` commands. Written **after** the handler completes; read by an `EXISTS` **before** the next one runs. Reasoning: [`CannObserv/replicator:docs/CONVENTIONS.md#the-replicatorcmd-keys`](https://github.com/CannObserv/replicator/blob/main/docs/CONVENTIONS.md#the-replicatorcmd-keys) |
 
 **This is the only non-stream key pattern any service writes here.** A new one
-belongs in this table before it belongs on the broker.
+belongs in this table before it belongs on the broker. Observo adds none
+(CannObserv/broker#62): it keeps no dedupe keys, because its output is written
+content-addressed and if-absent, so a redelivered command is idempotent by
+construction - and its ACL user holds neither `+set` nor `+exists`, which is
+what keeps that a property of the broker rather than of Observo's source.
 
 **One namespace per command stream**, and the suffix is the same one co-core's
 `group_name` puts after the service - so `content.fetch` gives both the group
@@ -183,7 +199,9 @@ Three roles, and no two of them are reliably the same service:
 - **Writer** - whichever service's consumer calls `AsyncBusConsumer.dead_letter()`
   on that topic; the `DLQ` column above names it per stream. Archiver writes
   `content.revisions.dlq` and `content.artifacts.dlq`, Replicator writes
-  `content.fetch.dlq` and `content.replicate.dlq`, and the groupless config/state
+  `content.fetch.dlq` and `content.replicate.dlq`, Observo will write
+  `content.process.dlq` and Watcher `content.derived.dlq` once the processing
+  pair's consumers ship (CannObserv/broker#62), and the groupless config/state
   streams can write none at all.
 - **Drainer - the stream's own consumer, per stream.** Named in the `DLQ`
   column above, so an unowned queue reads as a blank cell rather than something

@@ -37,7 +37,7 @@ The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
 > is off. `REDISCLI_AUTH` emits no "may not be safe" warning, so
 > `--no-auth-warning` comes off with the URL - verified on a scratch 7.0.15.
 
-Restarting `redis-server` on `co-broker` disconnects all three participants, so
+Restarting `redis-server` on `co-broker` disconnects every participant, so
 it is a cohort-wide event rather than a maintenance detail. This window carries
 everything that needs one, and nothing that does not.
 
@@ -49,7 +49,7 @@ be done one service at a time with a rollback after each.
 | | |
 |---|---|
 | **Expected downtime** | under a minute - one `systemctl restart` |
-| **Blast radius** | all three participants lose the bus for that minute |
+| **Blast radius** | every participant loses the bus for that minute - three today, Observo too once observo#629 consumes (broker#62) |
 | **Reversible** | yes, at every step |
 | **Data touched** | none by steps 1b to 1d and 2 to 4. Step 1a-bis rewrites the AOF and discards its history, deliberately, after a fresh snapshot has been shipped off-node |
 
@@ -80,7 +80,7 @@ decision with archiver (*the OOM seam*).
 
 ## Preconditions
 
-- [ ] All three service owners agree the window. The cohort is pre-production
+- [ ] Every service owner agrees the window. The cohort is pre-production
       with a single hourly Watched Item, so the quiesce is effectively free.
 - [ ] `uv run pytest` green on `co-broker` with the env sourced (**0 skipped**
       is the expected shape here; skips mean an artifact is missing).
@@ -328,8 +328,8 @@ changed is not a finding. `entries-added` going **backwards** is, on any stream;
 so is a group's `last-delivered-id` moving backwards.
 
 Then confirm each service is back **and consuming**. `CLIENT LIST` grouped by
-`user=` should show all three, and `ACL LOG` should be empty (a restart clears
-it). Each group's `last-delivered-id` should reach its stream's
+`user=` should show every deployed service - `observo` only once observo#629
+consumes - and `ACL LOG` should be empty (a restart clears it). Each group's `last-delivered-id` should reach its stream's
 `last-generated-id` once a new entry arrives. Read positions, not counters: after
 the 2026-09-16 restart `XINFO GROUPS` `lag` read ~150 on groups that were caught
 up, and consumer `idle` was reset for every consumer at AOF load (#20).

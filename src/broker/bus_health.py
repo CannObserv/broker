@@ -32,9 +32,9 @@ The checks, per tick:
   what arrived since the last tick, and off a span remembered from before a
   gap entered the window (CannObserv/broker#45). A trimmed window too narrow
   for one republish a period is refused rather than read high
-  (CannObserv/broker#51). The five
+  (CannObserv/broker#51). The seven
   ``content.*`` streams have no cap and so no threshold: ``maxmemory`` is their
-  only bound (CannObserv/broker#60).
+  only bound (CannObserv/broker#60; the processing pair joined them in #62).
 - last-entry age via ``XINFO STREAM`` for the permanently-groupless streams,
   which are invisible to any pending-based check.
 - the ``pending`` count of every consumer group on this node, warning only on
@@ -108,8 +108,10 @@ from typing import Literal
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
     CONTENT_BLOBS,
+    CONTENT_DERIVED,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
+    CONTENT_PROCESS,
     CONTENT_REPLICATE,
     CONTENT_REVISIONS,
     INFO_CHANGES,
@@ -134,9 +136,10 @@ logger = get_logger("src.broker.bus_health")
 MEMORY_WARN_FRACTION = 0.75
 
 # How many streams the headroom finding names, longest first. Since #60 the
-# five `content.*` streams have no length finding and `maxmemory` is their only
-# bound, so without these names the warning arrives with headroom left and no
-# culprit (CannObserv/broker#61). A naming aid, not a threshold.
+# `content.*` streams - seven since #62 - have no length finding and
+# `maxmemory` is their only bound, so without these names the warning arrives
+# with headroom left and no culprit (CannObserv/broker#61). A naming aid, not a
+# threshold.
 MEMORY_NAMED_STREAMS = 3
 
 # The policy the cap is only safe under, mirrored from deploy/redis.conf.broker.
@@ -188,14 +191,18 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # **Not a mirrored constant.** The caps below are copies of numbers owned in
 # another repo; this one is owned here, because it is a property of the read
 # loop as this node can observe it rather than a threshold any participant
-# declares. Every group on this broker is a blocking XREADGROUP, so delivery is
-# immediate - `replicator.fetch` answered the 14:18:00Z command at 14:18:01Z -
+# declares. Every live group on this broker is a blocking XREADGROUP, so delivery
+# is immediate - `replicator.fetch` answered the 14:18:00Z command at 14:18:01Z -
 # and five minutes is two orders of magnitude of slack over that, comfortably
 # clear of normal batching.
 #
 # A consumer that ever moves to a schedule rather than a blocking read needs its
 # own value on its row: that schedule's period plus margin, with the source
-# named the way a mirrored constant names its owner.
+# named the way a mirrored constant names its owner. The two groups declared
+# ahead of their consumers by CannObserv/broker#62 - `observo.process` and
+# `watcher.derived` - take this value on the same assumption, a blocking read
+# through co-core-aio's driver; observo#629 and watcher#325 are where a
+# different loop would be stated.
 #
 # **Sized against the slowest handler on the node, not only the fastest**
 # (CannObserv/broker#30). A blocking reader is not reading while it is inside a
@@ -253,10 +260,11 @@ def with_margin(cap: int) -> int:
 #   instead, because its retention floor is a consumer boot contract;
 # - the LWW streams are capped by their producer, Watcher.
 #
-# The five content.* streams are capped by nothing, so they carry no length
-# threshold. Until CannObserv/broker#60 four of them borrowed the info.changes
-# number, and a breach there would have said "the retention cap is not being
-# applied" about a cap that does not exist.
+# The seven content.* streams are capped by nothing, so they carry no length
+# threshold. Until CannObserv/broker#60 four of the then five borrowed the
+# info.changes number, and a breach there would have said "the retention cap is
+# not being applied" about a cap that does not exist; the processing pair
+# joined with none of its own (CannObserv/broker#62).
 CHANGES_PRODUCER_MAXLEN = 100_000
 """Mirrors ``DEFAULT_STREAM_MAXLEN`` in archiver's ``src/core/changes/publisher.py``.
 
@@ -307,6 +315,14 @@ ARTIFACTS_GROUP = group_name(CONTENT_ARTIFACTS, "archiver")
 BLOBS_GROUP = group_name(CONTENT_BLOBS, "watcher")
 FETCH_GROUP = group_name(CONTENT_FETCH, "replicator")
 REPLICATE_GROUP = group_name(CONTENT_REPLICATE, "replicator")
+# The processing pair (CannObserv/broker#62, the cannobserv#486 contract): the
+# command stream's one worker pool is Observo's, the fact stream's first group
+# is Watcher's. Both are declared here ahead of their consumers - cannobserv
+# v0.19.4 marks them *pending broker#62* under the #384 rule that a documented
+# group exists on the broker - which is what lets the probe watch for them from
+# the first entry either stream ever carries.
+PROCESS_GROUP = group_name(CONTENT_PROCESS, "observo")
+DERIVED_GROUP = group_name(CONTENT_DERIVED, "watcher")
 
 
 # --- who owes each DLQ its triage (CannObserv/broker#1 Phase 5) ---
@@ -339,6 +355,11 @@ DLQ_DRAINERS: dict[str, str] = {
     dlq_name(CONTENT_FETCH): "replicator",
     dlq_name(CONTENT_REPLICATE): "replicator",
     dlq_name(CONTENT_BLOBS): "watcher",
+    # The processing pair (CannObserv/broker#62): the driver's ``dead_letter``
+    # parks an undecodable command here on Observo's behalf and an undecodable
+    # fact on Watcher's, and each is the one party that can read its own.
+    dlq_name(CONTENT_PROCESS): "observo",
+    dlq_name(CONTENT_DERIVED): "watcher",
     # Prospective: info.changes has no consumer group yet (CannObserv/archiver#155),
     # so nothing writes this queue. Recorded now because the day it appears is
     # the day nobody remembers who owns it.
@@ -662,6 +683,35 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     StreamCheck(
         CONTENT_BLOBS,
         pending_group=BLOBS_GROUP,
+        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    ),
+    # The processing pair (CannObserv/broker#62), each row in the posture of the
+    # stream it is shaped like.
+    #
+    # content.process takes content.replicate's, not content.fetch's: a command
+    # stream with one worker pool, in no trim path - no producer maxlen by
+    # contract (the design of record: "no maxlen contract") and no +xtrim
+    # selector on the instance naming it - so any decrease in its length is a
+    # fault and there is no cap for a length threshold to mirror.
+    # content.derived takes content.blobs's: one group per consuming service,
+    # watcher.derived first, and no opinion on its length or its age, since a
+    # cap there is Observo's call and would ride its publish.
+    #
+    # Both groups are declared ahead of their consumers. While nothing has
+    # written a stream its row is dormant; once watcher writes content.process
+    # and observo's group is not on it, the finding is group-missing every tick
+    # - which for this stream IS "Observo is down", the state the design
+    # surfaces on the watcher side as processing_timeout. The undelivered
+    # threshold is the shared one on the shared assumption (see its comment).
+    StreamCheck(
+        CONTENT_PROCESS,
+        never_trimmed=True,
+        pending_group=PROCESS_GROUP,
+        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    ),
+    StreamCheck(
+        CONTENT_DERIVED,
+        pending_group=DERIVED_GROUP,
         warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
     ),
 )

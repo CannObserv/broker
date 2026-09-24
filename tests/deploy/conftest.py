@@ -56,9 +56,14 @@ PASSWORD = "throwaway-password"
 # end to end (CannObserv/broker#49).
 DIGEST_PLACEHOLDERS = ("__ARCHIVER_PW__",)
 
-# The three participants. Each holds its own ACL user of the same name, and each
-# is a peer on the tailnet; both facts are asserted from this one tuple.
-SERVICE_USERS = ("archiver", "watcher", "replicator")
+# The participants. Each holds its own ACL user of the same name and a row in
+# the participants table; both facts are asserted from this one tuple. `observo`
+# is declared ahead of its consumer (CannObserv/broker#62): its ACL user and
+# its two streams exist so that observo#629 can ship against a grant rather
+# than a NOPERM, and the live tests that read `CLIENT LIST` assert only on the
+# participants that are connected, so a declared one that is not yet is no
+# finding.
+SERVICE_USERS = ("archiver", "watcher", "replicator", "observo")
 
 
 def parse_users(text: str) -> dict[str, list[str]]:

@@ -70,16 +70,20 @@ So the check compares positions and dates one entry:
 **The threshold is 5 minutes on every group, and it is not a mirrored
 constant.** Every other threshold in this probe copies a retention cap owned in
 another repo; this one is owned here, because it describes the consumer's read
-loop as this node can observe it. All five groups are blocking `XREADGROUP`
+loop as this node can observe it. All five live groups are blocking `XREADGROUP`
 readers, so delivery is immediate - `replicator.fetch` answered the 14:18:00Z
 command at 14:18:01Z - and five minutes is two orders of magnitude of slack over
 that, and ~55x the slowest handler: `content.replicate`'s, 5.4 s at the 64 MiB
 blob ceiling (CannObserv/replicator#96, broker#30). A consumer that ever moves
 to a schedule rather than a blocking read needs its own value on its row: that
 schedule's period plus margin, with the source named the way a mirrored constant
-names its owner. `test_every_probed_group_carries_an_undelivered_threshold`
-fails if a sixth group arrives without one, and `StreamCheck` refuses the other
-direction - a threshold on a row with no group - at import.
+names its owner. The two groups declared ahead of their consumers by
+CannObserv/broker#62, `observo.process` and `watcher.derived`, take the value
+on the same assumption - a blocking read through co-core-aio's driver - and
+observo#629 and watcher#325 are where a different loop would be stated.
+`test_every_probed_group_carries_an_undelivered_threshold` fails if an eighth
+group arrives without one, and `StreamCheck` refuses the other direction - a
+threshold on a row with no group - at import.
 
 **What no duration sizes: a consumer alive and not reading**, since a reader
 inside a handler is not reading - one stalled-provider attempt, or recovery

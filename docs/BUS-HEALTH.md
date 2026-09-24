@@ -94,7 +94,7 @@ Per tick it probes:
   `max(500, 10 x the set Watcher republishes)` + 10% - the 550 while the sets are small,
   which is the state the node is in today, and the floor past ~50 entries per
   set. See *Mirrored constants* and *The one cap that is read, not mirrored*
-  below. **The five `content.*` streams get no length threshold**: nothing trims
+  below. **The seven `content.*` streams get no length threshold**: nothing trims
   them, so there is no cap to mirror and a breach could only mean traffic grew.
   `maxmemory` is their only bound and the memory check above is the finding for
   it, naming the longest streams when it fires. Until CannObserv/broker#60 four
@@ -106,16 +106,17 @@ Per tick it probes:
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
   is empty - the corpus-size guard);
-- the `pending` count of **all five** consumer groups on the node -
+- the `pending` count of **all seven** consumer groups on the node -
   `archiver.revisions`, `archiver.artifacts`, `watcher.blobs`,
-  `replicator.fetch`, `replicator.replicate` - WARN on non-zero across two
-  consecutive ticks, with the count carried in
-  `StateDirectory=broker-bus-health`. Widened from Archiver's two by
-  CannObserv/broker#1 Phase 5: the exclusion was inherited from a probe running
-  on Archiver's own host, where a downstream service's group lag was plausibly
-  its own alerting problem. On a neutral node it is not - nobody else watches
-  these, and this is the one place that can;
-- **a consumer group that does not exist** on one of those five streams
+  `replicator.fetch`, `replicator.replicate`, and the processing pair's
+  `observo.process` and `watcher.derived`, declared ahead of their consumers
+  (CannObserv/broker#62) - WARN on non-zero across two consecutive ticks, with
+  the count carried in `StateDirectory=broker-bus-health`. Widened from
+  Archiver's two by CannObserv/broker#1 Phase 5: the exclusion was inherited
+  from a probe running on Archiver's own host, where a downstream service's
+  group lag was plausibly its own alerting problem. On a neutral node it is not
+  - nobody else watches these, and this is the one place that can;
+- **a consumer group that does not exist** on one of those seven streams
   (`group-missing`) - absent from the stream's `XINFO GROUPS` reply, so its lag
   cannot be read at all and a stalled consumer is invisible to the rule above.
   WARN on **every** tick it is absent, with no two-tick grace: nothing about it
@@ -139,13 +140,16 @@ Per tick it probes:
     (*Detecting loss* below).
 
   Only a stream that exists is checked - one nothing has written yet is
-  dormant, not a fault - and a stream the probe reads without a group cannot
-  trip it: `info.changes` until its consumer exists, and the config/state
+  dormant, not a fault, which is the state of both #62 streams until
+  watcher#325 issues its first command; from then until observo#629's consumer
+  creates `observo.process`, this finding on `content.process` is "Observo is
+  down" from the broker's side - and a stream the probe reads without a group
+  cannot trip it: `info.changes` until its consumer exists, and the config/state
   streams, where `StreamCheck` refuses a group at import time. A missing group
   records no pending count, so when it comes back its two-tick rule starts
   again from zero;
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
-  minutes on each of the five groups. The check a pending count cannot make,
+  minutes on each of the seven groups. The check a pending count cannot make,
   and the one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
@@ -184,6 +188,13 @@ What survives is the half that was never about roles: this repo owns no
 retention cap for that stream, so it states no opinion on its length or its age
 - neither the fact cap nor the LWW cap governs it, and inventing a threshold
 with no owner is how a probe starts crying wolf.
+
+The processing pair (CannObserv/broker#62) takes those two postures, one each.
+`content.derived` carries a group row and nothing else, as `content.blobs`
+does. `content.process` carries a group row and `content.replicate`'s
+`never_trimmed`: a command stream in no trim path, so the `stream-shrank`
+finding fires on any decrease in its length, and no length threshold could
+mirror a cap that does not exist.
 
 The unit holds **no** database credential: the `changes_outbox` half of the
 old combined probe stayed in archiver with the table it queries.

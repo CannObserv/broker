@@ -27,8 +27,10 @@ import pytest
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
     CONTENT_BLOBS,
+    CONTENT_DERIVED,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
+    CONTENT_PROCESS,
     CONTENT_REPLICATE,
     CONTENT_REVISIONS,
     INFO_CHANGES,
@@ -159,7 +161,7 @@ def test_memory_reports_the_policy_and_the_absent_cap_together() -> None:
 
 
 def test_memory_finding_names_the_largest_streams_by_length() -> None:
-    """Since #60 nothing else names the five ``content.*`` streams, so the 75%
+    """Since #60 nothing else names the seven ``content.*`` streams, so the 75%
     finding says which streams are longest, and the operator starts there rather
     than at an ``XLEN`` sweep as ``brokeradmin`` (CannObserv/broker#61)."""
     (finding,) = evaluate_memory(
@@ -550,9 +552,9 @@ def test_an_undelivered_threshold_without_a_group_is_refused() -> None:
 def test_every_probed_group_carries_an_undelivered_threshold() -> None:
     """A group row without one is a group nobody watches for a stopped reader.
 
-    Asserted over the declared tuple rather than per row, so a sixth group
+    Asserted over the declared tuple rather than per row, so an eighth group
     arrives with the threshold or fails here - which is the half of broker#20
-    that outlives the five groups on the node today.
+    that outlives the seven groups declared today.
     """
     missing = [
         c.topic
@@ -581,12 +583,21 @@ def test_content_blobs_carries_no_retention_opinion() -> None:
 
 
 def test_inventory_covers_every_consumer_group_on_the_node() -> None:
-    """Widened from Archiver's two to all five (CannObserv/broker#1 Phase 5).
+    """Widened from Archiver's two to all five (CannObserv/broker#1 Phase 5),
+    then to seven with the processing pair (CannObserv/broker#62).
 
     The exclusion was inherited from a probe that ran on Archiver's own host,
     where a downstream service's group lag was plausibly its own alerting
     problem. On a neutral node it is not: nobody else watches these, and this
-    is the one place that can. Cost is three more group reads per tick.
+    is the one place that can. Cost is one more group read per tick per group.
+
+    The two #62 groups are declared ahead of their consumers - cannobserv
+    v0.19.4 marks both *pending broker#62* under the #384 rule that a documented
+    group exists on the broker - and the probe asks for them the way it asks
+    for the rest: a stream nothing has written is dormant and says nothing,
+    and a stream its producer has written without the group is `group-missing`
+    every tick, which for `content.process` is the "Observo is down" the
+    design surfaces on the watcher side.
 
     Pinned as an exact set rather than a subset, so a group silently dropped
     from the inventory fails here instead of going quiet in production.
@@ -596,9 +607,50 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
         "archiver.revisions",
         "archiver.artifacts",
         "watcher.blobs",
+        "watcher.derived",
         "replicator.fetch",
         "replicator.replicate",
+        "observo.process",
     }
+
+
+def test_the_processing_pair_carries_its_groups_and_no_retention_opinion() -> None:
+    """The two streams CannObserv/broker#62 adds, each with the posture of the
+    stream it is shaped like.
+
+    `content.process` is a command stream like `content.replicate`: one worker
+    pool, `observo.process`, and **never trimmed** - a cap deletes commands the
+    group has not been delivered and orphans the PEL entries naming them, so no
+    `+xtrim` selector in deploy/redis-acl.conf names it and any decrease in its
+    length is a fault. Not like `content.fetch`, whose producer still holds an
+    unissued `+xtrim` from the observed-inventory era.
+
+    `content.derived` is a fact stream like `content.blobs`: one group per
+    consuming service, `watcher.derived` first, and no length or age opinion -
+    a cap there is its producer's call and rides the publish, so the row does
+    not claim nothing shortens it.
+    """
+    process = _check_for(CONTENT_PROCESS)
+    assert process.pending_group == "observo.process"
+    assert process.never_trimmed is True
+    assert process.warn_length is None
+    assert process.warn_last_entry_age_seconds is None
+    assert process.warn_undelivered_age_seconds == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+
+    derived = _check_for(CONTENT_DERIVED)
+    assert derived.pending_group == "watcher.derived"
+    assert derived.never_trimmed is False
+    assert derived.warn_length is None
+    assert derived.warn_last_entry_age_seconds is None
+    assert derived.warn_undelivered_age_seconds == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+
+
+def test_the_processing_pairs_queues_are_owed_to_their_consumers() -> None:
+    """Writer and drainer are one role: observo dead-letters an undecodable
+    `content.process` frame and is the one party that can read it; watcher the
+    same for `content.derived` (CannObserv/broker#62)."""
+    assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_PROCESS)] == "observo"
+    assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_DERIVED)] == "watcher"
 
 
 def test_group_names_are_derived_not_spelled() -> None:
@@ -645,12 +697,15 @@ def test_info_changes_threshold_tracks_the_operator_xtrim_cap() -> None:
 
 # The streams nothing trims: no producer passes a maxlen, and archiver's
 # `trim_topics` allowlist names `info.changes` alone (CannObserv/broker#60).
+# The processing pair joined with no cap of its own (CannObserv/broker#62).
 UNCAPPED_STREAMS = (
     CONTENT_FETCH,
     CONTENT_REVISIONS,
     CONTENT_ARTIFACTS,
     CONTENT_REPLICATE,
     CONTENT_BLOBS,
+    CONTENT_PROCESS,
+    CONTENT_DERIVED,
 )
 
 

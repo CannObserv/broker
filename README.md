@@ -1,7 +1,8 @@
 # broker
 
 Operational code for the Cannabis Observer **change-bus broker** - the Redis
-Streams instance the cluster's three services publish to and consume from.
+Streams instance the cluster's services publish to and consume from: three
+live, and a fourth, Observo, onboarded ahead of its consumer (broker#62).
 
 This repo owns the broker's *tuning*, its *monitoring*, and the *cluster stream
 inventory*. It owns no application logic and no data model. Nothing here is

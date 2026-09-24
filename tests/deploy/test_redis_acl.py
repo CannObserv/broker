@@ -29,8 +29,10 @@ import redis as redis_pkg
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
     CONTENT_BLOBS,
+    CONTENT_DERIVED,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
+    CONTENT_PROCESS,
     CONTENT_REPLICATE,
     CONTENT_REVISIONS,
     INFO_CHANGES,
@@ -60,6 +62,8 @@ CANONICAL_STREAMS = frozenset(
         CONTENT_REVISIONS,
         CONTENT_ARTIFACTS,
         CONTENT_REPLICATE,
+        CONTENT_PROCESS,
+        CONTENT_DERIVED,
     }
 )
 
@@ -68,11 +72,39 @@ CANONICAL_STREAMS = frozenset(
 # including the ones nobody declared, which is the whole point of a backstop.
 NON_STREAM_PATTERNS = frozenset({"*", "*.dlq", "replicator:cmd:*", "probe.*", "replicator.itest.*"})
 
-# The command streams, which is what makes the dedupe keyspace plural. Derived
-# from co-core's taxonomy rather than listed, so a third command stream added
-# upstream fails ``test_replicator_can_name_every_dedupe_namespace`` here rather
-# than wedging its loop on the node.
+# The command streams, derived from co-core's taxonomy rather than listed, so
+# one added upstream fails ``test_a_command_stream_has_one_probed_group_and_its_
+# consumer_holds_the_group_commands`` here rather than wedging a loop on the node.
 COMMAND_STREAMS = tuple(s for s in sorted(CANONICAL_STREAMS) if stream_kind(s) == "command")
+
+
+def probed_consumer(topic: str) -> str | None:
+    """The service whose group the probe watches on ``topic``, or ``None``.
+
+    Read off ``STREAM_CHECKS`` - the group is derived there through co-core's
+    ``group_name``, so its first segment is the service - rather than off the
+    inventory's consumer cell, which is prose.
+    """
+    check = next((c for c in STREAM_CHECKS if c.topic == topic), None)
+    if check is None or check.pending_group is None:
+        return None
+    return check.pending_group.partition(".")[0]
+
+
+# The command streams replicator is the worker pool for, which is what makes
+# its dedupe keyspace plural. Until CannObserv/broker#62 this was every command
+# stream, because replicator consumed every one; `content.process` is the
+# third and observo's, so the set is now derived from who the probe says
+# consumes each rather than from the kind alone - a fourth command stream
+# still cannot arrive without a grant or a red test, whoever consumes it.
+REPLICATOR_COMMAND_STREAMS = tuple(
+    topic for topic in COMMAND_STREAMS if probed_consumer(topic) == "replicator"
+)
+
+# What co-core-aio's group consumer issues on the stream it consumes: the
+# blocking read, the ack, the reclaim and the create-with-MKSTREAM
+# (`AsyncBusConsumer`). The dead-letter write is a selector, not a root grant.
+GROUP_CONSUMER_COMMANDS = ("+xreadgroup", "+xack", "+xautoclaim", "+xgroup|create")
 
 #: The cluster stream inventory, whose producer column says who may publish what.
 STREAMS_MD = Path(__file__).resolve().parents[2] / "docs" / "STREAMS.md"
@@ -289,12 +321,18 @@ def test_replicator_can_name_every_dedupe_namespace(users) -> None:
     and retries forever without ever running a handler. Nothing is lost and
     nothing progresses.
 
-    Asserted over the taxonomy rather than over the two names, so a third
-    command stream cannot arrive without either a grant or a red test.
+    Asserted over the streams the probe says replicator consumes rather than
+    over the two names, so a command stream given to replicator cannot arrive
+    without either a grant or a red test. The third command stream did arrive -
+    `content.process`, CannObserv/broker#62 - and its worker pool is observo,
+    which keeps no dedupe keys: its writes are content-addressed and
+    write-if-absent, so a redelivery is idempotent by construction and needs no
+    key here (../docs/STREAMS.md, *Non-stream keys on `db0`*). Over every
+    command stream this would demand a namespace nothing writes.
     """
     patterns = key_patterns(users["replicator"])
-    assert COMMAND_STREAMS, "co-core classified no stream as a command"
-    for topic in COMMAND_STREAMS:
+    assert REPLICATOR_COMMAND_STREAMS, "the probe watches no replicator group on a command stream"
+    for topic in REPLICATOR_COMMAND_STREAMS:
         key = dedupe_key(topic, SAMPLE_COMMAND_ID)
         assert admits(patterns, key), (
             f"replicator cannot name {key!r} - the dedupe write and the EXISTS "
@@ -308,16 +346,16 @@ def test_no_other_user_can_name_the_dedupe_keyspace(users) -> None:
     the one exception. A second service naming this pattern would be reaching
     into another's dedupe window.
 
-    Over every command stream's namespace rather than the first, for the reason
-    the test above is written over the taxonomy: a grant reaching into one
-    segment is exactly the shape of mistake broker#9 corrected, and checking
-    only ``fetch`` would miss its mirror image.
+    Over every namespace replicator writes rather than the first, for the
+    reason the test above is written over the probe's group rows: a grant
+    reaching into one segment is exactly the shape of mistake broker#9
+    corrected, and checking only ``fetch`` would miss its mirror image.
     """
-    assert COMMAND_STREAMS, "co-core classified no stream as a command"
+    assert REPLICATOR_COMMAND_STREAMS, "the probe watches no replicator group on a command stream"
     for name, rules in users.items():
         if name in {"replicator", "brokeradmin", "acladmin", "default"}:
             continue
-        for topic in COMMAND_STREAMS:
+        for topic in REPLICATOR_COMMAND_STREAMS:
             key = dedupe_key(topic, SAMPLE_COMMAND_ID)
             assert not admits(key_patterns(rules), key), f"{name} can name {key!r}"
 
@@ -728,9 +766,124 @@ def test_replicator_holds_the_xpending_its_delivery_ceiling_reads(users) -> None
     assert "+xpending" in split_rules(rules)[0], (
         "replicator's delivery ceiling reads XPENDING (CannObserv/broker#39)"
     )
+    assert REPLICATOR_COMMAND_STREAMS, "the probe watches no replicator group on a command stream"
+    for topic in REPLICATOR_COMMAND_STREAMS:
+        assert admits(root_key_patterns(rules), topic), f"replicator cannot name {topic}"
+
+
+# --- the processing pair (CannObserv/broker#62) ---
+#
+# `content.process` (watcher -> observo, one worker pool) and `content.derived`
+# (observo -> watcher, broadcast), the contract of cannobserv#486. Neither
+# consumer is built, so nothing on these two lines was captured under MONITOR:
+# observo's whole line is read off co-core-aio's group-consumer driver and the
+# contract, and its stanza has to say so - the header's "observed, not guessed"
+# is a claim about provenance, and a line read off source is a different
+# provenance, not a lesser one.
+
+#: Every key observo may name, by any route. The issue's "nothing else".
+OBSERVO_KEYS = frozenset({CONTENT_PROCESS, dlq_name(CONTENT_PROCESS), CONTENT_DERIVED})
+
+#: What the driver never issues and the issue grants only to a probe or ops
+#: tooling running as this user - which nothing does - plus what observo has no
+#: use for: no config/state stream to tail (`+xread`), no dedupe keys
+#: (`+exists`, `+set`), and no cap of its own on either stream (`+xtrim`).
+OBSERVO_WITHHELD = frozenset({"+xpending", "+xclaim", "+xread", "+exists", "+set", "+xtrim"})
+
+
+def test_observo_can_name_the_processing_pair_and_nothing_else(users) -> None:
+    """The scope's "nothing else" as an exact set, so the pattern list cannot
+    grow for a plausible-sounding reason: it neither reads `content.blobs` nor
+    writes `content.revisions`, the two boundaries the issue names, and it can
+    name no command stream but its own."""
+    patterns = key_patterns(users["observo"])
+    assert patterns == OBSERVO_KEYS, f"observo names {sorted(patterns - OBSERVO_KEYS)} too"
+    for topic in (CONTENT_BLOBS, CONTENT_REVISIONS, CONTENT_FETCH, CONTENT_REPLICATE):
+        assert not admits(patterns, topic), f"observo can name {topic}"
+
+
+def test_observo_holds_the_driver_inventory_and_no_more(users) -> None:
+    """Root: what `AsyncBusConsumer` issues on `content.process`, plus the
+    reads a DLQ drainer needs (`test_a_dlq_writer_can_also_drain_it`), plus
+    `+info` and `+ping`. Selectors: the fact it publishes and the queue it
+    dead-letters into, and the disposal of that queue - never `XADD` on the
+    command stream it consumes, which is the forged-work shape broker#14 closed.
+    """
+    rules = users["observo"]
+    root, _ = split_rules(rules)
+    assert set(GROUP_CONSUMER_COMMANDS) <= set(root), "the driver's group commands"
+    assert {"+xlen", "+xrange", "+xinfo|stream"} <= set(root), "the drainer's reads"
+    assert {"+info", "+ping"} <= set(root)
+    assert admits(root_key_patterns(rules), CONTENT_PROCESS)
+    assert selector_patterns(rules, "+xadd") == {CONTENT_DERIVED, dlq_name(CONTENT_PROCESS)}
+    assert selector_patterns(rules, "+xdel") == {dlq_name(CONTENT_PROCESS)}
+    assert not admits(selector_patterns(rules, "+xadd"), CONTENT_PROCESS)
+    withheld = granted_commands(rules) & OBSERVO_WITHHELD
+    assert not withheld, f"observo holds {sorted(withheld)}, which nothing of its issues"
+
+
+def test_observo_stanza_names_the_source_its_inventory_was_read_off(users) -> None:
+    """The header says the command lists are observed. This one is not - the
+    consumer is not built - so the stanza says what stands in for a capture:
+    the driver the list was read off, and the issue whose consumer will be the
+    first to exercise it. The next reader can then tell a grant read off source
+    from one seen on the wire, which is the distinction the header exists for."""
+    prose = stanza("observo")
+    for needle in ("co-core-aio", "CannObserv/observo#629", "CannObserv/broker#62"):
+        assert needle in prose, f"observo's stanza does not name {needle}"
+
+
+def test_a_command_stream_has_one_probed_group_and_its_consumer_holds_the_group_commands(
+    users,
+) -> None:
+    """The generalisation of "a third command stream cannot arrive without a
+    grant or a red test", now that the third has a consumer other than
+    replicator.
+
+    A command stream takes exactly one group - the worker pool - and the probe
+    watches it under the name co-core derives. The service running that pool
+    must be able to run it: name the stream on its root, hold the driver's four
+    group commands there, and both write and empty the stream's dead-letter
+    queue, since the driver quarantines an undecodable frame there and the
+    consumer is the queue's drainer (`DLQ_DRAINERS`).
+    """
     assert COMMAND_STREAMS, "co-core classified no stream as a command"
     for topic in COMMAND_STREAMS:
-        assert admits(root_key_patterns(rules), topic), f"replicator cannot name {topic}"
+        consumer = probed_consumer(topic)
+        assert consumer is not None, f"{topic} is a command stream the probe watches no group on"
+        groups = [c.pending_group for c in STREAM_CHECKS if c.topic == topic]
+        assert groups == [group_name(topic, consumer)], f"{topic} carries {groups}"
+        rules = users[consumer]
+        assert admits(root_key_patterns(rules), topic), f"{consumer} cannot name {topic}"
+        root, _ = split_rules(rules)
+        missing = [command for command in GROUP_CONSUMER_COMMANDS if command not in root]
+        assert not missing, f"{consumer} lacks {missing} on {topic}"
+        queue = dlq_name(topic)
+        assert admits(selector_patterns(rules, "+xadd"), queue), f"{consumer} cannot write {queue}"
+        assert admits(selector_patterns(rules, "+xdel"), queue), f"{consumer} cannot empty {queue}"
+
+
+def test_watcher_issues_content_process_and_cannot_cap_it(users) -> None:
+    """Watcher's half of the pair, ahead of CannObserv/watcher#325: publish
+    `content.process`, consume `content.derived` in a group, write and empty
+    `content.derived.dlq`.
+
+    No `+xtrim` on the command stream, by design rather than omission: a cap
+    deletes commands the worker pool has not been delivered and orphans the PEL
+    entries naming them, so `content.process` takes `content.replicate`'s
+    **Never XTRIMmed** posture from its first day - in no `+xtrim` selector on
+    the instance - and not `content.fetch`'s, whose producer keeps an unissued
+    trim from the observed-inventory era. The `+xadd` therefore sits in a
+    selector of its own rather than joining the `(+xadd +xtrim ...)` one.
+    """
+    rules = users["watcher"]
+    assert admits(selector_patterns(rules, "+xadd"), CONTENT_PROCESS)
+    assert not admits(selector_patterns(rules, "+xtrim"), CONTENT_PROCESS)
+    assert admits(root_key_patterns(rules), CONTENT_DERIVED), "watcher cannot read the facts"
+    assert not admits(selector_patterns(rules, "+xadd"), CONTENT_DERIVED), "a consumer forging them"
+    assert admits(selector_patterns(rules, "+xadd"), dlq_name(CONTENT_DERIVED))
+    assert admits(selector_patterns(rules, "+xdel"), dlq_name(CONTENT_DERIVED))
+    assert not admits(selector_patterns(rules, "+xtrim"), dlq_name(CONTENT_DERIVED))
 
 
 def test_default_is_declared_disabled_and_still_carries_a_password(users) -> None:
@@ -1348,7 +1501,7 @@ def test_the_probe_can_sweep_but_cannot_publish(tracked_acl_broker) -> None:
         client.xadd(CONTENT_REVISIONS, {"k": "v"})
 
 
-@pytest.mark.parametrize("topic", COMMAND_STREAMS)
+@pytest.mark.parametrize("topic", REPLICATOR_COMMAND_STREAMS)
 def test_replicator_can_dedupe_a_command_on_every_command_stream(tracked_acl_broker, topic) -> None:
     """The pure test above matches globs with ``fnmatch``; this one uses Redis's
     own matcher, on both of the commands these keys ever see.
@@ -1375,7 +1528,7 @@ def test_replicator_can_dedupe_a_command_on_every_command_stream(tracked_acl_bro
             refused()
 
 
-@pytest.mark.parametrize("topic", COMMAND_STREAMS)
+@pytest.mark.parametrize("topic", REPLICATOR_COMMAND_STREAMS)
 def test_replicator_can_count_a_commands_deliveries_on_every_command_stream(
     tracked_acl_broker, topic
 ) -> None:
@@ -1522,6 +1675,74 @@ def test_the_probe_can_dispose_of_one_dlq_entry_and_nothing_else(tracked_acl_bro
         assert probe.xrange(orphan)[0][0] == kept
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             probe.xdel(CONTENT_FETCH, stream_id)
+
+
+def test_observo_serves_the_processing_pair_and_is_refused_the_rest(tracked_acl_broker) -> None:
+    """The observo line exercised the way co-core-aio's driver will exercise it
+    (CannObserv/broker#62), on redis's own matcher.
+
+    The group is created at `$` by observo itself - it holds `+xgroup|create`,
+    and `MKSTREAM` is what the driver's `ensure_group` sends - so only the entry
+    seeded here is delivered. Then the read, the reclaim, the ack, the fact it
+    publishes, and the dead-letter queue it writes and empties. Every refusal
+    below is a boundary the issue names or a grant the driver has no use for.
+    """
+    client = tracked_acl_broker("observo")
+    group = group_name(CONTENT_PROCESS, "observo")
+    client.xgroup_create(CONTENT_PROCESS, group, id="$", mkstream=True)
+    with _seeder(tracked_acl_broker) as seeder:
+        command = seeder.xadd(CONTENT_PROCESS, {"k": "v"})
+    ((_stream, [(delivered, _fields)]),) = client.xreadgroup(
+        group, "worker", {CONTENT_PROCESS: ">"}, count=1
+    )
+    assert delivered == command, f"{group} was delivered {delivered}, not the entry seeded here"
+    client.xautoclaim(CONTENT_PROCESS, group, "worker", min_idle_time=0)
+    assert client.xack(CONTENT_PROCESS, group, command) == 1
+    assert client.xadd(CONTENT_DERIVED, {"k": "v"}), "observo cannot publish the fact"
+
+    queue = dlq_name(CONTENT_PROCESS)
+    parked = client.xadd(queue, {"k": "poison"})
+    assert client.xlen(queue) >= 1 and client.xrange(queue, min=parked, max=parked)
+    assert client.xdel(queue, parked) == 1, "observo can fill its queue and not empty it"
+
+    for refused in (
+        lambda: client.xadd(CONTENT_PROCESS, {"k": "forged"}),
+        lambda: client.xtrim(CONTENT_PROCESS, maxlen=0),
+        lambda: client.xpending(CONTENT_PROCESS, group),
+        lambda: client.xrange(CONTENT_BLOBS),
+        lambda: client.xadd(CONTENT_REVISIONS, {"k": "v"}),
+        lambda: client.xrange(CONTENT_DERIVED),
+        lambda: client.xreadgroup("observo.derived", "worker", {CONTENT_DERIVED: ">"}),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
+
+
+def test_watcher_issues_content_process_and_consumes_content_derived(tracked_acl_broker) -> None:
+    """Watcher's half of the pair on redis's own matcher, ahead of
+    CannObserv/watcher#325: the command it issues, the cap it is refused, the
+    fact stream it reads in a group and cannot publish to, and the queue it
+    writes and empties."""
+    client = tracked_acl_broker("watcher")
+    assert client.xadd(CONTENT_PROCESS, {"k": "v"}), "watcher cannot issue a process command"
+    with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+        client.xtrim(CONTENT_PROCESS, maxlen=0)
+
+    group = group_name(CONTENT_DERIVED, "watcher")
+    client.xgroup_create(CONTENT_DERIVED, group, id="$", mkstream=True)
+    with _seeder(tracked_acl_broker) as seeder:
+        fact = seeder.xadd(CONTENT_DERIVED, {"k": "v"})
+    ((_stream, [(delivered, _fields)]),) = client.xreadgroup(
+        group, "worker", {CONTENT_DERIVED: ">"}, count=1
+    )
+    assert delivered == fact
+    assert client.xack(CONTENT_DERIVED, group, fact) == 1
+    with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+        client.xadd(CONTENT_DERIVED, {"k": "forged"})
+
+    queue = dlq_name(CONTENT_DERIVED)
+    parked = client.xadd(queue, {"k": "poison"})
+    assert client.xdel(queue, parked) == 1
 
 
 def test_citest_cannot_name_a_production_topic(tracked_acl_broker) -> None:
