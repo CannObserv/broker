@@ -93,7 +93,10 @@ channel. `tests/deploy/test_skills_inventory.py` scans every committable file
 (tracked, plus untracked and unignored - what `git add -A` takes) with
 upstream's pattern, so a live URL fails the suite rather than relying on
 discipline. The same pattern by hand, before committing a session's output, is
-in the skill's `references/security.md`.
+in the skill's `references/security.md`. Run an exchange from the scratchpad,
+not this checkout: the skill's recipes write `read.json`, `post.json`,
+`listen.json` and the message body into the working directory, and a
+decrypted transcript left there is one `git add -A` from a commit.
 
 **Review and ship are the `-python-fastapi` variants, though broker is not a
 FastAPI service.** Their gate is this repo's gate - `pre-ship.sh` runs
