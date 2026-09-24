@@ -115,11 +115,7 @@ silently corrupts values.
   default is not always the whole rule: the LWW cap is `max(500, 10 x the set
   watcher republishes)`, and the set size is **read off the stream** each tick
   rather than mirrored, because a corpus size changes with no edit anywhere -
-  the one failure a mirror cannot cover (broker#44). Its span, what arrived
-  since the last tick, and a remembered span, largest wins (#45); a trimmed
-  window too narrow for one republish a period is refused, not read high
-  (#51). The replay in `tests/test_bus_health.py` is the evidence for both.
-  Group names are
+  the one failure a mirror cannot cover (broker#44, #45, #51). Group names are
   **derived** via co-core's `group_name()`, never spelled - that is the point of
   cannobserv#384 and the reason this repo depends on co-core at all. See
   `docs/BUS-HEALTH.md`, "Mirrored constants" and "The one cap that is read, not
