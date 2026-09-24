@@ -447,7 +447,9 @@ class StreamCheck:
     # is why `content.blobs` carries one while stating no opinion on its length
     # or its age (CannObserv/broker#20).
     warn_undelivered_age_seconds: float | None = None
-    # Carved out of archiver's drain loop's trim set: capping a command stream
+    # In no trim path - absent from archiver's `trim_topics` allowlist
+    # (CannObserv/archiver#239) and from every `+xtrim` selector in
+    # deploy/redis-acl.conf (CannObserv/broker#14): capping a command stream
     # would delete commands the consumer group has not delivered and orphan the
     # PEL entries naming them. Growth is therefore expected, and a breach is a
     # volume milestone rather than a broken cap.
