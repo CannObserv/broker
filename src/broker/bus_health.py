@@ -211,9 +211,12 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # What no duration sizes is a consumer alive and not reading. Replicator names
 # two: one stalled-provider attempt (a 30 s download and a 120 s create timeout,
 # each with the SDK's retry deadline on top - inside five minutes, not by much),
-# and CannObserv/replicator#98, where recovery re-claims its own failing entry
-# every cycle and never issues XREADGROUP. The second is a state, not a
-# duration, and to a positional check it looks like a gone consumer. Both hold
+# and recovery re-claiming its own failing entry every cycle so XREADGROUP
+# never runs. The second is a state, not a duration, and to a positional check
+# it looks like a gone consumer. Replicator's own case of it is fixed -
+# CannObserv/replicator#98 takes a non-blocking look at the stream after every
+# reclaim, so its head waits at most two handler durations - but any consumer
+# can still take the shape. Both hold
 # a delivered entry, which the 2026-09-16 consumer did not, so
 # `evaluate_undelivered` words the finding by the group's pending count - read
 # from the same reply as its position - instead of naming a stopped reader.
@@ -1364,7 +1367,8 @@ def evaluate_undelivered(
     as replicator's does (CannObserv/replicator#96) - so its consumer has
     stopped reading. A group holding a delivery has a consumer that took one and has not read
     since - inside one long attempt, re-claiming its own retry instead of
-    reading (CannObserv/replicator#98), or gone while holding it. The position
+    reading (replicator's shape until CannObserv/replicator#98), or gone while
+    holding it. The position
     cannot tell those apart, and the message says so rather than naming the
     first (CannObserv/broker#30).
     """
@@ -1404,7 +1408,8 @@ def evaluate_undelivered(
         body = (
             f"Pending is {pending} - delivered and not acked - so the group's consumer took "
             "delivery and has not read since: inside one long handler, re-claiming its own "
-            "retry instead of reading (replicator's shape: CannObserv/replicator#98), or gone "
+            "retry instead of reading (the shape replicator had until "
+            "CannObserv/replicator#98), or gone "
             "while holding it. A connected consumer is not the all-clear here; run "
             f"`XPENDING {check.topic} {check.pending_group} - + 10` twice - a delivery count "
             "that climbs is a consumer alive and retrying"

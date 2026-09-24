@@ -83,8 +83,10 @@ direction - a threshold on a row with no group - at import.
 
 **What no duration sizes: a consumer alive and not reading**, since a reader
 inside a handler is not reading - one stalled-provider attempt, or recovery
-re-claiming its own failing entry every cycle so `XREADGROUP` never runs
-(CannObserv/replicator#98). Both hold a delivered entry, so the finding words
+re-claiming its own failing entry every cycle so `XREADGROUP` never runs.
+Replicator had the second until CannObserv/replicator#98 (2026-09-22), which
+bounds its head at two handler durations; any consumer can still take the
+shape. Both hold a delivered entry, so the finding words
 itself by the group's `pending` count: at 0, a stopped reader (for a consumer
 that acks after handling, as replicator's does); above 0, run `XPENDING <stream>
 <group> - + 10` twice. A delivery count that climbs is a consumer alive and

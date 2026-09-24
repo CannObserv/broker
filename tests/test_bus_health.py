@@ -504,8 +504,10 @@ def test_behind_a_held_delivery_is_not_called_a_stopped_reader() -> None:
 
     Replicator named two in CannObserv/replicator#96: one stalled-provider
     attempt, and recovery re-claiming its own failing entry every cycle so that
-    ``XREADGROUP`` is never issued (CannObserv/replicator#98) - a live consumer,
-    logging, whose group has not moved. Both hold a delivered entry. "XPENDING
+    ``XREADGROUP`` is never issued - a live consumer, logging, whose group has
+    not moved. Replicator fixed its own case of the second in
+    CannObserv/replicator#98; any consumer can still take the shape. Both hold a
+    delivered entry. "XPENDING
     reads the healthy 0" is false there, and "check it is connected" sends the
     reader to the one thing that will look fine.
     """
@@ -522,7 +524,9 @@ def test_behind_a_held_delivery_is_not_called_a_stopped_reader() -> None:
     assert "healthy 0" not in finding.message
     assert "stopped READING" not in finding.message
     assert "Pending is 1 - delivered and not acked" in finding.message
-    assert "replicator's shape: CannObserv/replicator#98" in finding.message
+    # replicator had this shape until CannObserv/replicator#98 fixed it on
+    # 2026-09-22; the state stays possible for any consumer, the attribution not
+    assert "the shape replicator had until CannObserv/replicator#98" in finding.message
     assert "XPENDING t g - + 10" in finding.message
 
 
