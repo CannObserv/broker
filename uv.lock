@@ -36,7 +36,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "co-core", specifier = ">=0.13.1,<0.14" },
+    { name = "co-core", specifier = ">=0.19.4,<0.20" },
     { name = "google-cloud-storage", specifier = ">=2,<4" },
     { name = "python-json-logger", specifier = ">=4.0.0,<5" },
     { name = "redis", extras = ["hiredis"], specifier = ">=5" },
@@ -277,15 +277,15 @@ wheels = [
 
 [[package]]
 name = "co-core"
-version = "0.13.2"
+version = "0.19.4"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "dateparser" },
     { name = "pydantic" },
 ]
-sdist = { path = "co_core-0.13.2.tar.gz" }
+sdist = { path = "co_core-0.19.4.tar.gz" }
 wheels = [
-    { path = "co_core-0.13.2-py3-none-any.whl" },
+    { path = "co_core-0.19.4-py3-none-any.whl" },
 ]
 
 [[package]]
