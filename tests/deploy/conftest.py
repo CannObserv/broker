@@ -23,6 +23,11 @@ also why the throwaway one is no longer called ``live_acl_broker``. Standing
 beside a fixture that really is the live broker, that name said the opposite of
 what it is, and the test that compares the two is exactly where a reader must
 not have to guess which is which.
+
+Both throwaway servers - ``tracked_acl_broker``'s, and the one that loads the
+node's *saved* ACL to compare it with the live one (CannObserv/broker#54) - are
+spawned by ``acl_server``, which is why it is a context manager here rather than
+the body of one fixture.
 """
 
 import hashlib
