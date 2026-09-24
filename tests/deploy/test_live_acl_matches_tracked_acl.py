@@ -580,8 +580,11 @@ def _saved_rules(saved: str, workdir: Path, users) -> tuple[dict[str, dict | Non
     )
     with acl_server(acl, workdir) as connect:
         reader = connect(SAVED_READER)
-        rules = {user: reader.acl_getuser(user) for user in users}
-        return rules, reader.info("server")["redis_version"]
+        try:
+            rules = {user: reader.acl_getuser(user) for user in users}
+            return rules, reader.info("server")["redis_version"]
+        finally:
+            reader.close()
 
 
 def _saved_mismatches(saved: dict, live: dict) -> list[str]:
