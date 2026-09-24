@@ -342,21 +342,30 @@ def test_service_users_can_read_the_version_and_answer_a_health_check(users, use
 def test_a_dlq_writer_can_also_drain_it(users, user) -> None:
     """CannObserv/broker#1 Phase 5 moved DLQ triage from archiver to each
     stream's own consumer, and the draft predates that. Draining is *audit, back
-    up, trim* - a user that can `XADD` a DLQ but not read or trim it can create a
-    queue it is then unable to empty.
+    up, dispose* - a user that can `XADD` a DLQ but not read or dispose of it can
+    create a queue it is then unable to empty.
 
-    `+xtrim` is asked of the **selector** rather than of the root rules, since
-    broker#14 took it off every root permission set: on the root it applied to
-    every pattern the user holds, including the streams it only reads.
+    Disposal is `+xtrim` **or** `+xdel`. The draft said trim, and until
+    CannObserv/broker#59 every writer held both; archiver's triage
+    (CannObserv/archiver#238) disposes by `XDEL` of the ids an operator named and
+    never trims, because `XTRIM MINID` also removes an entry that landed while
+    the rest were being read. Either command empties the queue, which is the
+    property this asks for.
+
+    Asked of the **selectors** rather than of the root rules, since broker#14
+    took both commands off every root permission set: on the root they applied
+    to every pattern the user holds, including the streams it only reads.
     """
     queues = [p for p in key_patterns(users[user]) if p.endswith(".dlq")]
     if not queues:
         pytest.skip(f"{user} writes no DLQ")
     for command in ("+xrange", "+xlen", "+xinfo|stream"):
         assert command in users[user], f"{user} cannot drain its own DLQ: missing {command}"
-    trimmable = selector_patterns(users[user], "+xtrim")
+    disposable = selector_patterns(users[user], "+xtrim") | selector_patterns(users[user], "+xdel")
     for queue in queues:
-        assert admits(trimmable, queue), f"{user} cannot trim {queue}, which it writes"
+        assert admits(disposable, queue), (
+            f"{user} can neither XTRIM nor XDEL {queue}, which it writes"
+        )
 
 
 # --- what each service may PUBLISH (CannObserv/broker#14) ---
@@ -567,20 +576,23 @@ def test_no_selector_can_trim_a_stream_the_inventory_never_xtrims(users) -> None
 #: What archiver itself trims: `trim_topics`, the allowlist its outbox drain
 #: loop trims and nothing else (CannObserv/archiver#239), passed as a literal in
 #: archiver's `src/api/main.py`. One `XTRIM` in the process, verified at every
-#: call site answering CannObserv/archiver#234 (2026-09-18); nothing in
-#: archiver, co-core or co-core-aio issues `XDEL`. Mirrored, not derived - the
-#: broker cannot read another repository's call sites - so it names its source
-#: the way the retention caps in `src/broker/bus_health.py` do.
+#: call site answering CannObserv/archiver#234 (2026-09-18). Its DLQ triage
+#: (CannObserv/archiver#238) disposes by `XDEL` and never trims, so the queues
+#: it drains are no longer in the `+xtrim` selector (CannObserv/broker#59).
+#: Mirrored, not derived - the broker cannot read another repository's call
+#: sites - so it names its source the way the retention caps in
+#: `src/broker/bus_health.py` do.
 ARCHIVER_TRIMS = frozenset({INFO_CHANGES})
 
-#: The caller archiver's dead-letter disposals are held for. Both its `+xtrim`
-#: and its `+xdel` on the two queues it drains issue from nothing today; the
-#: triage tooling that will issue them is filed so that the grant names one.
+#: The caller archiver's `+xdel` on the two queues it drains is held for: the
+#: triage tooling, `TRIAGE_DLQS` in archiver's `src/core/changes/dlq_triage.py`.
+#: It issues nothing until archiver v4.17.0 deploys; until then the grant names
+#: the issue that will issue it.
 ARCHIVER_DLQ_TRIAGE = "CannObserv/archiver#238"
 
 
 def test_archiver_trim_grant_is_its_trim_allowlist(users) -> None:
-    """Archiver's `+xtrim` equals `trim_topics`, on every pattern but its queues.
+    """Archiver's `+xtrim` equals `trim_topics`, pattern for pattern.
 
     One decision held in two repositories, each pinning its own half
     (CannObserv/broker#55) and citing the other's (CannObserv/archiver#262):
@@ -600,39 +612,41 @@ def test_archiver_trim_grant_is_its_trim_allowlist(users) -> None:
     Exact over the whole selector, pattern for pattern, where
     `test_a_service_can_trim_only_what_it_publishes` only bounds it by publish
     and CannObserv/archiver#234's check here asked only the canonical streams.
-    The rest of the selector is the queues archiver drains (`DLQ_DRAINERS`) -
-    its drainer role, not its drain loop, so outside `trim_topics` - and the
-    test below holds them to a named caller.
+    The queues archiver drains are not in it: its triage disposes by `XDEL`
+    (CannObserv/broker#59), and the test below holds that grant to a caller.
     """
-    queues = {dlq for dlq, drainer in DLQ_DRAINERS.items() if drainer == "archiver"}
-    assert queues, "archiver drains no queue - has the drainer assignment moved?"
     trimmable = selector_patterns(users["archiver"], "+xtrim")
-    expected = ARCHIVER_TRIMS | queues
-    assert trimmable == expected, (
-        f"archiver's +xtrim selector is missing {sorted(expected - trimmable)} and adds "
-        f"{sorted(trimmable - expected)}; its trim_topics allowlist is "
+    assert trimmable == ARCHIVER_TRIMS, (
+        f"archiver's +xtrim selector is missing {sorted(ARCHIVER_TRIMS - trimmable)} and adds "
+        f"{sorted(trimmable - ARCHIVER_TRIMS)}; its trim_topics allowlist is "
         f"{sorted(ARCHIVER_TRIMS)} (CannObserv/archiver#239) - widen both or neither"
     )
 
 
 def test_archiver_dead_letter_disposals_name_their_caller(users) -> None:
-    """The part of archiver's disposal grant `trim_topics` does not cover.
+    """Archiver's `+xdel` on the two queues it drains, and who issues it.
 
-    `+xtrim` and `+xdel` on the two queues it drains stay
-    (`test_a_dlq_writer_can_also_drain_it`). What this adds is the rule
-    `brokeradmin`'s stanza is already held to: a grant nothing issues names its
-    caller, or the next reader cannot tell a decision from an oversight.
+    The grant stays (`test_a_dlq_writer_can_also_drain_it`,
+    `test_the_drainer_can_delete_from_every_queue_it_drains_and_can_read`). What
+    this adds is the rule `brokeradmin`'s stanza is already held to: a grant
+    nothing issues names its caller, or the next reader cannot tell a decision
+    from an oversight. Its caller is archiver's triage, which issues nothing
+    until archiver v4.17.0 deploys.
+
+    Archiver pins the other half: `TRIAGE_DLQS`, derived from the groups it
+    consumes, is held to these two queues by
+    `test_triage_dlqs_are_the_two_queues_broker_grants_xdel_on`
+    (CannObserv/archiver#238). A queue added there without the grant here is a
+    NOPERM on the discard route, which archiver returns as a 503.
     """
     rules = users["archiver"]
-    trimmable = selector_patterns(rules, "+xtrim")
     prose = stanza("archiver")
-    held = sorted((trimmable - ARCHIVER_TRIMS) | selector_patterns(rules, "+xdel"))
+    held = sorted(selector_patterns(rules, "+xdel"))
     assert held, "archiver holds no dead-letter disposal - has the drainer assignment moved?"
     unexplained = [queue for queue in held if queue not in prose]
     assert not unexplained and ARCHIVER_DLQ_TRIAGE in prose, (
-        f"archiver holds disposal on {held} and issues none of it; the stanza in "
-        f"{ACL_FILE.name} must name each queue and {ARCHIVER_DLQ_TRIAGE}, the caller it is "
-        f"held for (missing: {unexplained})"
+        f"archiver holds +xdel on {held}; the stanza in {ACL_FILE.name} must name each "
+        f"queue and {ARCHIVER_DLQ_TRIAGE}, the caller it is held for (missing: {unexplained})"
     )
 
 
