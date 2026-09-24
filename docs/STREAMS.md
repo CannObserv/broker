@@ -52,7 +52,8 @@ grants** (CannObserv/broker#60). Nothing trims the five `content.*` streams:
 no producer passes a `maxlen` (CannObserv/watcher#317, CannObserv/replicator#106)
 and archiver's trim allowlist is `info.changes` alone (CannObserv/archiver#239).
 `maxmemory` is their only bound, so the probe gives them no `XLEN` threshold -
-the same test pins the phrase to exactly the rows the probe leaves
+`test_the_probe_and_the_inventory_agree_on_which_streams_have_no_cap`, in
+the same file, pins the phrase to exactly the rows the probe leaves
 unthresholded. Only `content.replicate` is also **Never XTRIMmed**; Watcher's
 `+xtrim` selector still names `content.fetch` and `content.revisions`, and
 Replicator's names `content.blobs` and `content.artifacts`, unissued. Whether
