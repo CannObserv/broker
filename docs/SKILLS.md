@@ -70,11 +70,11 @@ It measures and never curates; a budget warning in its run means someone runs
 - **A row's deltas are derived, and a merge can stale them.** `delta_tokens`
   and `delta_days` are computed against whatever row precedes it at append
   time; a merge that lands a row in between leaves them describing the wrong
-  predecessor (#56). The run warns on it (`--repair --dry-run`). Fix on a
-  branch cut from current `main`, merged before `main` moves on:
-  `record-telemetry.sh --repair`, committed on its own. After merging or
-  rebasing `main` into a curation branch, run it there too. Rewrite a run's
-  own row with `--amend`, never by hand.
+  predecessor (CannObserv/broker#56, gregoryfoster/skills#325). The run warns
+  on it (`--repair --dry-run`). Fix on a branch cut from current `main`, merged
+  before `main` moves on: `record-telemetry.sh --repair`, committed on its own.
+  After merging or rebasing `main` into a curation branch, run it there too.
+  Rewrite a run's own row with `--amend`, never by hand.
 - **The workflow is generated.** Re-run the installer rather than editing it.
   That includes the em dashes in upstream's text, which the no-em-dash rule
   doesn't cover here.
