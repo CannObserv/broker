@@ -348,9 +348,9 @@ def test_a_dlq_writer_can_also_drain_it(users, user) -> None:
     Disposal is `+xtrim` **or** `+xdel`. The draft said trim, and until
     CannObserv/broker#59 every writer held both; archiver's triage
     (CannObserv/archiver#238) disposes by `XDEL` of the ids an operator named and
-    never trims, because `XTRIM MINID` also removes an entry that landed while
-    the rest were being read. Either command empties the queue, which is the
-    property this asks for.
+    never trims, because an `XTRIM MINID` boundary chosen after the read also
+    removes an entry that landed during it. Either command empties the queue,
+    which is the property this asks for.
 
     Asked of the **selectors** rather than of the root rules, since broker#14
     took both commands off every root permission set: on the root they applied

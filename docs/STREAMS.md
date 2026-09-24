@@ -232,16 +232,21 @@ re-dump only if you want the entries in `redis-cli`'s own framing.
 
 ```bash
 redis-cli XLEN content.fetch.dlq                    # what you are about to delete
-redis-cli --no-raw XRANGE content.fetch.dlq - + > /var/tmp/fetch-dlq-$(date +%F).txt
+redis-cli XINFO STREAM content.fetch.dlq | grep -A1 last-generated-id   # the boundary, FIRST
+redis-cli --no-raw XRANGE content.fetch.dlq - <last-generated-id> > /var/tmp/fetch-dlq-$(date +%F).txt
 # read it: every payload residue, or is a real permanent failure hiding in there?
-redis-cli XINFO STREAM content.fetch.dlq | grep -A1 last-generated-id
 redis-cli XTRIM content.fetch.dlq MINID <last-generated-id, +1ms>
-redis-cli XLEN content.fetch.dlq                    # -> 0
+redis-cli XLEN content.fetch.dlq                    # -> 0, or what landed since the boundary
 ```
 
 `XTRIM MINID`, not `DEL`: the boundary confines the deletion to the entries you
-actually audited - anything dead-lettered while you were reading carries a higher
-id and survives - and the key plus any consumer groups stay in place.
+actually audited, and the key plus any consumer groups stay in place. **The
+boundary is taken before the read, and the dump stops at it.** Taken after -
+this runbook's order until CannObserv/broker#59 - it lands above anything
+dead-lettered while you were reading, and the trim removes those unread. Taken
+first, a later entry carries a higher id and survives, and everything the trim
+removes is in the dump. The same hazard is why archiver's triage disposes by
+`XDEL` of named ids (CannObserv/archiver#238).
 
 **For `*.dlq` keys only.** Two rows above say **Never XTRIMmed** -
 `content.replicate` and `info.registry` - and this procedure pointed at either
