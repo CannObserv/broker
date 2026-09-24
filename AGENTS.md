@@ -72,7 +72,7 @@ silently corrupts values.
   incident.
 - **`ACL LOG` is evidence: never reset it, and name every denial you cause.**
   An operator reads it for ACL faults, and Redis clears it only whole, so a
-  benign entry stays in the log for good. The remedy is a row in
+  benign entry stays until a restart or 128 newer entries. The remedy is a row in
   `deploy/redis-acl.conf`'s *Denials that are not faults* list, in the same
   session. Check a live read against the user's line before you run it. A
   peer agent's denials are **backfilled after**, not announced before: the peer
