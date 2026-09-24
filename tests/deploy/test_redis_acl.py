@@ -965,6 +965,115 @@ def test_the_operator_identity_says_why_its_trim_stops_at_dead_letter_queues(use
     )
 
 
+# --- ACL LOG's other half: denials that are not faults (broker#48) ---
+
+NOT_A_FAULT_TITLE = "# DENIALS THAT ARE NOT FAULTS"
+
+#: Every runbook and deploy doc that reads `ACL LOG` for the operator.
+RUNBOOKS = sorted(
+    [
+        *(Path(__file__).resolve().parents[2] / "docs").glob("*.md"),
+        *(ACL_FILE.parent).glob("*.md"),
+    ]
+)
+
+# `#   <user> <reason> <object> <command> <utc> <who>: <why>`, one row per line.
+# Indented further than prose (`# `), which is how a malformed row is told from a
+# sentence: any line in the section indented like a row has to parse as one.
+_NOT_A_FAULT_ROW = re.compile(
+    r"^#\s{3,}(?P<user>[a-z]+)\s+(?P<reason>command|key|auth)\s+(?P<object>\S+)\s+"
+    r"(?P<command>[a-z|]+|-)\s+(?P<utc>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s+(?P<why>\S.*:\s\S.*)$"
+)
+
+
+def not_a_fault_rows() -> list[dict[str, str]]:
+    """The rows under the title, up to the first line that is not a comment."""
+    lines = ACL_FILE.read_text().splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith(NOT_A_FAULT_TITLE)]
+    assert len(starts) == 1, f"{ACL_FILE.name} needs exactly one '{NOT_A_FAULT_TITLE}' section"
+    rows = []
+    for line in lines[starts[0] + 1 :]:
+        if not line.startswith("#"):
+            break
+        if line.startswith("#   "):
+            match = _NOT_A_FAULT_ROW.match(line)
+            assert match, f"not a well-formed not-a-fault row: {line!r}"
+            rows.append(match.groupdict())
+    return rows
+
+
+def holds(granted: set[str], command: str) -> bool:
+    """Whether a `+command` set grants ``command`` (`container|sub` or whole)."""
+    categories = {rule for rule in granted if rule.startswith("+@")} - {"+@all"}
+    assert not categories, f"category grants {categories} need resolving before this can answer"
+    container = command.partition("|")[0]
+    return bool(granted & {"+@all", f"+{command}", f"+{container}"})
+
+
+def test_the_not_a_fault_list_has_rows_and_names_real_users(users) -> None:
+    """An operator reading `ACL LOG` needs both halves of the explanation.
+
+    Grants read off a denial are named in each user's stanza; a denial that
+    produced no grant and never will - a peer's verification probe, an agent's
+    ad-hoc read, a runbook run against a stale credential - is named here
+    (broker#48). A row for a user that does not exist explains nothing.
+    """
+    rows = not_a_fault_rows()
+    assert rows, f"{NOT_A_FAULT_TITLE} has no rows"
+    strangers = sorted({row["user"] for row in rows} - set(users))
+    assert not strangers, f"not-a-fault rows name users with no ACL: {strangers}"
+
+
+def test_a_not_a_fault_row_is_still_a_denial(users) -> None:
+    """The row goes stale the moment a grant would explain the same entry.
+
+    A command row names a command the user still cannot issue by any route. A
+    key row names the command that was refused on the key: the user holds that
+    command - otherwise Redis logs `reason command`, not `key` - and no route
+    that grants it admits the key. Once either stops being true the entry has
+    moved to the other half, the grant provenance in the user's stanza, and the
+    row has to follow it rather than explain a denial that can no longer occur.
+    """
+    stale = []
+    for row in not_a_fault_rows():
+        rules = users[row["user"]]
+        root, _ = split_rules(rules)
+        if row["reason"] == "command":
+            if row["command"] != row["object"] or holds(granted_commands(rules), row["object"]):
+                stale.append(row)
+        elif row["reason"] == "key":
+            command = row["command"]
+            on_root = holds({r for r in root if r.startswith("+")}, command)
+            reaches = (on_root and admits(root_key_patterns(rules), row["object"])) or admits(
+                selector_patterns(rules, f"+{command}"), row["object"]
+            )
+            if not holds(granted_commands(rules), command) or reaches:
+                stale.append(row)
+        elif row["object"] != "AUTH" or row["command"] != "-":
+            stale.append(row)
+    assert not stale, f"these not-a-fault rows no longer describe a denial: {stale}"
+
+
+def test_every_acl_log_read_in_a_runbook_names_both_explanations() -> None:
+    """A runbook that reads `ACL LOG` must say what counts as explained.
+
+    "Quiet: nothing newer than the last fix" treated every benign entry as the
+    thing to chase, so each conscientious check raised the noise floor of the
+    next one (broker#48). The check is now: an entry is explained if a stanza's
+    grant provenance or the not-a-fault list names it, and anything in neither
+    is the fault.
+    """
+    unnamed = [
+        f"{path.name}:{number}"
+        for path in RUNBOOKS
+        for number, line in enumerate(path.read_text().splitlines(), 1)
+        if re.search(r"\bACL LOG\b(\s+\d+)?\s*(#|$)", line)
+        and "rcli" in line
+        and "not-a-fault" not in line
+    ]
+    assert not unnamed, f"these ACL LOG reads do not name the not-a-fault list: {unnamed}"
+
+
 # --- does it actually parse? ---
 
 
