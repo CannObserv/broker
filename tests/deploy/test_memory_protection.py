@@ -377,9 +377,12 @@ def test_live_prefer_reaches_nothing() -> None:
     if _read_if_installed(INSTALLED[EARLYOOM]) is None:
         pytest.skip("earlyoom not configured on this host")
     live = _live_processes()
-    roots = {comm: adj for comm, adj in live if comm in EXE_DEV_ROOTS}
+    roots: dict[str, set[int]] = {}
+    for comm, adj in live:
+        if comm in EXE_DEV_ROOTS:
+            roots.setdefault(comm, set()).add(adj)
     assert roots.keys() == set(EXE_DEV_ROOTS), f"exe.dev's roots not found: {roots}"
-    assert set(roots.values()) == {EXEMPT}, f"exe.dev's roots left -1000: {roots}"
+    assert all(adjs == {EXEMPT} for adjs in roots.values()), f"a root left -1000: {roots}"
     prefer = flag(earlyoom_args(), "--prefer")
     reachable = [(comm, adj) for comm, adj in live if re.search(prefer, comm) and adj != EXEMPT]
     assert not reachable, f"--prefer now reaches dev tooling: {reachable}"
