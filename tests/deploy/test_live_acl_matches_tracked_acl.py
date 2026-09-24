@@ -82,6 +82,10 @@ from tests.deploy.conftest import (
     acl_server,
     parse_users,
 )
+from tests.deploy.test_installed_redis_config_matches_repo import (
+    REPO_REDIS_CONF,
+    parse_directives,
+)
 
 TRACKED = parse_users(ACL_FILE.read_text())
 TRACKED_USERS = tuple(sorted(TRACKED))
@@ -540,19 +544,16 @@ def test_the_node_holds_no_plaintext_for_a_service_user(node_passwords) -> None:
 def node_saved_acl(live_client) -> str:
     """The broker's ACL as ``ACL SAVE`` last wrote it, read through ``sudo -n``, or a skip.
 
-    The path is the broker's own answer to ``CONFIG GET aclfile`` rather than a
-    constant, so what is read is the file the next restart will load. It is
-    ``0640`` and group ``redis``, and pytest runs as neither. What crosses back is
-    digests and rules only - ``ACL SAVE`` never writes a plaintext password, and
-    ``_digests_only`` refuses the file unread if something else did.
+    The path is the tracked ``aclfile`` directive, not ``CONFIG GET aclfile``:
+    ``+config|get`` also reads ``requirepass``, so its callers are kept to the one
+    its stanza names (CannObserv/broker#50), and
+    ``test_every_tracked_directive_is_in_force`` already holds the live value to
+    this one. It is ``0640`` and group ``redis``, and pytest runs as neither.
+    What crosses back is digests and rules only - ``ACL SAVE`` never writes a
+    plaintext password, and ``_digests_only`` refuses the file unread if
+    something else did.
     """
-    configured = live_client.config_get("aclfile").get("aclfile")
-    if not configured:
-        pytest.fail(
-            "the broker runs with no aclfile - `ACL SAVE` has nowhere to write, so every "
-            "live grant reverts to redis.conf's at the next restart"
-        )
-    path = _on_the_node(Path(configured))
+    path = _on_the_node(Path(parse_directives(REPO_REDIS_CONF.read_text())["aclfile"]))
     result = _sudo("cat", str(path), text=True)
     assert result.returncode == 0, f"cannot read {path} through sudo -n:\n{result.stderr}"
     return _digests_only(
