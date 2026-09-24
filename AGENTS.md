@@ -70,6 +70,17 @@ silently corrupts values.
   purpose: `brokeradmin`'s `+xtrim` stops at `~*.dlq`, the only thing keeping an
   operator off a **Never XTRIMmed** stream (broker#34). Do not widen it in an
   incident.
+- **`ACL LOG` is evidence: never reset it, and name every denial you cause.**
+  An operator reads it for ACL faults, and Redis clears it only whole, so a
+  benign entry stays in the log for good. The remedy is a row in
+  `deploy/redis-acl.conf`'s *Denials that are not faults* list, in the same
+  session. Check a live read against the user's line before you run it. A
+  peer agent's denials are **backfilled after**, not announced before: the peer
+  cannot read this log. Name each timestamp (server time minus `age-seconds`;
+  7.0.15 has no `timestamp-created`), and the peer attributes the entry from
+  its own session logs. `tests/deploy/test_redis_acl.py` fails a row once a
+  grant would admit it; at that point the denial belongs in the user's stanza
+  as grant provenance (broker#48).
 - **Credentials never reach a command line.** Runbooks authenticate with
   `REDISCLI_AUTH` plus `--user`, never a `redis://user:<pw>@host` URL and never
   `-u`, `-a` or `--pass`: `argv` is readable from `ps`, kept in root's shell
