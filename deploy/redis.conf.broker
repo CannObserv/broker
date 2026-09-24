@@ -61,17 +61,21 @@ appendfsync everysec
 # "OOM command not allowed" errors that a producer can retry through. Archiver's
 # outbox does - that error is classified TRANSIENT in _TRANSIENT_PUBLISH_ERRORS
 # in archiver's src/core/changes/publisher.py, and THE TWO MUST STAY IN STEP.
-# Watcher's and replicator's behaviour under OOM is unverified (broker#1 R5).
+# Watcher and replicator retry through it too, so hitting the cap stalls the
+# instance and loses no writes (CannObserv/watcher#288, CannObserv/replicator#79).
 #
-# D5 says re-derive rather than inherit. 512mb was chosen for a broker sharing a
-# 7.2Gi host with Postgres and four services. This host has 1.9Gi and runs
-# nothing else; live usage on the source broker is 20.68MB. 512mb is ~27% of
-# RAM, leaving room for the fork and copy-on-write of an AOF rewrite, and is
-# still ~25x current usage. Same number, arrived at independently.
-#
-# Stale since 2026-09-16 (broker#21): the node is 8 GB (7.75 GiB, so 512mb is
-# ~6.5%) and dev tooling does run here. The number is unchanged and still bounds
-# the fork; re-deriving it is owed jointly with archiver, per the seam above.
+# Re-derived jointly with archiver on 2026-09-24 for the 8 GB node
+# (CannObserv/archiver#231); the measurement is there. The streams that have a
+# retention cap - info.changes, info.registry, the two LWW streams - hold ~92MB
+# at full retention. Five do not: content.fetch, content.blobs,
+# content.revisions, content.artifacts and content.replicate are bounded by
+# this cap alone (broker#60), so the rest of it is their runway, not headroom.
+# That makes the sizing question how long the 75% memory warning gives operators
+# before the stall: 128MB between warning and cap, ~49k fetch cycles at ~2.6KB
+# each - years at the 2026-09 rate, ~18 days at the largest burst on record held
+# sustained. A larger cap bounds nothing, only delays the stall, and would move
+# the MemoryLow= reservations with it. Revisit when watcher's production fetch
+# rate is known.
 maxmemory 512mb
 maxmemory-policy noeviction
 

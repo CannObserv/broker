@@ -68,16 +68,13 @@ cannot reach production topic names*).
 Redis ACLs cannot partition by database index at all, which is why neither
 substitutes for the other. Doing them together means R4 closes in one event.
 
-Also decided in this window and requiring no change: **`maxmemory` stays at
-512 MB.** D5 asked for it to be re-derived rather than inherited and it was -
-~27% of this node's 1.9 GiB, room for an AOF-rewrite fork's copy-on-write,
-~19x current usage. Recorded so a future window does not re-litigate it. It is
-live-settable via `CONFIG SET` anyway, so it never needs a window.
-
-**That rationale is stale.** Since 2026-09-16 (broker#21) the node is 8 GB -
-512 MB is ~6.5% of 7.75 GiB - and dev tooling runs beside it. The number stands
-until re-derived, and that is a joint decision with archiver
-(`deploy/redis.conf.broker`, *the OOM seam*), not one to make here.
+Also requiring no change in a window: **`maxmemory` stays at 512 MB.** It was
+re-derived with archiver on 2026-09-24 for the 8 GB node
+(CannObserv/archiver#231). The reasoning is in `deploy/redis.conf.broker`, beside
+the directive: the capped streams need ~92 MB, and the rest of the cap is runway
+for the five streams nothing trims (broker#60). It is live-settable via
+`CONFIG SET` anyway, so it never needs a window, and changing it stays a joint
+decision with archiver (*the OOM seam*).
 
 ---
 
