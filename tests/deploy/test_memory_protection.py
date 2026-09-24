@@ -248,7 +248,7 @@ def test_the_bus_is_out_of_earlyooms_reach_but_not_exempt(tracked: Path) -> None
     resort is a kill ``Restart=`` recovers in 100 ms. Debian gives the system
     ``dbus-daemon`` the same.
     """
-    assert -1000 < oom_score_adjust(tracked) <= -900
+    assert EXEMPT < oom_score_adjust(tracked) <= -900
 
 
 def test_systemd_split_is_the_measured_one() -> None:
