@@ -209,18 +209,20 @@ def _field_mismatches(
 ) -> list[str]:
     """``<user>.<field>: <difference>`` for each field the two reports disagree on.
 
-    Passwords are compared by 12-character digest prefix - enough to tell two
-    apart, and all a failure message needs to carry of a credential's hash.
+    Passwords are compared whole and reported by 12-character digest prefix -
+    enough to tell two apart, and all a failure message needs to carry of a
+    credential's hash.
     """
     found = []
     for field in sorted(set(want) | set(live)):
         if field == skip:
             continue
         a, b = _canonical(want.get(field), field), _canonical(live.get(field), field)
+        if a == b:
+            continue
         if field == "passwords":
-            a, b = frozenset(h[:12] for h in a), frozenset(h[:12] for h in b)
-        if a != b:
-            found.append(f"{user}.{field}: {_difference(a, b, want_is)}")
+            a, b = frozenset(h[:12] for h in a - b), frozenset(h[:12] for h in b - a)
+        found.append(f"{user}.{field}: {_difference(a, b, want_is)}")
     return found
 
 
