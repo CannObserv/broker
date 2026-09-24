@@ -586,7 +586,7 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # warn_length: nothing trims them. No producer passes a maxlen
     # (CannObserv/watcher#317, CannObserv/replicator#106) and archiver's trim
     # allowlist is info.changes alone, so maxmemory is their only bound and the
-    # memory check is the finding that bounds them (CannObserv/broker#60).
+    # memory check is the finding that watches that bound (CannObserv/broker#60).
     # Retention is each producer's to decide - content.replicate's slice is
     # CannObserv/archiver#267 - and a cap one adopts brings a mirrored
     # threshold back with it, not before.
