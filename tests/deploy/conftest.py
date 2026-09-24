@@ -32,6 +32,7 @@ import shutil
 import socket
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -130,62 +131,28 @@ def _stop(proc: subprocess.Popen) -> None:
         proc.wait(timeout=10)
 
 
-@pytest.fixture(scope="module")
-def tracked_acl_broker(tmp_path_factory):
-    """A throwaway redis-server running the tracked ACL file.
-
-    This is the assertion that could otherwise only be made during the restart
-    window. `aclfile` is an immutable config, so it is enabled by restarting an
-    instance three services depend on - and redis **aborts startup** on an ACL
-    error, refusing the whole file rather than the offending line. A syntax
-    error found there is found with the broker down.
-
-    It has already earned this twice. The first run caught that an aclfile
-    permits no comments; the second that `+client|setinfo` does not exist before
-    Redis 7.2, so the pre-emptive grant broker#2 recommended would have taken
-    every user down with it.
+@contextmanager
+def acl_server(acl: Path, workdir: Path):
+    """A throwaway ``redis-server`` loading ``acl``, yielding a ``connect(user)``.
 
     Binds loopback on a free port with no persistence and never reads
-    BROKER_REDIS_URL, so it cannot reach `co-broker`.
+    BROKER_REDIS_URL, so it cannot reach ``co-broker``. ``connect`` authenticates
+    with ``PASSWORD``, so ``acl`` must give whichever user is named that one.
 
-    **Module-scoped deliberately, not by oversight.** Sharing it across the two
-    modules that use it would save one spawn, and cost the isolation that
-    `test_retiring_default_is_reversible_live_as_acladmin` needs - that test
-    disables and re-enables `default` on this server. It restores it in a
-    `finally`, but a fixture every module in the directory leans on is the wrong
-    place to rely on that.
+    Shared by the two things loaded this way: the tracked file, rendered with
+    throwaway credentials, and the node's *saved* file, which carries the real
+    digests (CannObserv/broker#54).
     """
     binary = shutil.which("redis-server")
     if not binary:
         pytest.skip("redis-server not installed")
 
-    tmp_path = tmp_path_factory.mktemp("acl")
-    passwords = tmp_path / "passwords"
-    placeholders = sorted(set(re.findall(r"__[A-Z]+_PW__", ACL_FILE.read_text())))
-    digest = hashlib.sha256(PASSWORD.encode()).hexdigest()
-    passwords.write_text(
-        "".join(
-            f"{m.removesuffix('__')}_SHA256__={digest}\n"
-            if m in DIGEST_PLACEHOLDERS
-            else f"{m}={PASSWORD}\n"
-            for m in placeholders
-        )
-    )
-    acl = tmp_path / "users.acl"
-    # Rendered through the same script the install uses, so what is tested is
-    # what is installed - including the comment strip, which is not cosmetic.
-    acl.write_text(
-        subprocess.run(
-            [str(RENDER_SCRIPT), str(passwords)], capture_output=True, text=True, check=True
-        ).stdout
-    )
-
     port = _free_port()
-    # Logged to a file rather than a pipe nobody reads: this fixture outlives the
-    # whole module, and a `stdout=PIPE` whose 64KB buffer fills blocks the server
-    # on its next log line. The diagnostic is what the pipe was for, so it is
-    # read back from the file on the refusal path.
-    log = tmp_path / "redis-server.log"
+    # Logged to a file rather than a pipe nobody reads: a module-scoped caller
+    # keeps this alive for the whole module, and a `stdout=PIPE` whose 64KB
+    # buffer fills blocks the server on its next log line. The diagnostic is
+    # what the pipe was for, so it is read back from the file on the refusal path.
+    log = workdir / "redis-server.log"
     with log.open("w") as stream:
         proc = subprocess.Popen(
             [
@@ -237,8 +204,57 @@ def tracked_acl_broker(tmp_path_factory):
     # keeps the shape it has.
     connect.port = port
 
-    yield connect
-    _stop(proc)
+    try:
+        yield connect
+    finally:
+        _stop(proc)
+
+
+@pytest.fixture(scope="module")
+def tracked_acl_broker(tmp_path_factory):
+    """A throwaway redis-server running the tracked ACL file.
+
+    This is the assertion that could otherwise only be made during the restart
+    window. `aclfile` is an immutable config, so it is enabled by restarting an
+    instance three services depend on - and redis **aborts startup** on an ACL
+    error, refusing the whole file rather than the offending line. A syntax
+    error found there is found with the broker down.
+
+    It has already earned this twice. The first run caught that an aclfile
+    permits no comments; the second that `+client|setinfo` does not exist before
+    Redis 7.2, so the pre-emptive grant broker#2 recommended would have taken
+    every user down with it.
+
+    **Module-scoped deliberately, not by oversight.** Sharing it across the two
+    modules that use it would save one spawn, and cost the isolation that
+    `test_retiring_default_is_reversible_live_as_acladmin` needs - that test
+    disables and re-enables `default` on this server. It restores it in a
+    `finally`, but a fixture every module in the directory leans on is the wrong
+    place to rely on that.
+    """
+    tmp_path = tmp_path_factory.mktemp("acl")
+    passwords = tmp_path / "passwords"
+    placeholders = sorted(set(re.findall(r"__[A-Z]+_PW__", ACL_FILE.read_text())))
+    digest = hashlib.sha256(PASSWORD.encode()).hexdigest()
+    passwords.write_text(
+        "".join(
+            f"{m.removesuffix('__')}_SHA256__={digest}\n"
+            if m in DIGEST_PLACEHOLDERS
+            else f"{m}={PASSWORD}\n"
+            for m in placeholders
+        )
+    )
+    acl = tmp_path / "users.acl"
+    # Rendered through the same script the install uses, so what is tested is
+    # what is installed - including the comment strip, which is not cosmetic.
+    acl.write_text(
+        subprocess.run(
+            [str(RENDER_SCRIPT), str(passwords)], capture_output=True, text=True, check=True
+        ).stdout
+    )
+
+    with acl_server(acl, tmp_path) as connect:
+        yield connect
 
 
 @pytest.fixture(scope="module")

@@ -32,26 +32,27 @@ already reads every key and every stream on the instance.
 ``ACL LIST``, ``ACL WHOAMI`` and ``ACL CAT`` are each denied separately,
 verified on 7.0.15 - so there is no way to enumerate. Every user named in the
 file is compared, and one that is *missing* live is caught by the nil reply,
-but an extra identity added live and saved is invisible to a per-name lookup.
-``test_no_connection_authenticates_as_an_undeclared_user`` closes the half of
-that which matters, using a grant ``brokeradmin`` already holds: an untracked
-user that is actually *in use* has a connection, and ``CLIENT LIST`` reports
-the ``user=`` on each one. An untracked user that exists but is idle would
-need ``+acl|users`` - names only, no hashes - and is not granted.
+but an extra identity added live is invisible to a per-name lookup. Two tests
+close the halves of that which matter. One *in use* has a connection, and
+``CLIENT LIST`` reports the ``user=`` on each -
+``test_no_connection_authenticates_as_an_undeclared_user``. One *saved* is in
+the file the next restart loads, which the node can read -
+``test_the_saved_acl_declares_no_user_the_tracked_file_does_not``. What is left
+is an untracked user idle and never saved, and the next restart removes it.
 
-**It does not verify that ``ACL SAVE`` ran**, and the title used to imply it
-did. This compares the live *in-memory* ACL, so `ACL SETUSER` mirrored into the
-tracked file but never saved passes every test here and then reverts at the next
-restart - which on this instance is a cohort-wide event. Closing that means
-reading the installed ``/etc/redis/users.acl``, which is ``0640 root:redis``.
-That was recorded here as a reason no test could, since pytest does not run as
-root; CannObserv/broker#49's ``sudo -n`` tests below removed it, and the check
-is CannObserv/broker#54. The reason was never the one
-``test_installed_redis_config_matches_repo.py`` gives for refusing to read
-``redis.conf``: that file holds the credential in plaintext, and this one does
-not - ``ACL SAVE`` has rewritten all seven passwords to ``#<sha256>``, verified
-on the node. Until #54 lands, ``ACL SAVE`` is held by the runbook and by
-``deploy/README.md``, both of which put it on the line after ``ACL SETUSER``.
+**Nor does the in-memory comparison verify that ``ACL SAVE`` ran**: an
+``ACL SETUSER`` mirrored into the tracked file but never saved passes it, then
+reverts at the next restart - which on this instance is a cohort-wide event.
+``test_every_tracked_user_is_saved_as_it_is_live`` closes that on the node. It
+reads the broker's ``aclfile`` through ``sudo -n``, the mechanism
+CannObserv/broker#49 introduced, loads it into a throwaway server the way the
+tracked file is loaded, and compares every tracked user with ``ACL GETUSER``,
+passwords included - the saved file carries the real digests
+(CannObserv/broker#54). Reading it was never refused for the reason
+``test_installed_redis_config_matches_repo.py`` gives for ``redis.conf``: that
+file holds the credential in plaintext, and this one never does.
+``test_a_setuser_never_saved_is_reported_and_a_save_clears_it`` proves the
+mechanism anywhere ``redis-server`` is installed, against a stand-in broker.
 
 **And what it cannot catch at all: a grant that is wrong on both sides.**
 Correction eleven (``replicator`` without ``+exists``) and broker#9
@@ -73,7 +74,14 @@ from pathlib import Path
 import pytest
 import redis as redis_pkg
 
-from tests.deploy.conftest import ACL_FILE, RENDER_SCRIPT, SERVICE_USERS, parse_users
+from tests.deploy.conftest import (
+    ACL_FILE,
+    PASSWORD,
+    RENDER_SCRIPT,
+    SERVICE_USERS,
+    acl_server,
+    parse_users,
+)
 
 TRACKED = parse_users(ACL_FILE.read_text())
 TRACKED_USERS = tuple(sorted(TRACKED))
@@ -109,6 +117,11 @@ DIGEST_ONLY_USERS = (*SERVICE_USERS, "citest")
 
 # The grant this module needs, named here so the failure message can say it.
 REQUIRED_GRANT = "+acl|getuser"
+
+# Appended to the throwaway copy of the node's saved ACL, the one user there
+# whose password is known: every saved user carries its real digest, and nothing
+# in this suite holds `acladmin`'s plaintext or should (CannObserv/broker#54).
+SAVED_READER = "pytest-saved-acl-reader"
 
 
 # The three ACL fields whose value is a space-separated rule list. redis-py
@@ -178,13 +191,33 @@ def _render(value) -> str:
     return str(value)
 
 
-def _difference(tracked, live) -> str:
+def _difference(want, live, want_is: str = "tracked") -> str:
     """What changed, rather than two frozensets the reader has to diff by eye."""
-    if isinstance(tracked, frozenset) and isinstance(live, frozenset):
-        gained = sorted(_render(v) for v in live - tracked)
-        lost = sorted(_render(v) for v in tracked - live)
+    if isinstance(want, frozenset) and isinstance(live, frozenset):
+        gained = sorted(_render(v) for v in live - want)
+        lost = sorted(_render(v) for v in want - live)
         return f"live has extra {gained}, missing {lost}"
-    return f"tracked {tracked!r} != live {live!r}"
+    return f"{want_is} {want!r} != live {live!r}"
+
+
+def _field_mismatches(
+    user: str, want: dict, live: dict, want_is: str = "tracked", skip: str | None = None
+) -> list[str]:
+    """``<user>.<field>: <difference>`` for each field the two reports disagree on.
+
+    Passwords are compared by 12-character digest prefix - enough to tell two
+    apart, and all a failure message needs to carry of a credential's hash.
+    """
+    found = []
+    for field in sorted(set(want) | set(live)):
+        if field == skip:
+            continue
+        a, b = _canonical(want.get(field), field), _canonical(live.get(field), field)
+        if field == "passwords":
+            a, b = frozenset(h[:12] for h in a), frozenset(h[:12] for h in b)
+        if a != b:
+            found.append(f"{user}.{field}: {_difference(a, b, want_is)}")
+    return found
 
 
 def _getuser(client, user: str):
@@ -252,7 +285,7 @@ def _window_note(mismatches: list[str]) -> str:
     )
 
 
-def _version_note(tracked_acl_broker, live_client) -> str:
+def _version_note(throwaway: str, live_client) -> str:
     """Named in the failure, because a version skew reads exactly like drift.
 
     The two servers are asked the same question but they are two binaries, and
@@ -261,12 +294,11 @@ def _version_note(tracked_acl_broker, live_client) -> str:
     whose redis package was upgraded without the service being restarted would
     otherwise report every category grant as drift.
     """
-    tracked = tracked_acl_broker("brokeradmin").info("server")["redis_version"]
     live = live_client.info("server")["redis_version"]
-    if tracked == live:
+    if throwaway == live:
         return ""
     return (
-        f"\nNOTE: the throwaway redis-server is {tracked} and the broker is {live}. "
+        f"\nNOTE: the throwaway redis-server is {throwaway} and the broker is {live}. "
         "Rule folding and the flags vocabulary move between releases, so some of the "
         "above may be skew rather than drift - restart the broker onto its installed "
         "binary first."
@@ -284,21 +316,16 @@ def test_every_tracked_user_has_the_same_rules_on_the_live_broker(
         if live is None:
             mismatches.append(f"{user}: declared in {ACL_FILE.name}, absent on the broker")
             continue
-        tracked = tracked_rules[user]
-        for field in sorted(set(tracked) | set(live)):
-            if field == NOT_COMPARED:
-                continue
-            want = _canonical(tracked.get(field), field)
-            got = _canonical(live.get(field), field)
-            if want != got:
-                mismatches.append(f"{user}.{field}: {_difference(want, got)}")
+        mismatches += _field_mismatches(user, tracked_rules[user], live, skip=NOT_COMPARED)
     assert not mismatches, (
         f"the running ACL differs from {ACL_FILE.name}:\n  "
         + "\n  ".join(mismatches)
         + "\nFix live as acladmin and mirror it here, in that order - the live broker is "
         "what the services are actually talking to."
         + _window_note(mismatches)
-        + _version_note(tracked_acl_broker, live_client)
+        + _version_note(
+            tracked_acl_broker("brokeradmin").info("server")["redis_version"], live_client
+        )
     )
 
 
@@ -341,18 +368,24 @@ def _sudo(*argv: str, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(["sudo", "-n", *argv], capture_output=True, check=False, **kwargs)
 
 
-@pytest.fixture(scope="module")
-def node_passwords(live_client) -> Path:
-    """The node's passwords file, reachable through ``sudo -n``, or a skip.
+def _on_the_node(path: Path) -> Path:
+    """``path``, reachable through ``sudo -n``, or a skip.
 
-    Taking ``live_client`` first means a host with sudo but no broker
-    credentials - a CI runner - skips before any ``sudo`` is attempted.
+    Every fixture calling this takes ``live_client`` first, so a host with sudo
+    but no broker credentials - a CI runner - skips before any ``sudo`` is
+    attempted.
     """
     if _sudo("true").returncode:
         pytest.skip("no passwordless sudo - not the broker node")
-    if _sudo("test", "-f", str(NODE_PASSWORDS)).returncode:
-        pytest.skip(f"{NODE_PASSWORDS} absent - not the broker node")
-    return NODE_PASSWORDS
+    if _sudo("test", "-f", str(path)).returncode:
+        pytest.skip(f"{path} absent - not the broker node")
+    return path
+
+
+@pytest.fixture(scope="module")
+def node_passwords(live_client) -> Path:
+    """The node's passwords file, reachable through ``sudo -n``, or a skip."""
+    return _on_the_node(NODE_PASSWORDS)
 
 
 def _plaintext_line(user: str) -> str:
@@ -366,32 +399,35 @@ def _plaintext_line(user: str) -> str:
     return rf"^[[:space:]]*#?[[:space:]]*__{user.upper()}_PW__="
 
 
-def _digests_only(rendered: str) -> str:
-    """The render's output, refused unread if it is not what its contract says.
+def _digests_only(text: str, source: str, remedy: str) -> str:
+    """Text read as root, refused unread if it is not digests-only user lines.
 
-    The fixture below runs the *working tree's* script as root, so a broken
-    branch is a real input. Were its output to carry a plaintext rule, or a line
-    that is not a user line, ``parse_users``' own assertion would repeat that
-    line into the test report. So this fails first, and says nothing about what
-    it saw.
+    Two inputs, both crossing ``sudo`` into pytest. The render's output: the
+    fixture below runs the *working tree's* script as root, so a broken branch
+    is a real input. And the broker's saved ACL, which ``ACL SAVE`` writes by
+    digest but anything with root could have replaced. Were either to carry a
+    plaintext rule, or a line that is not a user line, ``parse_users``' own
+    assertion would repeat that line into the test report. So this fails first,
+    and says nothing about what it saw.
     """
-    lines = rendered.splitlines()
-    if any(not line.startswith("user ") for line in lines) or re.search(r"(^|\s)>", rendered):
+    lines = text.splitlines()
+    if any(not line.startswith("user ") for line in lines) or re.search(r"(^|\s)>", text):
         pytest.fail(
-            f"{RENDER_SCRIPT.name} emitted a plaintext rule or a non-user line - not "
-            "shown, since it may be a credential. Run it by hand into /dev/null to "
-            "reproduce, and fix the render before this test."
+            f"{source} carries a plaintext rule or a non-user line - not shown, since "
+            f"it may be a credential. {remedy}"
         )
-    return rendered
+    return text
 
 
 def test_a_render_carrying_a_plaintext_rule_is_refused_without_echoing_it() -> None:
     secret = "would-be-secret-0123456789"
     for rendered in (f"user x on >{secret} ~*", f"user x on #{'a' * 64} ~*\n{secret}"):
         with pytest.raises(pytest.fail.Exception) as refused:
-            _digests_only(rendered)
+            _digests_only(rendered, "the render", "")
         assert secret not in str(refused.value)
-    assert _digests_only(f"user x on #{'a' * 64} ~*") == f"user x on #{'a' * 64} ~*"
+    assert (
+        _digests_only(f"user x on #{'a' * 64} ~*", "the render", "") == f"user x on #{'a' * 64} ~*"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -410,7 +446,11 @@ def node_render(node_passwords) -> str:
         f"{RENDER_SCRIPT.name} refuses the node's {node_passwords} - so the dry run in "
         "docs/ACL-CUTOVER.md step 2, and a rebuild's re-render, would both fail:\n" + result.stderr
     )
-    return _digests_only(result.stdout)
+    return _digests_only(
+        result.stdout,
+        f"{RENDER_SCRIPT.name}'s output",
+        "Run it by hand into /dev/null to reproduce, and fix the render before this test.",
+    )
 
 
 def test_the_nodes_passwords_file_renders_the_credentials_that_are_live(
@@ -496,6 +536,114 @@ def test_the_node_holds_no_plaintext_for_a_service_user(node_passwords) -> None:
     )
 
 
+@pytest.fixture(scope="module")
+def node_saved_acl(live_client) -> str:
+    """The broker's ACL as ``ACL SAVE`` last wrote it, read through ``sudo -n``, or a skip.
+
+    The path is the broker's own answer to ``CONFIG GET aclfile`` rather than a
+    constant, so what is read is the file the next restart will load. It is
+    ``0640`` and group ``redis``, and pytest runs as neither. What crosses back is
+    digests and rules only - ``ACL SAVE`` never writes a plaintext password, and
+    ``_digests_only`` refuses the file unread if something else did.
+    """
+    configured = live_client.config_get("aclfile").get("aclfile")
+    if not configured:
+        pytest.fail(
+            "the broker runs with no aclfile - `ACL SAVE` has nowhere to write, so every "
+            "live grant reverts to redis.conf's at the next restart"
+        )
+    path = _on_the_node(Path(configured))
+    result = _sudo("cat", str(path), text=True)
+    assert result.returncode == 0, f"cannot read {path} through sudo -n:\n{result.stderr}"
+    return _digests_only(
+        result.stdout,
+        str(path),
+        "`ACL SAVE` never writes one, so something else wrote this file - and the next "
+        "restart loads it. Find what before anything restarts the broker.",
+    )
+
+
+def _saved_rules(saved: str, workdir: Path, users) -> tuple[dict[str, dict | None], str]:
+    """Each of ``users`` as a throwaway server loading ``saved`` reports it, and its version.
+
+    Not a byte comparison against ``ACL GETUSER``, for the reason the tracked
+    file is not one: the two are different spellings of the same ACL. Loading the
+    saved file puts both sides through the same parser, the one the next restart
+    uses. ``SAVED_READER`` is appended as the one user this suite can
+    authenticate as; it is never a name the file itself declares.
+    """
+    assert SAVED_READER not in parse_users(saved), f"{SAVED_READER} is already declared"
+    acl = workdir / "users.acl"
+    acl.write_text(
+        saved.rstrip("\n") + f"\nuser {SAVED_READER} on >{PASSWORD} +acl|getuser +info\n"
+    )
+    with acl_server(acl, workdir) as connect:
+        reader = connect(SAVED_READER)
+        rules = {user: reader.acl_getuser(user) for user in users}
+        return rules, reader.info("server")["redis_version"]
+
+
+def _saved_mismatches(saved: dict, live: dict) -> list[str]:
+    """Every way a restart would change the ACL the services are talking to.
+
+    Passwords included: the saved file carries the real digests, so unlike the
+    tracked comparison nothing here needs excluding.
+    """
+    found = []
+    for user in sorted(set(saved) | set(live)):
+        want, got = saved.get(user), live.get(user)
+        if want is None and got is None:
+            continue  # declared here, absent from both: the rule comparison's finding
+        if want is None:
+            found.append(f"{user}: live, never saved - the next restart drops it")
+        elif got is None:
+            found.append(f"{user}: saved, absent live - the next restart brings it back")
+        else:
+            found += _field_mismatches(user, want, got, want_is="saved")
+    return found
+
+
+@pytest.fixture(scope="module")
+def saved_rules(node_saved_acl, tmp_path_factory) -> tuple[dict[str, dict | None], str]:
+    return _saved_rules(node_saved_acl, tmp_path_factory.mktemp("saved-acl"), TRACKED_USERS)
+
+
+def test_every_tracked_user_is_saved_as_it_is_live(saved_rules, live_rules, live_client) -> None:
+    """``ACL SETUSER`` without ``ACL SAVE``: live now, reverted at the next restart.
+
+    The rule comparison above reads the broker's *memory*, so a change made
+    live and mirrored into the tracked file, but never saved, passes it - and
+    then reverts at a restart, which on this instance is a cohort-wide event.
+    Over the tracked names, since that is all ``+acl|getuser`` can ask for live;
+    the saved file's own extras are the next test's.
+    """
+    saved, version = saved_rules
+    mismatches = _saved_mismatches(saved, live_rules)
+    assert not mismatches, (
+        "the broker's saved ACL differs from its live one:\n  "
+        + "\n  ".join(mismatches)
+        + "\nAn `ACL SETUSER` never followed by `ACL SAVE`, and a restart would revert it. "
+        "If live is right, `rcli acladmin ACL SAVE`; if not, fix it live first, then save."
+        + _version_note(version, live_client)
+    )
+
+
+def test_the_saved_acl_declares_no_user_the_tracked_file_does_not(node_saved_acl) -> None:
+    """The saved half of an untracked user, which ``+acl|getuser`` cannot enumerate.
+
+    Live, only a user in use is visible (the ``CLIENT LIST`` test below). The
+    saved file lists every user it holds, and a saved one is the one that
+    matters: it survives every restart. One added live and never saved is gone
+    at the next.
+    """
+    extra = sorted(set(parse_users(node_saved_acl)) - set(TRACKED_USERS))
+    assert not extra, (
+        f"the broker's saved ACL declares {extra}, which {ACL_FILE.name} does not - "
+        "added live and saved, never mirrored. Mirror it with its reason, or "
+        "`ACL DELUSER` it as acladmin and `ACL SAVE`."
+    )
+
+
 def test_no_connection_authenticates_as_an_undeclared_user(live_client) -> None:
     """The half of "an untracked user" that a per-name lookup cannot reach.
 
@@ -529,3 +677,35 @@ def test_no_connection_authenticates_as_an_undeclared_user(live_client) -> None:
         "(a straggler from the password retirement, still connected because the flip "
         "does not disconnect; it breaks at its next restart)"
     )
+
+
+def test_a_setuser_never_saved_is_reported_and_a_save_clears_it(tmp_path) -> None:
+    """CannObserv/broker#54's done-when, proven where a ``SETUSER`` is ours to run.
+
+    The real broker is not, so a throwaway server stands in for it, saving to a
+    file this test can read without ``sudo``. Clean before the change, reported
+    after it, clean again once saved: the comparison fails on exactly the unsaved
+    change and on nothing the save's canonical rewrite introduces.
+    """
+    acl = tmp_path / "users.acl"
+    acl.write_text(
+        "user default off\n"
+        f"user operator on >{PASSWORD} ~* &* +@all\n"
+        f"user x on #{'a' * 64} ~alpha +get\n"
+    )
+    with acl_server(acl, tmp_path) as connect:
+        broker = connect("operator")
+
+        def compare(attempt: str) -> list[str]:
+            workdir = tmp_path / attempt
+            workdir.mkdir()
+            saved, _ = _saved_rules(acl.read_text(), workdir, ("x",))
+            return _saved_mismatches(saved, {"x": broker.acl_getuser("x")})
+
+        assert compare("before") == []
+        broker.execute_command("ACL", "SETUSER", "x", "~beta", "#" + "b" * 64)
+        unsaved = compare("unsaved")
+        assert [m.split(":")[0] for m in unsaved] == ["x.keys", "x.passwords"]
+        assert "b" * 64 not in " ".join(unsaved), "a digest is reported by prefix only"
+        broker.execute_command("ACL", "SAVE")
+        assert compare("saved") == []

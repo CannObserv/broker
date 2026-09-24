@@ -205,6 +205,14 @@ is out, because `ACL SAVE` rewrites in Redis's canonical form (`#<sha256>` for
 passwords, the rule string reordered, `-@admin` folded into `-@dangerous`).
 This is the ACL's counterpart to reading `maxmemory` back through `CONFIG GET`.
 
+**The second line gets skipped too, and a restart is where it shows.** Memory
+is not the file: an `ACL SETUSER` mirrored but never saved passes the
+comparison above, then reverts when the broker restarts. On the node, the same
+module reads the broker's `aclfile` through `sudo -n` - digests and rules only,
+nothing `ACL SAVE` writes is a credential - loads it into a second throwaway
+server, and compares every tracked user's rules *and* digests with the live
+ACL (CannObserv/broker#54).
+
 It costs `brokeradmin` the read-only `+acl|getuser`. Two limits, both
 deliberate and both recorded on the grant itself:
 
@@ -212,7 +220,9 @@ deliberate and both recorded on the grant itself:
   `ACL USERS`, `ACL LIST`, `ACL WHOAMI` and `ACL CAT` are each denied
   separately - so a user the tracked file never declared is invisible to a
   per-name lookup. An untracked identity that is actually *in use* is still
-  caught, by the `user=` field in `CLIENT LIST`.
+  caught, by the `user=` field in `CLIENT LIST`, and one that was *saved* by
+  the saved file, which lists every user it holds. An idle, unsaved one goes
+  unseen, and the next restart drops it.
 - **It cannot see a grant that is wrong in both places.** Both real ACL bugs
   in this epic were exactly that. Where a grant has a derivable source, prefer
   a test over the source - `test_replicator_can_name_every_dedupe_namespace`
