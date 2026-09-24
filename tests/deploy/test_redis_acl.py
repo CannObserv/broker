@@ -1063,15 +1063,19 @@ def test_every_acl_log_read_in_a_runbook_names_both_explanations() -> None:
     grant provenance or the not-a-fault list names it, and anything in neither
     is the fault.
     """
-    unnamed = [
-        f"{path.name}:{number}"
+    # A command line ends at `ACL LOG [count]`, then a comment or nothing -
+    # whichever client runs it. Prose names the log mid-sentence, in backticks.
+    reads = [
+        (f"{path.name}:{number}", line)
         for path in RUNBOOKS
         for number, line in enumerate(path.read_text().splitlines(), 1)
         if re.search(r"\bACL LOG\b(\s+\d+)?\s*(#|$)", line)
-        and "rcli" in line
-        and "not-a-fault" not in line
     ]
-    assert not unnamed, f"these ACL LOG reads do not name the not-a-fault list: {unnamed}"
+    assert reads, "no runbook reads ACL LOG; this test would pass by matching nothing"
+    unnamed = [
+        where for where, line in reads if not {"provenance", "not-a-fault"} <= set(line.split())
+    ]
+    assert not unnamed, f"these ACL LOG reads do not name both explanations: {unnamed}"
 
 
 # --- does it actually parse? ---
