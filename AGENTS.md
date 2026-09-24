@@ -42,6 +42,8 @@ silently corrupts values.
 - **No retention opinion on the five `content.*` streams.** No *retention*
   length or age row for any of them: nothing trims them, this repo owns no cap,
   and a threshold with no owner cries wolf - `maxmemory` is their only bound.
+  They are `content.fetch`, `.revisions`, `.artifacts`, `.replicate`, `.blobs`
+  (`content.fetch-policy` is LWW and capped).
   `content.blobs` had the rule first (broker#20); the other four joined it when
   they lost `info.changes`'s borrowed 110k (broker#60). `docs/STREAMS.md`'s
   **No retention cap** is pinned to the probe's unthresholded rows; a cap
@@ -69,8 +71,8 @@ silently corrupts values.
   (broker#13) and `+xpending` (broker#32, after #29) are both kept deliberately.
   The stanza above the rule in `deploy/redis-acl.conf` has to say which caller,
   and `tests/deploy/test_redis_acl.py` fails when one does not. Record it or cut
-  it; do not leave it to read as residue. Archiver's unused DLQ disposals are
-  held the same way (CannObserv/archiver#238). The inverse is withheld on
+  it; do not leave it to read as residue. Archiver's DLQ `+xdel` names its
+  caller the same way (CannObserv/archiver#238's triage). The inverse is withheld on
   purpose: `brokeradmin`'s `+xtrim` stops at `~*.dlq`, the only thing keeping an
   operator off a **Never XTRIMmed** stream (broker#34). Do not widen it in an
   incident.
@@ -180,28 +182,19 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Related
 
-- CannObserv/broker#1 - the relocation epic. Closed 2026-09-15, every sub-issue
-  with it. #14 - confining each service's `+xadd`/`+xtrim` to the streams it
-  produces - landed 2026-09-18 and is live on the node.
-  #29 - one `XINFO GROUPS` per grouped stream for the position, the pending
-  count and the group's existence - landed 2026-09-18.
-  #34 - archiver's `+xtrim` narrowed to `~info.changes` and its two DLQs, live
-  2026-09-22: nothing on the instance can `XTRIM` `info.registry` now, and
-  its row in `docs/STREAMS.md` says why (CannObserv/archiver#234 answered).
-  #59 then cut the two DLQs: archiver's `+xtrim` is `~info.changes` alone,
-  and it disposes of dead letters by `+xdel` (live 2026-09-24).
-- Open follow-on: CannObserv/replicator#98 (recovery re-claiming its own
-  failing retry starves `XREADGROUP` - a live consumer the undelivered check
-  cannot tell from a gone one). #43 (each grouped stream's producer holds the
+- CannObserv/broker#1 - the relocation epic, closed 2026-09-15. What landed
+  after it on the grants and reads (#14, #29, #34, #59):
+  [README.md](README.md), *Provenance*.
+- Open follow-on: #43 (each grouped stream's producer holds the
   group commands on its root, so it can `XACK` its consumer's work away -
   #14's hole the other way round).
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
   guarded by `tests/deploy/test_runbook_credentials.py`) and #46 (the `default`
-  credential rotated - four writes, `docs/ACL-CUTOVER.md`,
+  credential rotated, `docs/ACL-CUTOVER.md`,
   *Rotating `__DEFAULT_PW__`*). Neither is a tracked-file change; both live
-  files are templated and the value is `NOT_COMPARED` in the two live tests.
+  files are templated and the value is `NOT_COMPARED` in `tests/deploy/test_live_*.py`.
 - CannObserv/watcher#319 - the notice for the other end of #44's mirror:
   `RETAINED_FULL_SETS` and the `*/5` republish period are copied into
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*

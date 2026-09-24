@@ -7,12 +7,12 @@
 # a redis-cli, and the deploy tests - so the number is checkable by reading it.
 AGENTS.md :: enumerated :: That credential is three callers
 
-# tests/deploy/test_redis_acl.py asserts archiver's +xtrim selector, so the
-# count of DLQs in it cannot drift without that suite going red.
-AGENTS.md :: gated :: its two DLQs, live 2026-09-22
+# Two `gated` entries pruned 2026-09-24: "its two DLQs, live 2026-09-22" left
+# AGENTS.md for README.md *Provenance* in that day's curation, and "absorbs one
+# missed republish and not two" went with broker#45, which closed the gap it
+# described.
 
-# tests/test_bus_health.py::test_one_missed_republish_is_absorbed_and_two_are_not
-# pins both sides of the boundary, parametrized over four set sizes; the "three"
-# is LWW_WARN_LAST_ENTRY_AGE_SECONDS == 3 * LWW_REPUBLISH_PERIOD_SECONDS, which
-# the same test asserts.
-AGENTS.md :: gated :: absorbs one missed republish and not two
+# 2026-09-24 curation: the five are listed on the next line of the same bullet;
+# "the other four" is those five less content.blobs, two lines below.
+AGENTS.md :: enumerated :: No retention opinion on the five `content.*` streams
+AGENTS.md :: enumerated :: the other four joined it

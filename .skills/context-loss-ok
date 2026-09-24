@@ -100,3 +100,23 @@ docs/BUS-HEALTH.md :: retarget :: The probe's `backup` and `persistence` finding
 docs/BUS-HEALTH.md :: retarget :: (see below). All from the one `INFO memory` the first check already pays for;
 docs/BUS-HEALTH.md :: retarget ::   and the one the 2026-09-16 event asked for; see *A consumer that stopped
 docs/BUS-HEALTH.md :: retarget ::   reading* below;
+
+# 2026-09-24 curation (AGENTS.md 6,090 -> under 6,000; the #1 epic's landed
+# history moved to README.md *Provenance*, found via --also README.md).
+#
+# AGENTS.md - refuted by `gh api`: CannObserv/replicator#98 closed 2026-09-22,
+# fixed in replicator 74d7743 (a non-blocking look at the stream after every
+# reclaim), so it is no longer an open follow-on. #43, which shared the line,
+# is still open and stays.
+AGENTS.md :: disproven :: - Open follow-on: CannObserv/replicator#98 (recovery re-claiming its own
+AGENTS.md :: disproven :: failing retry starves `XREADGROUP` - a live consumer the undelivered check
+AGENTS.md :: disproven :: cannot tell from a gone one). #43 (each grouped stream's producer holds the
+# AGENTS.md - refuted by deploy/redis-acl.conf's archiver stanza and `gh api`:
+# archiver#238 closed 2026-09-24, and the stanza names its triage tooling as
+# the caller of archiver's DLQ `+xdel`, so "unused ... held" is no longer true.
+AGENTS.md :: disproven :: it; do not leave it to read as residue. Archiver's unused DLQ disposals are
+AGENTS.md :: disproven :: held the same way (CannObserv/archiver#238). The inverse is withheld on
+# AGENTS.md - check-counts: two counts dropped for the pointer or path that
+# carries them; --claims confirms no atom lost.
+AGENTS.md :: tighten ::   credential rotated - four writes, `docs/ACL-CUTOVER.md`,
+AGENTS.md :: tighten ::   files are templated and the value is `NOT_COMPARED` in the two live tests.

@@ -41,6 +41,19 @@ wrong machine: the config parity test asserted a path under
 exists for **AOF headroom** - reported archiver's disk. Splitting the repo is
 what makes them true again.
 
+Landed after the epic closed, on the grants and reads this repo owns:
+
+- CannObserv/broker#1 - the relocation epic. Closed 2026-09-15, every sub-issue
+  with it. #14 - confining each service's `+xadd`/`+xtrim` to the streams it
+  produces - landed 2026-09-18 and is live on the node.
+  #29 - one `XINFO GROUPS` per grouped stream for the position, the pending
+  count and the group's existence - landed 2026-09-18.
+  #34 - archiver's `+xtrim` narrowed to `~info.changes` and its two DLQs, live
+  2026-09-22: nothing on the instance can `XTRIM` `info.registry` now, and
+  its row in `docs/STREAMS.md` says why (CannObserv/archiver#234 answered).
+  #59 then cut the two DLQs: archiver's `+xtrim` is `~info.changes` alone,
+  and it disposes of dead letters by `+xdel` (live 2026-09-24).
+
 ## What stayed in archiver
 
 The split is not clean, and the seam is worth knowing:
