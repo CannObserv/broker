@@ -914,7 +914,7 @@ class SetBaseline:
         anchor = state.get(SET_ANCHOR_KEY.format(topic=topic))
         return cls(
             entries_added=state.get(CONTINUITY_ENTRIES_KEY.format(topic=topic)),
-            last_entry_ms=state.get(LAST_ENTRY_KEY.format(topic=topic)),
+            last_entry_ms=state.get(SET_LAST_ENTRY_KEY.format(topic=topic)),
             remembered=(
                 RememberedSet(set_size=size, anchor_ms=anchor)
                 if size is not None and anchor is not None
@@ -928,7 +928,7 @@ class SetBaseline:
         if self.entries_added is not None:
             state[CONTINUITY_ENTRIES_KEY.format(topic=topic)] = self.entries_added
         if self.last_entry_ms is not None:
-            state[LAST_ENTRY_KEY.format(topic=topic)] = self.last_entry_ms
+            state[SET_LAST_ENTRY_KEY.format(topic=topic)] = self.last_entry_ms
         if self.remembered is not None:
             state[SET_SIZE_KEY.format(topic=topic)] = self.remembered.set_size
             state[SET_ANCHOR_KEY.format(topic=topic)] = self.remembered.anchor_ms
@@ -1230,7 +1230,7 @@ CONTINUITY_ENTRIES_KEY = "@entries-added/{topic}"
 CONTINUITY_LENGTH_KEY = "@length/{topic}"
 # The full-set streams' baseline beside it (CannObserv/broker#45), read and
 # written through ``SetBaseline``. Its entries-added is the key above.
-LAST_ENTRY_KEY = "@last-entry-ms/{topic}"
+SET_LAST_ENTRY_KEY = "@set-last-entry-ms/{topic}"
 SET_SIZE_KEY = "@set-size/{topic}"
 SET_ANCHOR_KEY = "@set-anchor-ms/{topic}"
 SET_NARROW_TICKS_KEY = "@set-narrow-ticks/{topic}"
