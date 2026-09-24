@@ -582,8 +582,8 @@ ARCHIVER_DLQ_TRIAGE = "CannObserv/archiver#238"
 def test_archiver_trim_grant_is_its_trim_allowlist(users) -> None:
     """Archiver's `+xtrim` equals `trim_topics`, on every pattern but its queues.
 
-    One decision held in two repositories, each pinning its own half and citing
-    the other's (CannObserv/broker#55):
+    One decision held in two repositories, each pinning its own half
+    (CannObserv/broker#55) and citing the other's (CannObserv/archiver#262):
 
     - archiver's `trim_topics` literal, pinned at the call site by
       `tests/api/test_lifespan_bus_wiring.py::test_trim_allowlist_is_info_changes_only`
