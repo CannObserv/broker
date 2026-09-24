@@ -287,9 +287,10 @@ the LWW rows, which is the blindness CannObserv/broker#40 closed
 
 **The third term cannot be mirrored.** It is the size of Watcher's corpus, it
 changes with no edit anywhere, and that is precisely the failure a mirror cannot
-cover. So `republished_set_size` reads it off one `XINFO STREAM` reply - the one
-the length and age checks already make - as `length / the republishes the span
-holds`. Three properties carry it:
+cover. So the probe reads it off the stream. The first reading,
+`republished_set_size`, needs one `XINFO STREAM` reply - the one the length and
+age checks already make - and is `length / the republishes the span holds`.
+Three properties carry it:
 
 - it is entries per republish **whether or not the cap is applied**, because an
   untrimmed stream grows its span in step with its length, so a broken cap still
@@ -313,53 +314,97 @@ One over the true set in both rows, which is the rounding working: the reading
 is an upper bound on the set and therefore on the cap, and at these sizes it
 changes nothing at all - `10 x 5` is far under 500.
 
-**It fails on a window that is not uniform.** The reading assumes every
-republish in the retained window was the same size and arrived on time. Two
-things break that, and both read the set *low* - the warns-early direction, not
-the quiet one.
+### A window that is not uniform
 
-**A gap**, first: republishes that did not happen are counted as if they had.
-Measured at set sizes from 62 to 1,000, the behaviour is the same at all of
-them:
+The span reading assumes every republish in the retained window was the same
+size and one period after the last. It has two unknowns - the set size and the
+republishes per period - and one equation, closed by assuming the second is 1.
+Three things break that:
 
-| Missed republishes | Reading | Length finding |
+- **a gap** - republishes that did not happen, counted as if they had. Reads the
+  set low, so the probe warns early (CannObserv/broker#45);
+- **a set that steps up** - the window holds old sets and new, and the reading
+  averages them. Also low (#45). Growth an item at a time never trips it; a
+  bulk import or a restore does;
+- **republishing more often than the period** - watcher's mutation-deferred
+  republishes on top of the `*/5` cron, `R` per period. Reads the set `R` times
+  high, and the threshold goes quiet by the same factor: a cap that stops being
+  applied is silent until the stream is `R` times over (CannObserv/broker#51).
+  `R` was 1.00 on both streams when #51 measured it, over seven days of
+  watcher's publisher log including a cold start - but its trigger is the one
+  that makes the floor govern: a registry filling past 50 items.
+
+`read_set_size` answers the first two with two more readings and takes the
+largest of the three, and the third by refusing what it cannot read:
+
+| Reading | Read off | Right for | Wrong for |
+|---|---|---|---|
+| **span** | one reply | a uniform window; the first tick after a deploy | a gap (low, for the window's length), a step up (low), `R > 1` (high) |
+| **since the last tick** | `entries-added` and the newest id, this tick and last - each pair out of one reply, counted on the ids' clock rather than the timer's | the set *now*: a step up, a shrink | the one tick straddling a producer's return (low), `R > 1` (high), a tick after one that landed mid-burst (up to half a set high, one tick) |
+| **remembered** | a span carried in the state file, anchored to the newest entry of its window | the window still retaining the anchor - after a gap, exactly while the gap is inside it | nothing it outlives: it expires when its anchor trims out |
+
+The anchor moves on every tick whose window is no wider than
+`RETAINED_FULL_SETS` periods - one that cannot be hiding a gap or a step up -
+and otherwise only for a larger reading. Moving it only for a larger one left it
+pinned to the fencepost's high reading while the window slid past, so it had
+often expired before the tick it was kept for; the replay found that. The same
+refresh is what stops a remembered set outliving a shrink: a cap lost just after
+one is reported no later than the span alone would.
+
+**A narrow window is refused, not read.** A stream that has been trimmed -
+`entries-added` past its length, from the same reply - is at its cap, and at one
+republish a period ten full sets cannot be held in fewer than nine periods: the
+fencepost, so this is not a margin anyone chose. Narrower than that, the span is
+not a set size. One since-last-tick reading can still stand, because at its cap
+the length is a second equation: ten of it have to fit in the length. A set
+that just shrank passes (the window is narrow because the old sets were cut) and
+`R > 1` fails by `R`. With nothing left, the first such tick is withheld - a
+shrink by more than a republish cuts past every anchor in one `XADD`, for one
+tick - and from the second the mirrored default governs and the finding says
+`...or its producer republishes more often than every 300s: the trimmed window
+spans N republish periods where 10 full sets need at least 9`. That is a mirror
+that stopped holding, reported the loud way. A broken cap loses nothing to the
+withheld tick: while the window is narrow it spans under nine periods, and a
+threshold only reports it past eleven.
+
+A stream not yet trimmed is filling towards its cap, where a narrow window is
+ordinary and the span is right, so the refusal does not reach it.
+
+**Replayed.** The tables below come out of the replay in
+`tests/test_bus_health.py`: watcher's producer against a model of `MAXLEN ~`,
+the probe ticking every 10 minutes off the cron's phase with its state carried
+between ticks. The model's macro node is 13 entries, measured 2026-09-24:
+`content.fetch-policy` 506 entries in 39 nodes, `info.watch-status` 500 in 63
+(`XINFO STREAM`'s `radix-tree-keys`) - the 4096-byte node limit binds, not the
+100-entry one. What the readings need of it is a node smaller than one set, so
+the `MAXLEN ~` overshoot stays inside the 10% margin; every set the floor
+governs is over 50. *Before* is the span alone, CannObserv/broker#44 as it
+landed.
+
+| Scenario | Before | Now |
 |---|---|---|
-| 0 | one or two over the true set | silent |
-| 1 | ~9% under | silent - the ceiling is what carries it |
-| 2 | ~17% under | **WARN**, with no `stream-age` beside it |
-| 3+ | further under | WARN, and `stream-age` now fires too |
+| 1 missed republish | silent | silent |
+| 2, 3, 6 or 24 missed | 5 ticks of `stream-length`, **after** the producer is back | silent |
+| set steps up 1.1x, 1.25x | silent | silent |
+| steps up 1.5x | 2 ticks | silent |
+| steps up 2x | 3 ticks | silent |
+| steps up 3x, 10x | 4 ticks | silent |
+| set shrinks 2x, 3x, 10x | silent | silent |
+| cap stops being applied | reported 2.5 periods later | the same tick |
+| cap lost 2 periods after a 9x shrink | reported 10.5 periods later | 0.5 |
+| `R` = 2, 3, 5, 10 | silent, the threshold `R` x the cap | a standing, named finding from 8.5, 6.5, 4.5, 4.5 periods |
+| `R` = 2 to 10, then the cap is lost | reported 6.5 to 10.5 periods later | already standing |
 
-So one missed republish is absorbed and two are not, while `stream-age` waits
-for three (`LWW_WARN_LAST_ENTRY_AGE_SECONDS`, 15 min). The ten-minute gap
-between those is a window where this check reports a broken cap and nothing
-beside it names the real cause.
+The *before* gap row is worse than #45 recorded it. The table there stopped at
+"3+ missed: WARN, and `stream-age` fires too" - true while the producer is down.
+The replay shows the other half: once it is back, `stream-age` clears and the
+length finding stands alone for the next five ticks, whatever the gap's length,
+until the gap trims out of the window. The *before* step-up rows are the same
+simulation #45 ran, counted in probe ticks rather than periods.
 
-**A set that changes size** is the second, and it is the one Watcher's own
-comment on `RETAINED_FULL_SETS` tells us to expect - the window then holds sets
-of two sizes and the reading averages them. Simulated against a retained window
-trimming at `max(500, 10 x set)`, for a set that jumps in a single republish:
-
-| Jump | False WARNs |
-|---|---|
-| 1.10x, 1.25x | none - absorbed |
-| 1.50x | 4 ticks (~20 min) |
-| 2x | 6 ticks (~30 min) |
-| 3x and above | 7 ticks (~35 min) |
-
-Growth that *accumulates* - an item at a time, the way a registry fills - never
-trips it: the two sizes in the window differ by too little to move the average
-past the margin. It takes a step change, which on this cluster means a bulk
-import or a restore.
-
-Both are bounded the same way: the old window trims out within
-`RETAINED_FULL_SETS` periods, so neither is standing the way
-CannObserv/broker#44's was, and neither is reachable until a set passes 50
-entries. That is why they are recorded rather than closed:
-CannObserv/broker#45.
-
-A period *lengthened* at home and not here reads the same way, permanently
-rather than transiently, and is the same mirror failure as any other row in the
-table above.
+A period *lengthened* at home and not here is not in these tables: it reads the
+set low permanently rather than transiently, and is the same mirror failure as
+any other row in the table above.
 
 ## Who watches what, after the split
 

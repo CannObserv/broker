@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections import deque
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +56,8 @@ from src.broker.bus_health import (
     REGISTRY_PRODUCER_MAXLEN,
     STREAM_CHECKS,
     FullSetFloor,
+    RememberedSet,
+    SetBaseline,
     StreamCheck,
     collect_broker_findings,
     evaluate_backup,
@@ -65,6 +68,7 @@ from src.broker.bus_health import (
     evaluate_stream,
     evaluate_undelivered,
     load_state,
+    read_set_size,
     republished_set_size,
     save_state,
     with_margin,
@@ -807,9 +811,11 @@ def test_one_missed_republish_is_absorbed_and_two_are_not(set_size: int) -> None
     has an artifact rather than a memory.
 
     Two missed republishes is ten minutes of silence and `stream-age` needs
-    fifteen, so between them sits a window with no finding naming the cause -
-    bounded, unreachable until a set passes 50 entries, and recorded as
-    CannObserv/broker#45 rather than closed here.
+    fifteen, so between them sits a window with no finding naming the cause.
+    **This is the single-reply reading only** - a caller with no baseline, which
+    the collector is on its first tick after a deploy or a lost state file. With
+    one, the remembered reading absorbs a gap of any length (CannObserv/broker#45):
+    `test_a_remembered_reading_outlasts_a_gap_until_the_gap_trims_out`.
     """
     check = _check_for(CONTENT_FETCH_POLICY)
     assert LWW_WARN_LAST_ENTRY_AGE_SECONDS == 3 * LWW_REPUBLISH_PERIOD_SECONDS
@@ -819,6 +825,417 @@ def test_one_missed_republish_is_absorbed_and_two_are_not(set_size: int) -> None
     assert evaluate_stream(check, length=length, now_ms=_NOW_MS, **_spanning(11)) == []
     findings = evaluate_stream(check, length=length, now_ms=_NOW_MS, **_spanning(12))
     assert [f.check for f in findings] == ["stream-length"]
+
+
+# --- a window that is not uniform (CannObserv/broker#45, #51) ---
+#
+# The span reading has two unknowns - the set size and the republishes per
+# period - and one equation. Each case below is one way the window stops being
+# `retained_full_sets` sets of one size, one period apart.
+
+
+def _lww_floor() -> FullSetFloor:
+    floor = _check_for(CONTENT_FETCH_POLICY).full_set_floor
+    assert floor is not None
+    return floor
+
+
+def test_a_trimmed_window_narrower_than_the_floor_keeps_is_refused() -> None:
+    """Republishing twice a period, a 100-entry set capped at 1,000 fits in five
+    periods, so the span reads 200 and the threshold 2,200 - twice the cap in
+    force, in the direction that goes quiet (CannObserv/broker#51).
+
+    A trimmed stream is at its cap, and at one republish a period a floor of ten
+    full sets cannot be held in fewer than nine periods. So the reading is
+    refused and, from the second such tick in a row, the mirrored default
+    governs and the finding says which of the two causes it cannot tell apart.
+    The first is withheld: a set that shrinks past a whole republish cuts the
+    stream narrow for exactly one tick.
+    """
+    check = _check_for(CONTENT_FETCH_POLICY)
+    first = read_set_size(_lww_floor(), length=1_000, entries_added=50_000, **_spanning(5))
+    assert first.set_size is None
+    assert first.narrow_periods == 5
+    assert first.withheld
+    assert (
+        evaluate_stream(check, length=1_000, now_ms=_NOW_MS, set_reading=first, **_spanning(5))
+        == []
+    )
+
+    second = read_set_size(
+        _lww_floor(),
+        length=1_000,
+        entries_added=51_000,
+        baseline=first.carry,
+        **_spanning(5),
+    )
+    assert not second.withheld
+    (finding,) = evaluate_stream(
+        check, length=1_000, now_ms=_NOW_MS, set_reading=second, **_spanning(5)
+    )
+    assert finding.check == "stream-length"
+    assert f"exceeds {with_margin(LWW_PRODUCER_MAXLEN)}" in finding.message
+    assert "more often than every 300s" in finding.message
+    assert "spans 5 republish periods" in finding.message
+    assert "CannObserv/broker#51" in finding.message
+
+
+def test_on_a_narrow_window_the_length_vouches_for_the_set_since_last_tick() -> None:
+    """At its cap a stream holds `retained_full_sets` sets, so the length is a
+    second equation there. A set that just shrank to 62 has ten of itself in a
+    631-entry stream and stands; a 100-entry set republished twice a period
+    reads 200 since the last tick, and ten of those do not fit in 1,000."""
+    floor = _lww_floor()
+    shrank = read_set_size(
+        floor,
+        length=631,
+        entries_added=20_124,
+        baseline=SetBaseline(entries_added=20_000, last_entry_ms=_NOW_MS - 2 * _PERIOD_MS),
+        **_spanning(3),
+    )
+    assert (shrank.set_size, shrank.source, shrank.narrow_periods) == (62, "since-last-tick", 3)
+    faster = read_set_size(
+        floor,
+        length=1_000,
+        entries_added=20_400,
+        baseline=SetBaseline(entries_added=20_000, last_entry_ms=_NOW_MS - 2 * _PERIOD_MS),
+        **_spanning(5),
+    )
+    assert faster.set_size is None
+
+
+def test_a_window_still_filling_is_not_refused() -> None:
+    """The same narrow span on a stream nothing has trimmed yet is a stream
+    filling towards its cap - a new stream, or one whose set just grew - and
+    there the span reading is right. `entries-added` equal to the length is what
+    says so, out of the same reply."""
+    reading = read_set_size(_lww_floor(), length=500, entries_added=500, **_spanning(4))
+    assert reading.narrow_periods is None
+    assert reading.set_size == 125
+    assert reading.source == "span"
+
+
+def test_the_one_republish_branch_is_refused_once_trimmed() -> None:
+    """The sharpest row of #51's table: ten republishes inside one period read
+    as one set ten times too large. A window narrower than a period holds a
+    whole republish only on a stream that is not yet at its cap."""
+    reading = read_set_size(
+        _lww_floor(),
+        length=700,
+        entries_added=7_000,
+        first_entry_ms=_NOW_MS - 1_000,
+        last_entry_ms=_NOW_MS,
+    )
+    assert reading.set_size is None
+    assert reading.narrow_periods == 0
+
+
+def test_a_healthy_trimmed_window_is_not_narrow() -> None:
+    """Ten whole sets and no fragment span nine periods, the fencepost, and that
+    is the narrowest a correctly floored cap can leave: `MAXLEN ~` never trims
+    below the cap."""
+    reading = read_set_size(_lww_floor(), length=620, entries_added=6_200, **_spanning(9))
+    assert reading.narrow_periods is None
+    assert reading.set_size == 69
+
+
+def test_a_remembered_reading_outlasts_a_gap_until_the_gap_trims_out() -> None:
+    """Two missed republishes read a 62-entry set as 53 and the single-reply
+    threshold goes under the stream (CannObserv/broker#45). The reading taken
+    before the gap entered the window is carried, anchored to that window's
+    newest entry, and believed while the entry is still retained - which is
+    exactly while the gap is inside the window, so no staleness constant."""
+    check = _check_for(CONTENT_FETCH_POLICY)
+    anchor = _NOW_MS - 5 * _PERIOD_MS
+    baseline = SetBaseline(remembered=RememberedSet(set_size=64, anchor_ms=anchor))
+    reading = read_set_size(
+        _lww_floor(), length=631, entries_added=9_000, baseline=baseline, **_spanning(12)
+    )
+    assert reading.set_size == 64
+    assert reading.source == "remembered"
+    assert (
+        evaluate_stream(check, length=631, now_ms=_NOW_MS, set_reading=reading, **_spanning(12))
+        == []
+    )
+    # not refreshed by a lower reading: the anchor stays where the gap-free window ended
+    assert reading.carry.remembered == RememberedSet(set_size=64, anchor_ms=anchor)
+
+    trimmed_past = read_set_size(
+        _lww_floor(),
+        length=631,
+        entries_added=9_000,
+        baseline=baseline,
+        first_entry_ms=anchor + 1,
+        last_entry_ms=anchor + 1 + 10 * _PERIOD_MS,
+    )
+    assert trimmed_past.source == "span"
+
+
+def test_a_remembered_reading_is_dropped_for_a_window_that_no_longer_holds_it() -> None:
+    """A restore from an older snapshot puts the anchor *after* the newest entry;
+    a recreated stream puts it before the oldest. Either way the window it
+    described is gone."""
+    baseline = SetBaseline(remembered=RememberedSet(set_size=900, anchor_ms=_NOW_MS + 1))
+    reading = read_set_size(
+        _lww_floor(), length=631, entries_added=9_000, baseline=baseline, **_spanning(10)
+    )
+    assert reading.source == "span"
+    assert reading.carry.remembered == RememberedSet(set_size=64, anchor_ms=_NOW_MS)
+
+
+def test_the_set_since_last_tick_reads_a_step_up_at_its_new_size() -> None:
+    """A set that triples in one republish leaves the window averaging old and
+    new, and the span reads it low for most of an hour. What arrived between two
+    ticks is the set as it is *now*: `entries-added` and the newest id come out
+    of one reply each time, so the difference counts exactly the entries after
+    the last tick's newest one."""
+    floor = _lww_floor()
+    baseline = SetBaseline(entries_added=10_000, last_entry_ms=_NOW_MS - 2 * _PERIOD_MS)
+    reading = read_set_size(
+        floor, length=620 + 2 * 186, entries_added=10_372, baseline=baseline, **_spanning(12)
+    )
+    assert reading.set_size == 186
+    assert reading.source == "since-last-tick"
+
+
+def test_the_set_since_last_tick_declines_what_it_cannot_divide() -> None:
+    """No republish period between the two newest entries, a counter that went
+    backwards (a recreated stream), or nothing added: no reading, rather than a
+    guess."""
+    floor = _lww_floor()
+    for baseline in (
+        SetBaseline(entries_added=9_000, last_entry_ms=_NOW_MS - 1_000),
+        SetBaseline(entries_added=99_000, last_entry_ms=_NOW_MS - 2 * _PERIOD_MS),
+        SetBaseline(entries_added=10_000, last_entry_ms=_NOW_MS - 2 * _PERIOD_MS),
+    ):
+        reading = read_set_size(
+            floor, length=631, entries_added=10_000, baseline=baseline, **_spanning(10)
+        )
+        assert reading.source == "span"
+
+
+def test_the_carried_baseline_round_trips_through_the_state_file() -> None:
+    """Flat `@`-namespaced int keys, the convention `@entries-added/<topic>`
+    set, and the entries-added key *is* that one: one counter, one spelling."""
+    carry = SetBaseline(
+        entries_added=10_372,
+        last_entry_ms=_NOW_MS,
+        remembered=RememberedSet(set_size=64, anchor_ms=_NOW_MS - 1),
+        narrow_ticks=1,
+    )
+    state = carry.to_state(INFO_WATCH_STATUS)
+    assert all(k.startswith("@") and isinstance(v, int) for k, v in state.items())
+    assert state[CONTINUITY_ENTRIES_KEY.format(topic=INFO_WATCH_STATUS)] == 10_372
+    assert SetBaseline.from_state(INFO_WATCH_STATUS, state) == carry
+    assert SetBaseline.from_state(INFO_WATCH_STATUS, {}) == SetBaseline()
+
+
+# A replay of the producer against a model of `MAXLEN ~`, ticked the way the
+# timer ticks, with the state carried between ticks the way the collector
+# carries it. The tables in docs/BUS-HEALTH.md, "A window that is not uniform",
+# are this simulation's output, so the claims there have an artifact.
+
+# Entries per macro node, and so the most `MAXLEN ~` overshoots a cap by. The
+# 100-entry default never binds here: the 4096-byte one does, and on 2026-09-24
+# the live node held content.fetch-policy at 506 entries in 39 nodes and
+# info.watch-status at 500 in 63 (XINFO STREAM's radix-tree-keys) - 13 and 8.
+# What the readings need is a node smaller than one set, so the overshoot stays
+# inside the 10% margin; every set the floor governs is over 50.
+_NODE_ENTRIES = 13
+_TICK_MS = 600_000  # broker-bus-health.timer's OnUnitActiveSec
+_TICK_OFFSET_MS = 137_000  # off the cron's phase, so a tick never lands mid-burst
+
+
+class _SimStream:
+    """Whole macro nodes are the only unit `MAXLEN ~` removes, and it removes
+    one only while what is left still holds the cap."""
+
+    def __init__(self) -> None:
+        self.nodes: deque[list[int]] = deque()
+        self.length = 0
+        self.added = 0
+
+    def xadd(self, ms: int, maxlen: int | None) -> None:
+        if not self.nodes or len(self.nodes[-1]) >= _NODE_ENTRIES:
+            self.nodes.append([])
+        self.nodes[-1].append(ms)
+        self.length += 1
+        self.added += 1
+        while maxlen is not None and len(self.nodes) > 1:
+            if self.length - len(self.nodes[0]) < maxlen:
+                break
+            self.length -= len(self.nodes.popleft())
+
+
+def _replay(
+    republishes: list[tuple[int, int, bool]], *, until_ms: int, history: bool = True
+) -> list[tuple[int, list[str]]]:
+    """``(at_ms, set_size, capped)`` per republish -> ``(tick_ms, findings)`` per
+    tick, for ticks after the first hour (the stream is still filling before).
+
+    ``history=False`` is the span alone, CannObserv/broker#44 as it landed: the
+    baseline the tables' *before* columns are measured against."""
+    check = _check_for(CONTENT_FETCH_POLICY)
+    floor = _lww_floor()
+    stream = _SimStream()
+    events = iter(sorted(republishes))
+    pending = next(events, None)
+    state: dict[str, int] = {}
+    out: list[tuple[int, list[str]]] = []
+    tick = _TICK_OFFSET_MS
+    while tick <= until_ms:
+        while pending is not None and pending[0] <= tick:
+            at, size, capped = pending
+            maxlen = max(floor.default_maxlen, size * floor.retained_full_sets)
+            for i in range(size):
+                stream.xadd(at + i, maxlen if capped else None)
+            pending = next(events, None)
+        first, last = stream.nodes[0][0], stream.nodes[-1][-1]
+        reading = read_set_size(
+            floor,
+            length=stream.length,
+            entries_added=stream.added,
+            first_entry_ms=first,
+            last_entry_ms=last,
+            baseline=SetBaseline.from_state(check.topic, state),
+        )
+        findings = evaluate_stream(
+            check,
+            length=stream.length,
+            last_entry_ms=last,
+            first_entry_ms=first,
+            now_ms=tick,
+            set_reading=reading if history else None,
+        )
+        state = reading.carry.to_state(check.topic)
+        if tick > 12 * _PERIOD_MS:
+            out.append((tick, [f"{f.check}: {f.message}" for f in findings]))
+        tick += _TICK_MS
+    return out
+
+
+def _cron(
+    size: int, *, start_ms: int = 0, end_ms: int, every_ms: int = _PERIOD_MS, capped: bool = True
+) -> list[tuple[int, int, bool]]:
+    return [(t, size, capped) for t in range(start_ms, end_ms, every_ms)]
+
+
+def _length_findings(ticks: list[tuple[int, list[str]]]) -> list[str]:
+    return [f for _, fs in ticks for f in fs if f.startswith("stream-length")]
+
+
+_DAY_MS = 24 * 3600 * 1000
+
+
+@pytest.mark.parametrize("set_size", [62, 100, 200, 1000])
+def test_replay_a_steady_set_is_silent(set_size: int) -> None:
+    assert _length_findings(_replay(_cron(set_size, end_ms=_DAY_MS), until_ms=_DAY_MS)) == []
+
+
+@pytest.mark.parametrize("set_size", [62, 1000])
+@pytest.mark.parametrize("missed", [1, 2, 3, 6, 24])
+def test_replay_a_gap_of_any_length_is_absorbed(set_size: int, missed: int) -> None:
+    """CannObserv/broker#45's first table: two missed republishes warned with
+    nothing naming the cause, and an outage past the age threshold warned for
+    the hour after it ended. Now neither does; `stream-age` alone reports the
+    outage while it lasts."""
+    gap_start = 30 * _PERIOD_MS
+    schedule = [
+        r
+        for r in _cron(set_size, end_ms=_DAY_MS)
+        if not gap_start <= r[0] < gap_start + missed * _PERIOD_MS
+    ]
+    assert _length_findings(_replay(schedule, until_ms=_DAY_MS)) == []
+
+
+@pytest.mark.parametrize(
+    "before, after", [(62, 68), (62, 78), (62, 93), (62, 124), (62, 186), (62, 620)]
+)
+def test_replay_a_set_that_steps_up_is_absorbed(before: int, after: int) -> None:
+    """#45's second table: 1.5x warned for four periods, 3x for seven. The set
+    read since the last tick is the new size from the first tick whose pair
+    lies wholly after the step."""
+    step = 30 * _PERIOD_MS
+    schedule = _cron(before, end_ms=step) + _cron(after, start_ms=step, end_ms=_DAY_MS)
+    assert _length_findings(_replay(schedule, until_ms=_DAY_MS)) == []
+
+
+@pytest.mark.parametrize("before, after", [(620, 62), (186, 62), (124, 62)])
+def test_replay_a_set_that_steps_down_is_absorbed(before: int, after: int) -> None:
+    """A shrink leaves the window briefly narrower than ten sets of the new
+    size - the #51 signature - and the reading remembered from before it covers
+    the window until the old sets trim out."""
+    step = 30 * _PERIOD_MS
+    schedule = _cron(before, end_ms=step) + _cron(after, start_ms=step, end_ms=_DAY_MS)
+    assert _length_findings(_replay(schedule, until_ms=_DAY_MS)) == []
+
+
+@pytest.mark.parametrize("set_size", [62, 1000])
+def test_replay_a_cap_that_stops_being_applied_is_reported_within_the_hour(set_size: int) -> None:
+    """The failure all of this exists to report, and none of the readings added
+    for #45 may report it later than the span alone did - each can only raise
+    the threshold, so this is the property to pin rather than to assume."""
+    broken = 30 * _PERIOD_MS
+    schedule = _cron(set_size, end_ms=broken) + _cron(
+        set_size, start_ms=broken, end_ms=_DAY_MS, capped=False
+    )
+
+    def first_finding(ticks: list[tuple[int, list[str]]]) -> int:
+        return next(t for t, fs in ticks if any(f.startswith("stream-length") for f in fs))
+
+    ticks = _replay(schedule, until_ms=_DAY_MS)
+    first = first_finding(ticks)
+    assert first == first_finding(_replay(schedule, until_ms=_DAY_MS, history=False))
+    assert first - broken <= 3 * _PERIOD_MS
+    assert all(any(f.startswith("stream-length") for f in fs) for t, fs in ticks if t >= first)
+
+
+@pytest.mark.parametrize("before", [124, 186, 310, 558])
+def test_replay_a_cap_lost_just_after_a_shrink_is_not_reported_later(before: int) -> None:
+    """The case a remembered reading could make worse: it outlives its window
+    only while its anchor is retained, and a broken cap retains everything. What
+    stops it holding the old, larger set is the refresh on every window no wider
+    than `retained_full_sets` periods, which the window reaches as it settles
+    after the cut - so the remembered reading is never more than the span
+    alone, and at 9x the narrow refusal reports it outright."""
+    shrink, broken = 30 * _PERIOD_MS, 32 * _PERIOD_MS
+    schedule = (
+        _cron(before, end_ms=shrink)
+        + _cron(62, start_ms=shrink, end_ms=broken)
+        + _cron(62, start_ms=broken, end_ms=_DAY_MS, capped=False)
+    )
+
+    def first_finding(ticks: list[tuple[int, list[str]]]) -> int:
+        return next(
+            t for t, fs in ticks if t >= broken and any(f.startswith("stream-length") for f in fs)
+        )
+
+    assert first_finding(_replay(schedule, until_ms=_DAY_MS)) <= first_finding(
+        _replay(schedule, until_ms=_DAY_MS, history=False)
+    )
+
+
+@pytest.mark.parametrize("per_period", [2, 3, 5, 10])
+def test_replay_republishing_more_often_than_the_period_is_named_not_absorbed(
+    per_period: int,
+) -> None:
+    """CannObserv/broker#51: at `R` republishes a period the span read `R` times
+    the set and the threshold went quiet by the same factor. Now the window is
+    refused once trimmed, the reading remembered from before the change carries
+    it until its anchor trims out, and from then on the length finding stands
+    and names the cause - a mirror that stopped holding, reported the loud
+    way."""
+    change = 30 * _PERIOD_MS
+    schedule = _cron(100, end_ms=change) + _cron(
+        100, start_ms=change, end_ms=_DAY_MS, every_ms=_PERIOD_MS // per_period
+    )
+    ticks = _replay(schedule, until_ms=_DAY_MS)
+    settled = [fs for t, fs in ticks if t > change + LWW_RETAINED_FULL_SETS * _PERIOD_MS]
+    assert settled
+    assert all(
+        any(f.startswith("stream-length") and "more often than every 300s" in f for f in fs)
+        for fs in settled
+    )
 
 
 def test_a_floor_must_agree_with_the_row_it_sits_on() -> None:
@@ -891,6 +1308,35 @@ async def test_collect_reads_the_full_set_floor_off_the_stream(fake_redis) -> No
     for i in range(631):
         await fake_redis.xadd(CONTENT_FETCH_POLICY, {"k": "v"}, id=f"{first_ms + i * step}-0")
     findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    assert [f for f in findings if f.subject == CONTENT_FETCH_POLICY] == []
+
+
+async def test_collect_carries_the_set_reading_between_ticks(fake_redis) -> None:
+    """The half of CannObserv/broker#45 that lives in the collector: the
+    baseline goes into the state file and comes back out of it.
+
+    Two missed republishes of a 62-entry set, trimmed: alone, the span reads 53
+    and the tick warns. Carrying a reading anchored inside the window - the one
+    the tick before the gap would have written - it does not.
+    """
+    now_ms = int(time.time() * 1000)
+    first_ms = now_ms - 12 * _PERIOD_MS
+    step = (now_ms - first_ms) // 630
+    for i in range(631):
+        await fake_redis.xadd(CONTENT_FETCH_POLICY, {"k": "v"}, id=f"{first_ms + i * step}-0")
+    await fake_redis.xadd(CONTENT_FETCH_POLICY, {"k": "v"}, id=f"{now_ms + 1}-0")
+    await fake_redis.xtrim(CONTENT_FETCH_POLICY, maxlen=631, approximate=False)
+
+    alone, state = await collect_broker_findings(fake_redis, previous_state={})
+    assert [f.check for f in alone if f.subject == CONTENT_FETCH_POLICY] == ["stream-length"]
+    carried = SetBaseline.from_state(CONTENT_FETCH_POLICY, state)
+    assert carried.last_entry_ms == now_ms + 1
+    assert carried.remembered is not None  # nothing carried, so this span is what is kept
+
+    anchor = SetBaseline(remembered=RememberedSet(set_size=64, anchor_ms=now_ms - _PERIOD_MS))
+    findings, _ = await collect_broker_findings(
+        fake_redis, previous_state=anchor.to_state(CONTENT_FETCH_POLICY)
+    )
     assert [f for f in findings if f.subject == CONTENT_FETCH_POLICY] == []
 
 

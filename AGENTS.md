@@ -113,9 +113,13 @@ silently corrupts values.
 - **Mirrored constants.** The retention caps in `src/broker/bus_health.py`
   are copies of numbers owned elsewhere, each with its source named. A mirrored
   default is not always the whole rule: the LWW cap is `max(500, 10 x the set
-  watcher republishes)`, and the set size is **read off the stream's own span**
-  each tick rather than mirrored, because a corpus size changes with no edit
-  anywhere - the one failure a mirror cannot cover (broker#44). Group names are
+  watcher republishes)`, and the set size is **read off the stream** each tick
+  rather than mirrored, because a corpus size changes with no edit anywhere -
+  the one failure a mirror cannot cover (broker#44). Its span, what arrived
+  since the last tick, and a remembered span, largest wins (#45); a trimmed
+  window too narrow for one republish a period is refused, not read high
+  (#51). The replay in `tests/test_bus_health.py` is the evidence for both.
+  Group names are
   **derived** via co-core's `group_name()`, never spelled - that is the point of
   cannobserv#384 and the reason this repo depends on co-core at all. See
   `docs/BUS-HEALTH.md`, "Mirrored constants" and "The one cap that is read, not
@@ -194,9 +198,7 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   failing retry starves `XREADGROUP` - a live consumer the undelivered check
   cannot tell from a gone one). #43 (each grouped stream's producer holds the
   group commands on its root, so it can `XACK` its consumer's work away -
-  #14's hole the other way round). #45 (the LWW set reading absorbs one missed
-  republish and not two, and `stream-age` waits for three - a ten-minute window
-  where the length check warns with nothing naming the cause).
+  #14's hole the other way round).
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
