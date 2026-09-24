@@ -1,7 +1,11 @@
 # broker#21 - installed as /etc/default/earlyoom.
 #
-# VSCode Server and Claude Code run in init.scope, outside any slice systemd can
-# cap, so a per-process killer is the containment that reaches them.
+# A shedder of the node's small daemons, NOT a killer of dev tooling (broker#58).
+# VSCode Server, Claude Code and SocratiCode inherit exe.dev's oom_score_adj
+# -1000, which earlyoom 1.7 skips outright, as the kernel does: nothing on this
+# node can kill them. What it can reach is adj-0 and adj-positive daemons - the
+# session dbus-daemon, (sd-pam), cron, polkitd, logind, timesyncd, journald -
+# tens of MiB in all. Whether to keep it is broker#58's open decision.
 #
 #   -r 3600   one memory report an hour in the journal (the package default)
 #   -m 10     SIGTERM below 10% available (~790 MiB at 8 GB), SIGKILL below 5%.
@@ -9,16 +13,19 @@
 #             memory alone decides.
 #   --avoid   the bus and the way in: redis-server, tailscaled, systemd*,
 #             dbus-daemon, and exe.dev's own exe-init and sshd. Only -300, not
-#             an exclusion: dev tooling inherits exe.dev's oom_score_adj -1000,
-#             so the bus also needs the drop-ins' OOMScoreAdjust=-900 to rank
-#             below it
+#             an exclusion: the drop-ins' OOMScoreAdjust=-900 is what takes the
+#             bus's oom_score under 300, so --avoid lands it below earlyoom's
+#             badness-0 starting victim, which it never replaces with less
 #   --prefer  dev tooling: node, npx (titled `npm exec <pkg>`), and VSCode
-#             Server's node processes, whose comm is MainThread
+#             Server's node processes, whose comm is MainThread. Inert while
+#             sessions sit at -1000 - a dry run prints them at 300, the score
+#             before the skip; read its `new victim` lines, not that column
 #
 # No -p: it needs CAP_SYS_NICE, which this DynamicUser unit does not have.
 #
-# Regexes are UNQUOTED and space-free. The unit runs `earlyoom $EARLYOOM_ARGS`,
-# and systemd splits that on whitespace without interpreting quotes - the
-# package's own quoted --avoid example would arrive with literal quotes and
-# never match. tests/deploy/test_memory_protection.py pins both lists.
+# Regexes are space-free and carry NO BACKSLASH. The unit runs
+# `earlyoom $EARLYOOM_ARGS`, and systemd splits that on whitespace, strips
+# quotes, and drops a backslash for the character after it: `\.` would reach
+# earlyoom as `.`, matching anything. tests/deploy/test_memory_protection.py
+# pins both lists and the host class they assume.
 EARLYOOM_ARGS="-r 3600 -m 10 --avoid ^(redis-server|tailscaled|systemd.*|dbus-daemon|exe-init|sshd)$ --prefer ^(node|npm.*|npx|MainThread)$"

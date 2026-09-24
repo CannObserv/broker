@@ -15,9 +15,9 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
 | `sysctl.d/60-broker-memory.conf` | `/etc/sysctl.d/` | `vm.min_free_kbytes` 64 MiB: the reserve atomic allocations draw on (broker#21) |
 | `system.slice.d/broker-memory.conf` | `/etc/systemd/system/system.slice.d/` | `MemoryLow=` for the slice - without it the two below protect nothing, because this node has no `memory_recursiveprot` |
-| `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`, below dev tooling. `broker.conf` beside it stays ordering-only |
+| `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`: out of earlyoom's reach, and the kernel's last resort after the small daemons. `broker.conf` beside it stays ordering-only |
 | `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` and `OOMScoreAdjust=-900` for the network path |
-| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300) and toward dev tooling (`--prefer`) - a ranking, not an exclusion |
+| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). It **cannot reach dev tooling**, which exe.dev starts at -1000, so it sheds small daemons only; keeping it is open (broker#58) |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
 (skipping when absent, so CI and dev clones pass), and
@@ -313,29 +313,38 @@ things about this node shaped them:
 - **Dev tooling runs in `init.scope`, not `user.slice`.** exe.dev's agent starts
   sessions itself, so VSCode Server and Claude Code are outside any slice
   systemd can cap. A `user.slice` `MemoryMax=` contains nothing here - which is
-  why the containment is a per-process killer (earlyoom) plus protection for
-  what matters (`MemoryLow=`), not a limit on what does not.
+  why the defences are protection for what matters (`MemoryLow=`), a reserve
+  (`vm.min_free_kbytes`) and a kill order, not a limit on what does not.
 - **cgroup2 has no `memory_recursiveprot`.** A service's protection is capped by
   its slice's, and `system.slice` defaults to 0. Check
   `/sys/fs/cgroup/system.slice/redis-server.service/memory.low`, not
   `systemctl show`, which reports the configured value either way.
-- **Everything exe.dev starts is at `oom_score_adj` -1000.** `exe-init` and
-  `sshd` run there, and every session process inherits it, so dev tooling reads
-  `oom_score` 0. earlyoom 1.7 floors a `--prefer` match at 300 and an unmatched
-  one (`claude`, anything run from a shell) stays at 0, while a unit at the
-  default adj 0 reads ~667 and `--avoid` only takes it to ~367. As first
-  installed, earlyoom's dry run would have killed tailscaled and redis-server
-  before any of it. Both units now run at -900: below every dev process, above
-  -1000 so the kernel's own OOM killer - which cannot touch dev tooling at all -
-  still has a restartable last resort instead of a panic that `kernel.panic = 0`
-  turns into a hung node. What still ranks **above** dev tooling is small
-  adj-0 system daemons (polkitd, cron, logind): collateral earlyoom works through
-  first, freeing little. Check the order with
-  `earlyoom --dryrun -d -m 99,99 -s 100,100 <the regexes>`, which kills nothing.
-- **earlyoom's regexes are unquoted.** The unit runs `earlyoom $EARLYOOM_ARGS`,
-  which systemd splits on whitespace without interpreting quotes; the package's
-  own quoted example would never match. `journalctl -u earlyoom -b` prints both
-  regexes at start - read them there.
+- **Everything exe.dev starts is at `oom_score_adj` -1000, and nothing can kill
+  it.** `exe-init` and `sshd` run there and every session process inherits it -
+  VSCode Server, `claude`, SocratiCode's `npx`. The kernel skips a -1000 process
+  outright, and so does earlyoom 1.7, *after* adding the `--prefer` bonus: its
+  `-d` dry run prints a session at 300, but that is the score before the skip
+  (broker#58). So `--prefer` reaches nothing here, and neither killer can take
+  the processes that exhausted the node in broker#17.
+- **What earlyoom can reach is small daemons.** At adj 0 or above: the session
+  `dbus-daemon` (~800, 500 after `--avoid`), `(sd-pam)` (~733), cron and polkitd
+  (~666), then logind, timesyncd and journald. Under sustained pressure it works
+  through all of them - tens of MiB, journald's evidence included - and then finds
+  no victim. Whether that is worth keeping is broker#58's open decision.
+- **The bus is out of earlyoom's reach and last for the kernel.** A unit at the
+  default adj 0 reads ~667, which `--avoid` only takes to ~367, so as first
+  installed earlyoom's dry run would have killed tailscaled and redis-server.
+  Both run at -900 now: `oom_score` under 300, so `--avoid` puts them below the
+  badness-0 victim earlyoom starts each scan with, and never picks. Not -1000,
+  so the kernel's own OOM killer, once the small daemons are gone, still has a
+  restartable victim instead of a panic that `kernel.panic = 0` turns into a
+  hung node. Check the order with
+  `earlyoom --dryrun -d -m 99,99 -s 100,100 <the regexes>`, which kills nothing,
+  and read its `new victim` lines, not the badness column.
+- **earlyoom's regexes carry no backslash.** The unit runs
+  `earlyoom $EARLYOOM_ARGS`, which systemd splits on whitespace, stripping quotes
+  and dropping a backslash for the character after it: `\.` would arrive as `.`.
+  `journalctl -u earlyoom -b` prints both regexes at start - read them there.
 
 **`vm.overcommit_memory = 1`, and the warning it answers (broker#26).** Redis
 logs `WARNING Memory overcommit must be enabled!` at every start on any value
@@ -351,9 +360,10 @@ jemalloc issue the warning cites is about mode **2**; jemalloc's own
 `os_overcommits_proc` treats 0 and 1 alike.
 
 What the change costs is where a too-large allocation fails: at first touch,
-as an earlyoom or kernel OOM kill in the order above, rather than up front with
-`ENOMEM`. That only reaches a process asking for more than the whole machine at
-once. **The running server keeps its warning** - it is logged at start, so the
+as an OOM kill in the order above, rather than up front with `ENOMEM`. That only
+reaches a process asking for more than the whole machine at once - and if that
+process is dev tooling, which neither killer can take, the kill lands on the
+daemons and then the bus instead. **The running server keeps its warning** - it is logged at start, so the
 log goes quiet at the next restart, not now. And **re-measure after a kernel
 change**: "mode 0 ignores free memory" is this kernel's behaviour, not a
 guarantee.
@@ -364,10 +374,11 @@ updates, close the old window rather than leaving both connected.
 
 `tests/deploy/test_memory_protection.py` pins all of it: the reserve's floor,
 overcommit at the value redis asks for, redis's protection against twice the
-tracked cap, the slice covering its children, the bus's score below dev
-tooling's, both regexes against the real process names, and - on this node -
-installed parity, every tracked sysctl key read back from `/proc/sys`, and
-earlyoom running and enabled.
+tracked cap, the slice covering its children, the bus's score out of earlyoom's
+reach, both regexes against the real process names and systemd's split, and -
+on this node - installed parity, every tracked sysctl key read back from
+`/proc/sys`, the host class (exe.dev's roots at -1000, no `--prefer` match
+outside it), and earlyoom running and enabled.
 
 ## Changing the cap
 
