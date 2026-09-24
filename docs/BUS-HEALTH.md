@@ -83,7 +83,8 @@ Per tick it probes:
   the first check already pays for. The 75% finding also names the three
   longest streams, by entries not bytes, out of the `XINFO STREAM` replies the
   length checks below already read (CannObserv/broker#61) - a naming aid, never
-  a threshold;
+  a threshold. A `*.dlq` is not in that list: its depth is its own `dlq`
+  finding on the same tick;
 - `XLEN` per stream, each threshold derived as **that stream's own retention
   cap + 10%** - so a breach means the retention mechanism broke, not that
   traffic grew. Three caps apply and they are not interchangeable: 110k for

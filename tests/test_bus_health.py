@@ -171,7 +171,7 @@ def test_memory_finding_names_the_largest_streams_by_length() -> None:
     )
     assert finding.subject == "redis"
     assert (
-        f"longest streams: {CONTENT_BLOBS} 900000, {CONTENT_REVISIONS} 120000, "
+        f"longest checked streams: {CONTENT_BLOBS} 900000, {CONTENT_REVISIONS} 120000, "
         f"{INFO_CHANGES} 40000" in finding.message
     )
     assert CONTENT_FETCH not in finding.message
@@ -191,7 +191,7 @@ def test_memory_finding_without_stream_lengths_names_none() -> None:
     (finding,) = evaluate_memory(
         used_memory=750, maxmemory=1000, stream_lengths={CONTENT_REPLICATE: 0}
     )
-    assert "longest streams" not in finding.message
+    assert "longest checked streams" not in finding.message
 
 
 async def test_collect_memory_finding_names_the_streams_the_tick_read(fake_redis) -> None:
@@ -200,6 +200,9 @@ async def test_collect_memory_finding_names_the_streams_the_tick_read(fake_redis
     for _ in range(3):
         await fake_redis.xadd(CONTENT_BLOBS, {"k": "v"})
     await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
+    dlq = dlq_name(CONTENT_BLOBS)
+    for _ in range(5):
+        await fake_redis.xadd(dlq, {"k": "v"})
 
     class _NearTheCap(_DelegatingClient):
         async def info(self, section=None, *a, **kw):
@@ -214,7 +217,10 @@ async def test_collect_memory_finding_names_the_streams_the_tick_read(fake_redis
     findings, _ = await collect_broker_findings(_NearTheCap(fake_redis), previous_state={})
 
     (memory,) = [f for f in findings if f.check == "memory"]
-    assert f"longest streams: {CONTENT_BLOBS} 3, {CONTENT_REVISIONS} 1" in memory.message
+    assert f"longest checked streams: {CONTENT_BLOBS} 3, {CONTENT_REVISIONS} 1" in memory.message
+    # Longer than both, and not named: its depth is its own finding.
+    assert dlq not in memory.message
+    assert any(f.check == "dlq" and f.subject == dlq for f in findings)
 
 
 async def test_collect_memory_reads_the_policy_from_the_section_it_already_fetches(

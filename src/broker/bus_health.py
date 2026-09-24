@@ -744,6 +744,8 @@ def evaluate_memory(
     already raised; a length never raises one (CannObserv/broker#61). Entries,
     not bytes: a ``content.blobs`` entry is far larger than an ``info.*`` one,
     so the list says where to look first, not which stream holds the memory.
+    Only ``STREAM_CHECKS`` streams are in it: a ``*.dlq`` is found later in
+    the tick, and any depth it has is already its own ``dlq`` finding.
     """
     findings = _evaluate_eviction_policy(policy)
     if maxmemory == 0:
@@ -769,7 +771,10 @@ def evaluate_memory(
         )[:MEMORY_NAMED_STREAMS]
         if longest:
             named = ", ".join(f"{topic} {length}" for topic, length in longest)
-            message += f"; longest streams: {named} (entries, not bytes)"
+            message += (
+                f"; longest checked streams: {named} "
+                "(entries, not bytes; a DLQ's depth is its own finding)"
+            )
         findings.append(Finding(check="memory", subject="redis", message=message))
     return findings
 
