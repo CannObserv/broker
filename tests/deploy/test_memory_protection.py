@@ -73,8 +73,9 @@ EXEMPT = -1000
 #: ``oom_score_adj`` from.
 EXE_DEV_ROOTS = ["exe-init", "sshd"]
 
-#: ``comm`` of what carries the bus, and of how anyone reaches the node at all -
-#: ``sshd`` and ``exe-init`` are exe.dev's own. Ranked last by earlyoom, not exempt.
+#: ``comm`` of what carries the bus, and of how anyone reaches the node at all.
+#: ``--avoid`` ranks these last, not exempt - except ``sshd`` and ``exe-init``,
+#: exe.dev's own, which sit at -1000 and are exempt whatever the regex says.
 PROTECTED = [
     "redis-server",
     "tailscaled",
