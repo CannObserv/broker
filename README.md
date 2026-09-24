@@ -41,7 +41,8 @@ wrong machine: the config parity test asserted a path under
 exists for **AOF headroom** - reported archiver's disk. Splitting the repo is
 what makes them true again.
 
-Landed after the epic closed, on the grants and reads this repo owns:
+The epic's close, and what landed after it on the grants and reads this repo
+owns:
 
 - CannObserv/broker#1 - the relocation epic. Closed 2026-09-15, every sub-issue
   with it. #14 - confining each service's `+xadd`/`+xtrim` to the streams it
