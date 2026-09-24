@@ -61,8 +61,10 @@ appendfsync everysec
 # "OOM command not allowed" errors that a producer can retry through. Archiver's
 # outbox does - that error is classified TRANSIENT in _TRANSIENT_PUBLISH_ERRORS
 # in archiver's src/core/changes/publisher.py, and THE TWO MUST STAY IN STEP.
-# Watcher and replicator retry through it too, so hitting the cap stalls the
-# instance and loses no writes (CannObserv/watcher#288, CannObserv/replicator#79).
+# Watcher and replicator retry through it too (CannObserv/watcher#288,
+# CannObserv/replicator#79), so hitting the cap stalls the instance and loses
+# one kind of write only: an info.registry snapshot entry, which has no retry
+# and is superseded by the next period's (CannObserv/archiver#231).
 #
 # Re-derived jointly with archiver on 2026-09-24 for the 8 GB node
 # (CannObserv/archiver#231); the measurement is there. The streams that have a
