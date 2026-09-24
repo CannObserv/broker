@@ -96,10 +96,11 @@ Per tick it probes:
   below. **The five `content.*` streams get no length threshold**: nothing trims
   them, so there is no cap to mirror and a breach could only mean traffic grew.
   `maxmemory` is their only bound and the memory check above is the finding for
-  it, and the one that names them. Until CannObserv/broker#60 four of them borrowed the 110k, which
-  archiver's `trim_topics` allowlist (CannObserv/archiver#239) never applied to
-  them - and the `maxmemory` derivation on CannObserv/archiver#231 summed those
-  borrowed numbers as retention. [STREAMS.md](STREAMS.md) marks each row
+  it, naming the longest streams when it fires. Until CannObserv/broker#60 four
+  of them borrowed the 110k, which archiver's `trim_topics` allowlist
+  (CannObserv/archiver#239) never applied to them - and the `maxmemory`
+  derivation on CannObserv/archiver#231 summed those borrowed numbers as
+  retention. [STREAMS.md](STREAMS.md) marks each row
   **No retention cap**, and a test holds the probe to it;
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
