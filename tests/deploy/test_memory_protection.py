@@ -283,10 +283,10 @@ def test_earlyoom_avoid_list_covers_the_bus(name: str) -> None:
 
 @pytest.mark.parametrize("name", DEV_TOOLING)
 def test_earlyoom_prefers_dev_tooling(name: str) -> None:
-    """Inert on this node: every match inherits -1000, which earlyoom skips before
-    the preference counts (``test_live_prefer_reaches_nothing``). Kept for the
-    case that test watches for - a session no longer exempt - where dev tooling
-    is then taken first."""
+    """Inert on this node, where earlyoom is disabled and every match inherits
+    -1000 anyway. Kept for the case ``test_live_prefer_reaches_nothing`` watches
+    for - a session no longer exempt - where earlyoom goes back on and dev
+    tooling is then taken first."""
     args = earlyoom_args()
     assert re.search(flag(args, "--prefer"), name), f"--prefer misses {name}"
     assert not re.search(flag(args, "--avoid"), name), f"--avoid protects {name}"
@@ -369,9 +369,10 @@ def _live_processes() -> list[tuple[str, int]]:
 def test_live_prefer_reaches_nothing() -> None:
     """The host class this node's memory story rests on (broker#58): exe.dev's own
     processes sit at -1000, so every session - and every ``--prefer`` match - is
-    exempt from earlyoom and the kernel alike. If exe.dev stops exempting
-    sessions, this fails, and ``deploy/README.md``'s *Memory protection* section
-    and ``deploy/earlyoom.default`` describe a different node than the one running.
+    exempt from earlyoom and the kernel alike, and why earlyoom is disabled. If
+    exe.dev stops exempting sessions, this fails: ``deploy/README.md``'s *Memory
+    protection* section describes a different node, and earlyoom is worth
+    turning back on.
     """
     if _read_if_installed(INSTALLED[EARLYOOM]) is None:
         pytest.skip("earlyoom not configured on this host")
@@ -384,10 +385,17 @@ def test_live_prefer_reaches_nothing() -> None:
     assert not reachable, f"--prefer now reaches dev tooling: {reachable}"
 
 
-@pytest.mark.parametrize(("verb", "expected"), [("is-active", "active"), ("is-enabled", "enabled")])
-def test_earlyoom_is_running_and_survives_a_boot(verb: str, expected: str) -> None:
-    """Enabled as well as active: exe.dev restarts are hard stops, and a unit that
-    is only running protects nothing after the next one."""
+@pytest.mark.parametrize(
+    ("verb", "expected"), [("is-active", "inactive"), ("is-enabled", "disabled")]
+)
+def test_earlyoom_is_installed_and_disabled(verb: str, expected: str) -> None:
+    """Installed and configured, not running (broker#58). It cannot reach dev
+    tooling at -1000, and what it can reach - the session ``dbus-daemon``,
+    ``(sd-pam)``, cron, logind, timesyncd, journald - frees tens of MiB and costs
+    the journal. Disabled as well as stopped: ``apt install`` starts it on stock
+    arguments, and an enabled unit would come back at the next hard stop. Kept
+    installed so that if ``test_live_prefer_reaches_nothing`` ever fails, turning
+    it back on is ``systemctl enable --now earlyoom``."""
     if _read_if_installed(INSTALLED[EARLYOOM]) is None:
         pytest.skip("earlyoom not configured on this host")
     if not shutil.which("systemctl"):

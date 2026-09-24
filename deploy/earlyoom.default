@@ -5,7 +5,9 @@
 # -1000, which earlyoom 1.7 skips outright, as the kernel does: nothing on this
 # node can kill them. What it can reach is adj-0 and adj-positive daemons - the
 # session dbus-daemon, (sd-pam), cron, polkitd, logind, timesyncd, journald -
-# tens of MiB in all. Whether to keep it is broker#58's open decision.
+# tens of MiB in all, journald's evidence included. So it is INSTALLED AND
+# DISABLED (broker#58); this file is kept current for the day sessions stop
+# being exempt, when `systemctl enable --now earlyoom` is the whole change.
 #
 #   -r 3600   one memory report an hour in the journal (the package default)
 #   -m 10     SIGTERM below 10% available (~790 MiB at 8 GB), SIGKILL below 5%.

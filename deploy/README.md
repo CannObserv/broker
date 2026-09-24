@@ -17,7 +17,7 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `system.slice.d/broker-memory.conf` | `/etc/systemd/system/system.slice.d/` | `MemoryLow=` for the slice - without it the two below protect nothing, because this node has no `memory_recursiveprot` |
 | `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`: out of earlyoom's reach, and the kernel's last resort after the small daemons. `broker.conf` beside it stays ordering-only |
 | `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` and `OOMScoreAdjust=-900` for the network path |
-| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). It **cannot reach dev tooling**, which exe.dev starts at -1000, so it sheds small daemons only; keeping it is open (broker#58) |
+| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). It **cannot reach dev tooling**, which exe.dev starts at -1000, so it would shed small daemons only: **installed and disabled** (broker#58), configured for the day that changes |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
 (skipping when absent, so CI and dev clones pass), and
@@ -285,9 +285,11 @@ sudo systemctl daemon-reload
 for u in redis-server tailscaled; do
     sudo choom -n -900 -p "$(systemctl show -p MainPID --value "$u")"
 done
+# earlyoom: installed and configured, NOT running (broker#58). The install starts
+# it on stock arguments, so disable it in the same step.
 sudo apt-get install -y earlyoom
 sudo install -m 0644 deploy/earlyoom.default /etc/default/earlyoom
-sudo systemctl restart earlyoom
+sudo systemctl disable --now earlyoom
 ```
 
 Then verify against the running broker rather than against the files:
@@ -328,9 +330,11 @@ things about this node shaped them:
   the processes that exhausted the node in broker#17.
 - **What earlyoom can reach is small daemons.** At adj 0 or above: the session
   `dbus-daemon` (~800, 500 after `--avoid`), `(sd-pam)` (~733), cron and polkitd
-  (~666), then logind, timesyncd and journald. Under sustained pressure it works
-  through all of them - tens of MiB, journald's evidence included - and then finds
-  no victim. Whether that is worth keeping is broker#58's open decision.
+  (~666), then logind, timesyncd and journald. Under sustained pressure it would
+  work through all of them - tens of MiB, journald's evidence included - and then
+  find no victim. So it is **installed and disabled** (broker#58), its config kept
+  current: if exe.dev ever stops exempting sessions, `test_live_prefer_reaches_nothing`
+  fails, and `systemctl enable --now earlyoom` is the whole change.
 - **The bus is out of earlyoom's reach and last for the kernel.** A unit at the
   default adj 0 reads ~667, which `--avoid` only takes to ~367, so as first
   installed earlyoom's dry run would have killed tailscaled and redis-server.
@@ -344,7 +348,8 @@ things about this node shaped them:
 - **earlyoom's regexes carry no backslash.** The unit runs
   `earlyoom $EARLYOOM_ARGS`, which systemd splits on whitespace, stripping quotes
   and dropping a backslash for the character after it: `\.` would arrive as `.`.
-  `journalctl -u earlyoom -b` prints both regexes at start - read them there.
+  When it runs, `journalctl -u earlyoom -b` prints both regexes at start - read
+  them there.
 
 **`vm.overcommit_memory = 1`, and the warning it answers (broker#26).** Redis
 logs `WARNING Memory overcommit must be enabled!` at every start on any value
@@ -378,7 +383,7 @@ tracked cap, the slice covering its children, the bus's score out of earlyoom's
 reach, both regexes against the real process names and systemd's split, and -
 on this node - installed parity, every tracked sysctl key read back from
 `/proc/sys`, the host class (exe.dev's roots at -1000, no `--prefer` match
-outside it), and earlyoom running and enabled.
+outside it), and earlyoom stopped and disabled.
 
 ## Changing the cap
 
