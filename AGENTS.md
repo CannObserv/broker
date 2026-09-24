@@ -178,6 +178,8 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   #34 - archiver's `+xtrim` narrowed to `~info.changes` and its two DLQs, live
   2026-09-22: nothing on the instance can `XTRIM` `info.registry` now, and
   its row in `docs/STREAMS.md` says why (CannObserv/archiver#234 answered).
+  #59 then cut the two DLQs: archiver's `+xtrim` is `~info.changes` alone,
+  and it disposes of dead letters by `+xdel` (live 2026-09-24).
 - Open follow-on: CannObserv/replicator#98 (recovery re-claiming its own
   failing retry starves `XREADGROUP` - a live consumer the undelivered check
   cannot tell from a gone one). #43 (each grouped stream's producer holds the
