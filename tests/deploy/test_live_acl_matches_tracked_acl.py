@@ -62,8 +62,10 @@ wrong-in-both-places is a test over the *taxonomy* - see
 ``test_replicator_can_name_every_dedupe_namespace`` - and that shape is worth
 preferring wherever a grant has a derivable source.
 
-Skips unless ``BROKER_REDIS_URL`` is set and the broker answers, so CI and dev
-clones pass. On the broker node, source the env first - and as
+The live tests skip unless ``BROKER_REDIS_URL`` is set and the broker answers,
+and the ``sudo -n`` ones also skip off the node, so CI and dev clones pass. The
+stand-in test for #54 needs only ``redis-server``, and so runs there too. On
+the broker node, source the env first - and as
 ``set -a; . /etc/broker/.env; set +a``, never ``export $(cat ... | xargs)``.
 """
 
