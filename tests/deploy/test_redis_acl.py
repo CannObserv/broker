@@ -591,7 +591,8 @@ def test_archiver_trim_grant_is_its_trim_allowlist(users) -> None:
       `tests/core/changes/test_publisher.py::test_run_trim_allowlist_defaults_to_info_changes_only`;
     - the `+xtrim` selector in ../deploy/redis-acl.conf, pinned here.
 
-    Widening either alone fails a test in the other repository's review. The
+    Neither suite runs the other's. Widening either half alone fails that
+    repository's own pin, whose docstring names the half to widen with it. The
     grant narrower than the allowlist is a NOPERM archiver logs as one WARNING
     per ~20 drain iterations; wider is a trim nobody issues, on a stream the
     inventory may say is never trimmed.
