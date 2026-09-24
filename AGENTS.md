@@ -71,16 +71,11 @@ silently corrupts values.
   operator off a **Never XTRIMmed** stream (broker#34). Do not widen it in an
   incident.
 - **`ACL LOG` is evidence: never reset it, and name every denial you cause.**
-  An operator reads it for ACL faults, and Redis clears it only whole, so a
-  benign entry stays until a restart or 128 newer entries. The remedy is a row in
-  `deploy/redis-acl.conf`'s *Denials that are not faults* list, in the same
-  session. Check a live read against the user's line before you run it. A
-  peer agent's denials are **backfilled after**, not announced before: the peer
-  cannot read this log. Name each timestamp (server time minus `age-seconds`;
-  7.0.15 has no `timestamp-created`), and the peer attributes the entry from
-  its own session logs. `tests/deploy/test_redis_acl.py` fails a row once a
-  grant would admit it; the denial then belongs in the file's grant provenance,
-  its header or the user's stanza (broker#48).
+  Check a live read against the user's line first. A denial you or a peer
+  cause gets a row in `deploy/redis-acl.conf`'s *Denials that are not faults*,
+  in the same session - a peer's is backfilled after, from timestamps you name.
+  The procedure is in that section; `tests/deploy/test_redis_acl.py` pins it
+  (broker#48).
 - **Credentials never reach a command line.** Runbooks authenticate with
   `REDISCLI_AUTH` plus `--user`, never a `redis://user:<pw>@host` URL and never
   `-u`, `-a` or `--pass`: `argv` is readable from `ps`, kept in root's shell
