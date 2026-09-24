@@ -79,8 +79,8 @@ silently corrupts values.
   cannot read this log. Name each timestamp (server time minus `age-seconds`;
   7.0.15 has no `timestamp-created`), and the peer attributes the entry from
   its own session logs. `tests/deploy/test_redis_acl.py` fails a row once a
-  grant would admit it; at that point the denial belongs in the user's stanza
-  as grant provenance (broker#48).
+  grant would admit it; the denial then belongs in the file's grant provenance,
+  its header or the user's stanza (broker#48).
 - **Credentials never reach a command line.** Runbooks authenticate with
   `REDISCLI_AUTH` plus `--user`, never a `redis://user:<pw>@host` URL and never
   `-u`, `-a` or `--pass`: `argv` is readable from `ps`, kept in root's shell

@@ -202,7 +202,7 @@ authenticated as `default`:
 ```bash
 rcli brokeradmin CLIENT LIST | grep -oE 'user=[^ ]+' | sort | uniq -c
 #   4 user=archiver  1 user=brokeradmin  3 user=replicator  3 user=watcher  - and no user=default
-rcli brokeradmin ACL LOG 5                                # explained: a stanza's grant provenance or the not-a-fault list in redis-acl.conf names each entry
+rcli brokeradmin ACL LOG 5                                # explained: redis-acl.conf's grant provenance (header or stanza) or its not-a-fault list names each entry
 rcli acladmin ACL LIST | grep '^user acladmin'            # precondition, not optional
 ```
 
