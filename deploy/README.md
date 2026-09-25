@@ -18,6 +18,7 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`: out of earlyoom's reach, and the kernel's last resort after the small daemons. `broker.conf` beside it stays ordering-only |
 | `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` and `OOMScoreAdjust=-900` for the network path |
 | `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). It **cannot reach dev tooling**, which exe.dev starts at -1000, so it would shed small daemons only: **installed and disabled** (broker#58), configured for the day that changes |
+| `needrestart.conf.d/broker.conf` | `/etc/needrestart/conf.d/` | `$nrconf{restart} = 'l'`: needrestart **lists** restarts after an apt run, never performs them. Stock Ubuntu mode restarts automatically, so a `libc6` security update would restart `redis-server` outside a window (broker#65) |
 
 `tests/deploy/` asserts all of it: the installed copies match these files
 (skipping when absent, so CI and dev clones pass), and
@@ -292,6 +293,10 @@ done
 sudo apt-get install -y earlyoom
 sudo install -m 0644 deploy/earlyoom.default /etc/default/earlyoom
 sudo systemctl disable --now earlyoom
+
+# needrestart lists, never restarts (broker#65). Takes effect at the next apt run;
+# `sudo needrestart -b -m u` prints "Disabling Ubuntu mode" once it is read.
+sudo install -m 0644 -D deploy/needrestart.conf.d/broker.conf /etc/needrestart/conf.d/broker.conf
 ```
 
 Then verify against the running broker rather than against the files:
