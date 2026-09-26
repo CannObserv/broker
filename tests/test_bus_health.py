@@ -2304,8 +2304,11 @@ def test_every_canonical_stream_has_a_probe_row() -> None:
     written to avoid - it moves with the pin. Before it, co-core v0.19.6 added
     ``content.persist`` and every test here stayed green (CannObserv/broker#64).
     Rows for non-canonical topics are allowed; a canonical topic with no row is
-    not.
+    not. The floor below keeps the subset check from passing vacuously: a
+    co-core that moved its constants would empty the derived set, and an empty
+    set is a subset of anything.
     """
+    assert CONTENT_REVISIONS in CANONICAL_STREAMS, "tests/canonical.py derived no streams"
     probed = {c.topic for c in STREAM_CHECKS}
     missing = sorted(CANONICAL_STREAMS - probed)
     assert not missing, f"co-core publishes {missing} and the probe has no row for them"
