@@ -111,6 +111,7 @@ from co_core.pure.adapters.bus.streams import (
     CONTENT_DERIVED,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
+    CONTENT_PERSIST,
     CONTENT_PROCESS,
     CONTENT_REPLICATE,
     CONTENT_REVISIONS,
@@ -323,6 +324,10 @@ REPLICATE_GROUP = group_name(CONTENT_REPLICATE, "replicator")
 # the first entry either stream ever carries.
 PROCESS_GROUP = group_name(CONTENT_PROCESS, "observo")
 DERIVED_GROUP = group_name(CONTENT_DERIVED, "watcher")
+# The persist command (CannObserv/broker#64, the cannobserv#493 contract):
+# Replicator's third worker pool, declared ahead of the loop it names, which
+# ships disabled behind REPLICATOR_PERSIST_ENABLED (CannObserv/replicator#114).
+PERSIST_GROUP = group_name(CONTENT_PERSIST, "replicator")
 
 
 # --- who owes each DLQ its triage (CannObserv/broker#1 Phase 5) ---
@@ -360,6 +365,9 @@ DLQ_DRAINERS: dict[str, str] = {
     # fact on Watcher's, and each is the one party that can read its own.
     dlq_name(CONTENT_PROCESS): "observo",
     dlq_name(CONTENT_DERIVED): "watcher",
+    # The persist command (CannObserv/broker#64): replicator's loop dead-letters
+    # an undecodable persist here, as it does for its other two streams.
+    dlq_name(CONTENT_PERSIST): "replicator",
     # Prospective: info.changes has no consumer group yet (CannObserv/archiver#155),
     # so nothing writes this queue. Recorded now because the day it appears is
     # the day nobody remembers who owns it.
@@ -712,6 +720,26 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     StreamCheck(
         CONTENT_DERIVED,
         pending_group=DERIVED_GROUP,
+        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    ),
+    # content.persist (CannObserv/broker#64): archiver issues one per observed
+    # revision, replicator copies the bytes into its content-addressed permanent
+    # store, and the outcomes ride content.artifacts. content.replicate's posture
+    # again - one worker pool, in no trim path, no maxlen by contract - so any
+    # decrease in its length is a fault.
+    #
+    # The undelivered threshold is the shared one, and here it matters beyond
+    # latency: every persist races the temp tier's 7-day TTL (MUST-7), so a
+    # stopped reader is revisions aging toward a blob_expired, and the position
+    # check is what sees it - a reader that stopped holds nothing pending. Sized
+    # against content.replicate's measured worst handler, since a persist moves
+    # the same bytes between the same kind of stores; replicator has not timed
+    # its own. Dormant until the stream exists; once archiver writes it without
+    # the group, group-missing every tick, which is the go-live order inverted.
+    StreamCheck(
+        CONTENT_PERSIST,
+        never_trimmed=True,
+        pending_group=PERSIST_GROUP,
         warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
     ),
 )

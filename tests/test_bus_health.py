@@ -30,6 +30,7 @@ from co_core.pure.adapters.bus.streams import (
     CONTENT_DERIVED,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
+    CONTENT_PERSIST,
     CONTENT_PROCESS,
     CONTENT_REPLICATE,
     CONTENT_REVISIONS,
@@ -75,6 +76,7 @@ from src.broker.bus_health import (
     save_state,
     with_margin,
 )
+from tests.canonical import CANONICAL_STREAMS
 
 
 @pytest.fixture
@@ -584,7 +586,8 @@ def test_content_blobs_carries_no_retention_opinion() -> None:
 
 def test_inventory_covers_every_consumer_group_on_the_node() -> None:
     """Widened from Archiver's two to all five (CannObserv/broker#1 Phase 5),
-    then to seven with the processing pair (CannObserv/broker#62).
+    then to seven with the processing pair (CannObserv/broker#62), then to
+    eight with `replicator.persist` (CannObserv/broker#64).
 
     The exclusion was inherited from a probe that ran on Archiver's own host,
     where a downstream service's group lag was plausibly its own alerting
@@ -610,6 +613,7 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
         "watcher.derived",
         "replicator.fetch",
         "replicator.replicate",
+        "replicator.persist",
         "observo.process",
     }
 
@@ -651,6 +655,27 @@ def test_the_processing_pairs_queues_are_owed_to_their_consumers() -> None:
     same for `content.derived` (CannObserv/broker#62)."""
     assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_PROCESS)] == "observo"
     assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_DERIVED)] == "watcher"
+
+
+def test_content_persist_is_a_never_trimmed_command_stream_with_one_pool() -> None:
+    """The persist command CannObserv/broker#64 adds (cannobserv#493), in
+    `content.replicate`'s posture: replicator's one worker pool,
+    `replicator.persist`, and **never trimmed** - no producer maxlen, no
+    `+xtrim` on the instance naming it, so any decrease in its length is a fault
+    and there is no cap for a length threshold to mirror.
+
+    The shared undelivered threshold, sized against `content.replicate`'s
+    measured worst handler (5.4 s at 64 MiB, CannObserv/broker#30): a persist
+    moves the same bytes between the same kind of stores. An assumption until
+    replicator times its own handler.
+    """
+    persist = _check_for(CONTENT_PERSIST)
+    assert persist.pending_group == "replicator.persist"
+    assert persist.never_trimmed is True
+    assert persist.warn_length is None
+    assert persist.warn_last_entry_age_seconds is None
+    assert persist.warn_undelivered_age_seconds == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+    assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_PERSIST)] == "replicator"
 
 
 def test_group_names_are_derived_not_spelled() -> None:
@@ -697,7 +722,8 @@ def test_info_changes_threshold_tracks_the_operator_xtrim_cap() -> None:
 
 # The streams nothing trims: no producer passes a maxlen, and archiver's
 # `trim_topics` allowlist names `info.changes` alone (CannObserv/broker#60).
-# The processing pair joined with no cap of its own (CannObserv/broker#62).
+# The processing pair joined with no cap of its own (CannObserv/broker#62), and
+# the persist command with none by contract (CannObserv/broker#64).
 UNCAPPED_STREAMS = (
     CONTENT_FETCH,
     CONTENT_REVISIONS,
@@ -706,6 +732,7 @@ UNCAPPED_STREAMS = (
     CONTENT_BLOBS,
     CONTENT_PROCESS,
     CONTENT_DERIVED,
+    CONTENT_PERSIST,
 )
 
 
@@ -2258,6 +2285,32 @@ def test_every_probed_topic_is_classifiable(topic: str) -> None:
     assert stream_kind(topic) in get_args(StreamKind)
 
 
+@pytest.mark.parametrize("topic", sorted(CANONICAL_STREAMS))
+def test_every_canonical_stream_constant_is_classifiable(topic: str) -> None:
+    """The tripwire ``StreamCheck.__post_init__``'s docstring has named since the
+    bootstrap, and which did not exist until CannObserv/broker#64: over every
+    stream co-core publishes, not only the probed ones, so the guard's
+    fail-open ``ValueError`` swallow cannot hide a canonical topic co-core
+    stopped classifying."""
+    assert stream_kind(topic) in get_args(StreamKind)
+
+
+def test_every_canonical_stream_has_a_probe_row() -> None:
+    """A stream co-core adds is watched from the pin bump that brings it in, or
+    the bump is red.
+
+    ``CANONICAL_STREAMS`` is read off co-core's module constants
+    (tests/canonical.py), so this is not the hand list the test above was
+    written to avoid - it moves with the pin. Before it, co-core v0.19.6 added
+    ``content.persist`` and every test here stayed green (CannObserv/broker#64).
+    Rows for non-canonical topics are allowed; a canonical topic with no row is
+    not.
+    """
+    probed = {c.topic for c in STREAM_CHECKS}
+    missing = sorted(CANONICAL_STREAMS - probed)
+    assert not missing, f"co-core publishes {missing} and the probe has no row for them"
+
+
 @pytest.mark.parametrize(
     "check",
     [c for c in STREAM_CHECKS if stream_kind(c.topic) == "config_state"],
@@ -2280,11 +2333,10 @@ def test_every_config_state_check_probes_last_entry_age(check: StreamCheck) -> N
     ``warn_last_entry_age_seconds`` therefore buys a probe that cannot detect
     the failure it exists for.
 
-    Known limit: parametrising over ``STREAM_CHECKS`` means this cannot catch a
-    config/state stream dropped from the inventory entirely - that case has no
-    entry to iterate. Detecting it would need a hand-maintained list of
-    canonical topics, which is the coupling
-    ``test_every_probed_topic_is_classifiable`` deliberately removed.
+    Parametrising over ``STREAM_CHECKS`` cannot by itself catch a config/state
+    stream dropped from the inventory entirely - that case has no entry to
+    iterate. ``test_every_canonical_stream_has_a_probe_row`` catches it, over a
+    set derived from co-core rather than listed (CannObserv/broker#64).
     """
     assert check.warn_last_entry_age_seconds is not None, (
         f"{check.topic} is groupless, so last-entry age is its only liveness probe"

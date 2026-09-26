@@ -31,13 +31,12 @@ from co_core.pure.adapters.bus.streams import (
     CONTENT_BLOBS,
     CONTENT_DERIVED,
     CONTENT_FETCH,
-    CONTENT_FETCH_POLICY,
+    CONTENT_PERSIST,
     CONTENT_PROCESS,
     CONTENT_REPLICATE,
     CONTENT_REVISIONS,
     INFO_CHANGES,
     INFO_REGISTRY,
-    INFO_WATCH_STATUS,
     dlq_name,
     group_name,
     stream_kind,
@@ -49,30 +48,17 @@ from src.broker.bus_health import (
     REGISTRY_PRODUCER_MAXLEN,
     STREAM_CHECKS,
 )
+from tests.canonical import CANONICAL_STREAMS
 from tests.deploy.conftest import ACL_FILE, PASSWORD, SERVICE_USERS, parse_users, split_rules
-
-CANONICAL_STREAMS = frozenset(
-    {
-        INFO_CHANGES,
-        INFO_REGISTRY,
-        INFO_WATCH_STATUS,
-        CONTENT_FETCH,
-        CONTENT_FETCH_POLICY,
-        CONTENT_BLOBS,
-        CONTENT_REVISIONS,
-        CONTENT_ARTIFACTS,
-        CONTENT_REPLICATE,
-        CONTENT_PROCESS,
-        CONTENT_DERIVED,
-    }
-)
 
 # Patterns that are legitimately not a canonical stream or its DLQ.
 # `*.dlq` is the backstop's disposal pattern: it names every dead-letter queue,
 # including the ones nobody declared, which is the whole point of a backstop.
 NON_STREAM_PATTERNS = frozenset({"*", "*.dlq", "replicator:cmd:*", "probe.*", "replicator.itest.*"})
 
-# The command streams, derived from co-core's taxonomy rather than listed, so
+# The command streams, derived from co-core's taxonomy over a stream set that is
+# itself derived (tests/canonical.py - until CannObserv/broker#64 a hand list,
+# which let content.persist in past this comment with every test green), so
 # one added upstream fails ``test_a_command_stream_has_one_probed_group_and_its_
 # consumer_holds_the_group_commands`` here rather than wedging a loop on the node.
 COMMAND_STREAMS = tuple(s for s in sorted(CANONICAL_STREAMS) if stream_kind(s) == "command")
@@ -884,6 +870,72 @@ def test_watcher_issues_content_process_and_cannot_cap_it(users) -> None:
     assert admits(selector_patterns(rules, "+xadd"), dlq_name(CONTENT_DERIVED))
     assert admits(selector_patterns(rules, "+xdel"), dlq_name(CONTENT_DERIVED))
     assert not admits(selector_patterns(rules, "+xtrim"), dlq_name(CONTENT_DERIVED))
+
+
+# --- the persist command (CannObserv/broker#64) ---
+#
+# `content.persist` (archiver -> replicator, one worker pool), the contract of
+# cannobserv#493. Replicator's line is read off its persist handler
+# (CannObserv/replicator#114 step 6), not captured: the loop ships disabled
+# behind REPLICATOR_PERSIST_ENABLED, and nothing has run it against this node.
+# The group, the ceiling's XPENDING and the dedupe namespace are asserted over
+# REPLICATOR_COMMAND_STREAMS above, which the probe row puts it in.
+
+
+def test_archiver_issues_content_persist_and_can_neither_read_nor_cap_it(users) -> None:
+    """The issuer's grant is `+xadd` in a selector and nothing else.
+
+    **Not on the root**, so archiver cannot `XREADGROUP` or `XACK` a persist
+    away in replicator's group - the hole broker#43 records on every older
+    grouped stream, left shut here the way `content.process` left it shut. **In
+    no `+xtrim` selector**, so the stream is **Never XTRIMmed** from its first
+    day: a cap deletes commands the worker pool has not been delivered, and on
+    this stream an undelivered persist is a revision that races the temp
+    tier's 7-day TTL (MUST-7).
+    """
+    rules = users["archiver"]
+    assert admits(selector_patterns(rules, "+xadd"), CONTENT_PERSIST)
+    assert not admits(root_key_patterns(rules), CONTENT_PERSIST), (
+        "archiver can read and XACK the commands it issues (broker#43)"
+    )
+    assert not admits(selector_patterns(rules, "+xtrim"), CONTENT_PERSIST)
+    assert not admits(key_patterns(rules), dlq_name(CONTENT_PERSIST)), (
+        "the queue is its consumer's to write and drain, not the issuer's"
+    )
+
+
+def test_replicator_serves_content_persist_and_cannot_cap_its_queue(users) -> None:
+    """Replicator's half: the stream on the root with the group commands (the
+    generic command-stream test holds that), `XADD` on its outcome stream
+    (already `content.artifacts`), and the dead-letter queue written and
+    emptied - by `XDEL`, never `XTRIM`.
+
+    The queue's `+xadd` sits apart from replicator's `(+xadd +xtrim ...)`
+    selector: a triage disposes of the ids an operator named, and a trim would
+    erase the non-zero depth the probe reads as a dead letter awaiting triage
+    (CannObserv/broker#59). The command stream itself is in no selector at all,
+    so replicator can neither forge a persist nor cap one.
+    """
+    rules = users["replicator"]
+    queue = dlq_name(CONTENT_PERSIST)
+    assert admits(root_key_patterns(rules), CONTENT_PERSIST)
+    assert admits(selector_patterns(rules, "+xadd"), CONTENT_ARTIFACTS), "the outcome facts"
+    assert admits(selector_patterns(rules, "+xadd"), queue)
+    assert admits(selector_patterns(rules, "+xdel"), queue)
+    assert not admits(selector_patterns(rules, "+xtrim"), queue)
+    for command in ("+xadd", "+xtrim", "+xdel"):
+        assert not admits(selector_patterns(rules, command), CONTENT_PERSIST), (
+            f"replicator holds {command} on the command stream it consumes"
+        )
+    assert "+xclaim" not in split_rules(rules)[0], "the reclaim is XAUTOCLAIM"
+
+
+def test_replicator_stanza_names_the_source_its_persist_grant_was_read_off() -> None:
+    """Read off the handler, not the wire - the stanza says which, so the next
+    reader can tell this grant from the captured ones above it."""
+    prose = stanza("replicator")
+    for needle in ("CannObserv/broker#64", "CannObserv/replicator#114"):
+        assert needle in prose, f"replicator's stanza does not name {needle}"
 
 
 def test_default_is_declared_disabled_and_still_carries_a_password(users) -> None:
@@ -1743,6 +1795,42 @@ def test_watcher_issues_content_process_and_consumes_content_derived(tracked_acl
     queue = dlq_name(CONTENT_DERIVED)
     parked = client.xadd(queue, {"k": "poison"})
     assert client.xdel(queue, parked) == 1
+
+
+def test_archiver_issues_content_persist_and_is_refused_the_rest(tracked_acl_broker) -> None:
+    """Archiver's persist grant on redis's own matcher (CannObserv/broker#64):
+    it can issue a command, and cannot cap the stream, read it, or
+    acknowledge a command in replicator's group."""
+    client = tracked_acl_broker("archiver")
+    assert client.xadd(CONTENT_PERSIST, {"k": "v"}), "archiver cannot issue a persist"
+    group = group_name(CONTENT_PERSIST, "replicator")
+    for refused in (
+        lambda: client.xtrim(CONTENT_PERSIST, maxlen=0),
+        lambda: client.xrange(CONTENT_PERSIST),
+        lambda: client.xreadgroup(group, "worker", {CONTENT_PERSIST: ">"}),
+        lambda: client.xack(CONTENT_PERSIST, group, "0-1"),
+        lambda: client.xadd(dlq_name(CONTENT_PERSIST), {"k": "v"}),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
+
+
+def test_replicator_drains_content_persist_dlq_without_trimming_it(tracked_acl_broker) -> None:
+    """The queue written and emptied per entry, never capped; the command
+    stream neither forged nor capped. The group read, the ceiling's XPENDING and
+    the dedupe keys are exercised by the parametrised tests above."""
+    client = tracked_acl_broker("replicator")
+    queue = dlq_name(CONTENT_PERSIST)
+    parked = client.xadd(queue, {"k": "poison"})
+    assert client.xrange(queue, min=parked, max=parked)
+    assert client.xdel(queue, parked) == 1, "replicator can fill its queue and not empty it"
+    for refused in (
+        lambda: client.xtrim(queue, maxlen=0),
+        lambda: client.xadd(CONTENT_PERSIST, {"k": "forged"}),
+        lambda: client.xtrim(CONTENT_PERSIST, maxlen=0),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
 
 
 def test_citest_cannot_name_a_production_topic(tracked_acl_broker) -> None:

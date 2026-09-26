@@ -81,8 +81,11 @@ names its owner. The two groups declared ahead of their consumers by
 CannObserv/broker#62, `observo.process` and `watcher.derived`, take the value
 on the same assumption - a blocking read through co-core-aio's driver - and
 observo#629 and watcher#325 are where a different loop would be stated.
-`test_every_probed_group_carries_an_undelivered_threshold` fails if an eighth
-group arrives without one, and `StreamCheck` refuses the other direction - a
+`replicator.persist` (CannObserv/broker#64) takes it too, on a measurement
+borrowed rather than taken: a persist moves the same bytes between the same
+kind of stores as `content.replicate`'s handler, and replicator has not timed
+its own. `test_every_probed_group_carries_an_undelivered_threshold` fails if a
+ninth group arrives without one, and `StreamCheck` refuses the other direction - a
 threshold on a row with no group - at import.
 
 **What no duration sizes: a consumer alive and not reading**, since a reader

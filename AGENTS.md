@@ -39,16 +39,17 @@ silently corrupts values.
 
 ## Rules
 
-- **No retention opinion on the seven `content.*` streams.** No *retention*
+- **No retention opinion on the eight `content.*` streams.** No *retention*
   length or age row for any of them: nothing trims them, this repo owns no cap,
   and a threshold with no owner cries wolf - `maxmemory` is their only bound.
   They are `content.fetch`, `content.revisions`, `content.artifacts`,
-  `content.replicate`, `content.blobs`, `content.process` and
-  `content.derived` (`content.fetch-policy` is LWW and capped).
+  `content.replicate`, `content.blobs`, `content.process`,
+  `content.derived` and `content.persist` (`content.fetch-policy` is LWW and
+  capped).
   `content.blobs` had the rule first (broker#20); four joined it when they lost
   `info.changes`'s borrowed 110k (broker#60); the processing pair arrived with
-  no cap by contract (broker#62), and `content.process` is also **Never
-  XTRIMmed**, `content.replicate`'s posture. `docs/STREAMS.md`'s
+  no cap by contract (broker#62), as did `content.persist` (broker#64); both
+  command streams are also **Never XTRIMmed**, `content.replicate`'s posture. `docs/STREAMS.md`'s
   **No retention cap** is pinned to the probe's unthresholded rows; a cap
   comes back only with a producer that owns one. Their groups *are* probed -
   the old unqualified "never `content.blobs`" was archiver's role boundary,
@@ -200,6 +201,13 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   credential handoff (`CO_OBSERVO_BROKER_TOKEN` in `/etc/observo/.env`, the
   node's line a digest) were done the same day. Open: observo#629's consumer,
   then telling cannobserv both groups are live.
+- CannObserv/broker#64 - `content.persist` (archiver -> replicator, cannobserv
+  #493), provisioned 2026-09-26 ahead of both ends: archiver's `+xadd` in a
+  selector only, replicator's third worker pool, `replicator.persist` probed,
+  co-core `>=0.19.6`. The canonical stream set in tests is now read off
+  co-core (`tests/canonical.py`), because the hand list let this stream past
+  a green suite. Open: the 00:29:02Z denial's caller (replicator#121), and the
+  go-live order - replicator enables before archiver issues (archiver#276).
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
