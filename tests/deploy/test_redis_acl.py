@@ -314,7 +314,10 @@ def test_replicator_can_name_every_dedupe_namespace(users) -> None:
     which keeps no dedupe keys: its writes are content-addressed and
     write-if-absent, so a redelivery is idempotent by construction and needs no
     key here (../docs/STREAMS.md, *Non-stream keys on `db0`*). Over every
-    command stream this would demand a namespace nothing writes.
+    command stream this would demand a namespace nothing writes. The fourth,
+    `content.persist` (CannObserv/broker#64), is replicator's again, and its
+    `persist` namespace joined this assertion through the probe row with no
+    edit here - the derivation doing what the hand list could not.
     """
     patterns = key_patterns(users["replicator"])
     assert REPLICATOR_COMMAND_STREAMS, "the probe watches no replicator group on a command stream"
