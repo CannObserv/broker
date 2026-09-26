@@ -200,7 +200,8 @@ Three roles, and no two of them are reliably the same service:
 - **Writer** - whichever service's consumer calls `AsyncBusConsumer.dead_letter()`
   on that topic; the `DLQ` column above names it per stream. Archiver writes
   `content.revisions.dlq` and `content.artifacts.dlq`, Replicator writes
-  `content.fetch.dlq` and `content.replicate.dlq`, Observo will write
+  `content.fetch.dlq` and `content.replicate.dlq`, and `content.persist.dlq`
+  once its persist loop is enabled (CannObserv/broker#64), Observo will write
   `content.process.dlq` and Watcher `content.derived.dlq` once the processing
   pair's consumers ship (CannObserv/broker#62), and the groupless config/state
   streams can write none at all.
