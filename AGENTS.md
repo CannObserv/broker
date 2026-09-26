@@ -43,14 +43,13 @@ silently corrupts values.
   length or age row for any of them: nothing trims them, this repo owns no cap,
   and a threshold with no owner cries wolf - `maxmemory` is their only bound.
   They are `content.fetch`, `content.revisions`, `content.artifacts`,
-  `content.replicate`, `content.blobs`, `content.process`,
-  `content.derived` and `content.persist` (`content.fetch-policy` is LWW and
-  capped).
+  `content.replicate`, `content.blobs`, `content.process`, `content.derived`
+  and `content.persist` (`content.fetch-policy` is LWW and capped).
   `content.blobs` had the rule first (broker#20); four joined it when they lost
   `info.changes`'s borrowed 110k (broker#60); the processing pair arrived with
   no cap by contract (broker#62), as did `content.persist` (broker#64); both
-  command streams are also **Never XTRIMmed**, `content.replicate`'s posture. `docs/STREAMS.md`'s
-  **No retention cap** is pinned to the probe's unthresholded rows; a cap
+  command streams are also **Never XTRIMmed**, `content.replicate`'s posture.
+  `docs/STREAMS.md`'s **No retention cap** is pinned to the probe's unthresholded rows; a cap
   comes back only with a producer that owns one. Their groups *are* probed -
   the old unqualified "never `content.blobs`" was archiver's role boundary,
   retired by broker#1 Phase 5 because a neutral node has no role to be out of
