@@ -50,7 +50,7 @@ def test_service_holds_no_redis_credential() -> None:
 
 def test_service_config_is_required_not_optional() -> None:
     """No leading ``-``: a backup unit without its bucket and writer key must
-    fail loudly. The probe's notifier file is optional because absent is its
+    fail loudly. The probe's check-in file is optional because absent is its
     supported state; a backup with nowhere to write has no such state."""
     assert "EnvironmentFile=/etc/broker/backup.env" in REPO_SERVICE.read_text()
 

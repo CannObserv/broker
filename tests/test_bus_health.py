@@ -2432,7 +2432,7 @@ def test_unit_backstop_exceeds_a_single_call_worst_case() -> None:
     )
 
 
-# --- notifier check-in (CannObserv/broker#3) ---
+# --- the co-status check-in (CannObserv/broker#3, #66) ---
 #
 # The probe's findings were an audience of zero: a WARN line in journald on a
 # node nobody is logged into. The check-in is what gives them a reader - and,
@@ -2443,8 +2443,8 @@ def test_unit_backstop_exceeds_a_single_call_worst_case() -> None:
 @pytest.fixture
 def checkin_env(monkeypatch):
     """Both variables set, plus a spy standing in for the HTTP call."""
-    monkeypatch.setenv("NOTIFIER_MONITOR_ID", "01JMONITOR")
-    monkeypatch.setenv("NOTIFIER_API_KEY", "k3y")
+    monkeypatch.setenv("STATUS_MONITOR_ID", "01JMONITOR")
+    monkeypatch.setenv("STATUS_API_KEY", "k3y")
     calls = []
 
     def _spy(url, data, headers, timeout):
@@ -2458,9 +2458,9 @@ def checkin_env(monkeypatch):
 async def test_checkin_is_inert_when_unconfigured(fake_redis, tmp_path, monkeypatch) -> None:
     """Unset is the default and must cost nothing. The probe predates the
     check-in and has to keep working without it - a node that has not been wired
-    to notifier is not misconfigured."""
-    monkeypatch.delenv("NOTIFIER_MONITOR_ID", raising=False)
-    monkeypatch.delenv("NOTIFIER_API_KEY", raising=False)
+    to co-status is not misconfigured."""
+    monkeypatch.delenv("STATUS_MONITOR_ID", raising=False)
+    monkeypatch.delenv("STATUS_API_KEY", raising=False)
     monkeypatch.setattr(
         bus_health, "_http_post", MagicMock(side_effect=AssertionError("must not post"))
     )
@@ -2491,7 +2491,7 @@ async def test_checkin_posts_every_tick_even_with_no_findings(
 async def test_checkin_reports_alert_and_carries_the_findings(
     fake_redis, tmp_path, monkeypatch, checkin_env
 ) -> None:
-    """`status` is the probe's own judgement - notifier does not learn this
+    """`status` is the probe's own judgement - co-status does not learn this
     repo's taxonomy - and the findings ride in `variables` for the monitor's
     template to render."""
     monkeypatch.setattr(bus_health.logger, "warning", MagicMock())
@@ -2513,20 +2513,46 @@ def test_the_checkin_url_cannot_be_pointed_at_the_dev_endpoint() -> None:
     """Structural, and it is the reason the base URL is a constant rather than
     configuration.
 
-    `notifier:9001` is `notifier_dev`, running against DEV_DATABASE_URL, and its
-    `/health` is **byte-identical** to production's - same status, same build -
-    so a wrong port cannot be caught by the obvious check. Worse, this monitor
-    alarms on the ABSENCE of check-ins, so a one-character typo would not degrade
-    it, it would invert it: the production monitor goes silent and reports the
-    broker dead while the broker is fine.
+    `status:9001` is `status_dev`, against its own database. This monitor alarms
+    on the ABSENCE of check-ins, so a wrong destination would not degrade it, it
+    would invert it: the production monitor goes silent and reports the broker
+    dead while the broker is fine. That holds whichever service is on the other
+    end, which is why the constant outlived the move off notifier (#66).
 
     The operator therefore supplies a monitor id, never a host or a port. Same
     move as `databases 1` against the db15 vector - make the wrong destination
     unnameable rather than merely discouraged.
     """
     url = bus_health._checkin_url("01JMONITOR")
-    assert url.startswith("http://notifier:9000/")
-    assert "9001" not in url
+    assert url == "http://status:9000/api/v1/monitors/01JMONITOR/checkin"
+
+
+def test_the_checkin_url_is_not_notifiers() -> None:
+    """Notifier's monitors are retired by CannObserv/notifier#83. A check-in that
+    still reached `notifier:9000` would feed a copy that is disabled at handover
+    and deleted after it, while co-status's copy - the one that alarms - hears
+    nothing. The same inversion as the dev port, one host over."""
+    assert "notifier" not in bus_health._checkin_url("01JMONITOR")
+
+
+async def test_the_retired_notifier_names_are_not_read(fake_redis, tmp_path, monkeypatch) -> None:
+    """`/etc/broker/notifier.env` outlives the switch - the handover disables
+    notifier's copy with its key (#66) - so an operator shell that sourced it
+    must not be mistaken for a wired node. Only the `STATUS_*` pair counts."""
+    monkeypatch.setenv("NOTIFIER_MONITOR_ID", "01JMONITOR")
+    monkeypatch.setenv("NOTIFIER_API_KEY", "k3y")
+    monkeypatch.setattr(
+        bus_health, "_http_post", MagicMock(side_effect=AssertionError("must not post"))
+    )
+    error_spy = MagicMock()
+    monkeypatch.setattr(bus_health.logger, "error", error_spy)
+    monkeypatch.setattr(bus_health.logger, "info", MagicMock())
+
+    await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    error_spy.assert_not_called()
 
 
 async def test_a_failed_checkin_is_a_warning_and_never_a_failed_unit(
@@ -2552,7 +2578,7 @@ async def test_a_failed_checkin_is_a_warning_and_never_a_failed_unit(
 async def test_a_checkin_that_raises_does_not_take_the_tick_with_it(
     fake_redis, tmp_path, monkeypatch, checkin_env
 ) -> None:
-    """A DNS failure, a DERP outage or a notifier restart must not lose the
+    """A DNS failure, a DERP outage or a co-status restart must not lose the
     findings the tick already collected - they are still going to journald,
     which is the floor this repo never gives up."""
     monkeypatch.setattr(bus_health, "_http_post", MagicMock(side_effect=OSError("no route")))
@@ -2570,8 +2596,8 @@ async def test_half_configured_is_reported_not_ignored(fake_redis, tmp_path, mon
     """One variable without the other is a config mistake, and the failure it
     would otherwise produce is silence - the same shape as the flag-plus-URL
     startup guards the participants carry."""
-    monkeypatch.setenv("NOTIFIER_MONITOR_ID", "01JMONITOR")
-    monkeypatch.delenv("NOTIFIER_API_KEY", raising=False)
+    monkeypatch.setenv("STATUS_MONITOR_ID", "01JMONITOR")
+    monkeypatch.delenv("STATUS_API_KEY", raising=False)
     monkeypatch.setattr(
         bus_health, "_http_post", MagicMock(side_effect=AssertionError("must not post"))
     )
@@ -2699,7 +2725,7 @@ async def test_continuity_state_survives_a_broker_outage(fake_redis, tmp_path) -
 # --- the backup, and the persistence that feeds it (CannObserv/broker#4) ---
 #
 # src/broker/backup.py writes a state file; the probe reads it and turns
-# silence into a finding, the same way the notifier check-in turned the probe's
+# silence into a finding, the same way the co-status check-in turned the probe's
 # own silence into one. Three states matter: no success on record, a success
 # too old, and a failure newer than the last success. A fourth is the
 # snapshot's own age - the job can succeed hourly while shipping the same file.

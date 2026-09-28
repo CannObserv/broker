@@ -506,8 +506,8 @@ inherits no variable from `/etc/broker/.env` that it does not read. All three
 are asserted by `tests/deploy/test_bus_health_units.py`; the last one against
 the live file, so a variable added there on the node fails it.
 
-`/etc/broker/notifier.env` (`0400 root:root`, **optional**) carries the check-in
-credential - see *The notifier check-in* below.
+`/etc/broker/status.env` (`0400 root:root`, **optional**) carries the check-in
+credential - see *The co-status check-in* below.
 
 `/etc/broker/backup.env` (`0400 root:root`, **required by the backup unit**,
 which loads nothing else) carries `BROKER_BACKUP_BUCKET` and the
@@ -517,37 +517,42 @@ which loads nothing else) carries `BROKER_BACKUP_BUCKET` and the
 bucket; and the backup unit must not inherit a Redis URL it has no use for.
 `BROKER_BACKUP_PREFIX` is optional and defaults to the hostname.
 
-## The notifier check-in (broker#3)
+## The co-status check-in (broker#3, #66)
 
-Every tick, the probe posts to notifier whether or not it found anything:
+Every tick, the probe posts to co-status whether or not it found anything:
 
 ```
-POST http://notifier:9000/api/v1/monitors/<id>/checkin
+POST http://status:9000/api/v1/monitors/<id>/checkin
 X-API-Key: <key>
 {"status": "ok" | "alert", "variables": {"source", "finding_count", "findings"}}
 ```
+
+The monitor lived in notifier until CannObserv/notifier#83 moved dead-man's
+timers into co-status (`CannObserv/status`, tailnet node `status`). co-status
+kept the wire contract - path, body, the 202, the monitor id - so broker#66
+changed the host and the key and nothing else.
 
 **The report goes every tick regardless of `finding_count`, and that is the
 design rather than chattiness.** A findings-only push is silent in exactly the
 cases that matter most - a dead probe, a stopped timer, a wedged `uv run` or a
 dead node all produce zero findings and zero traffic, which is indistinguishable
-from a healthy broker. Notifier alarms on the *absence* of a report, so the
+from a healthy broker. co-status alarms on the *absence* of a report, so the
 arrival is the signal. `status` is the probe's own judgement (`finding_count > 0`
-maps to `alert`) because the alternative is notifier learning this repo's
+maps to `alert`) because the alternative is co-status learning this repo's
 taxonomy.
 
 **Configure it with two variables, and never a host or a port:**
 
 | Variable | Where |
 |---|---|
-| `NOTIFIER_MONITOR_ID` | `/etc/broker/notifier.env` |
-| `NOTIFIER_API_KEY` | `/etc/broker/notifier.env` |
+| `STATUS_MONITOR_ID` | `/etc/broker/status.env` |
+| `STATUS_API_KEY` | `/etc/broker/status.env` |
 
 ```bash
-sudo install -m 0400 -o root -g root /dev/null /etc/broker/notifier.env
-sudo tee /etc/broker/notifier.env >/dev/null <<'ENV'
-NOTIFIER_MONITOR_ID=<the monitor's own id - NOT the tenant_id>
-NOTIFIER_API_KEY=<key>
+sudo install -m 0400 -o root -g root /dev/null /etc/broker/status.env
+sudo tee /etc/broker/status.env >/dev/null <<'ENV'
+STATUS_MONITOR_ID=<the monitor's own id - NOT the tenant_id>
+STATUS_API_KEY=<key>
 ENV
 sudo systemctl start broker-bus-health.service
 journalctl -u broker-bus-health -n 5 -o cat --no-pager
@@ -564,16 +569,23 @@ Both unset is the supported default and costs nothing - the `EnvironmentFile`
 line carries a leading `-`. One set without the other is a config mistake and is
 logged at ERROR, because the failure it would otherwise produce is silence.
 
-**The host and port are not configurable, deliberately.** `notifier:9001` is
-`notifier_dev` running against `DEV_DATABASE_URL`, the tailnet policy currently
-admits it alongside `:9000`, and its `/health` is byte-identical to production's
-- same status, same build - so a wrong port cannot be caught by the obvious
-check. Since this monitor alarms on the absence of check-ins, a one-character
-typo would not degrade it but **invert** it: reports land in the dev database,
-the production monitor receives nothing, and it declares a healthy broker dead.
-So the operator supplies a monitor id and the base URL is a constant in
-`src/broker/bus_health.py`. Same move as `databases 1` against the db15 vector -
-make the wrong destination unnameable rather than merely discouraged.
+**The host and port are not configurable, deliberately.** `status:9001` is
+`status_dev`, against its own database. Since this monitor alarms on the absence
+of check-ins, a wrong destination would not degrade it but **invert** it:
+reports land where nothing alarms, the production monitor receives nothing, and
+it declares a healthy broker dead. The retired `notifier:9000` is the same trap
+one host over. So the operator supplies a monitor id and the base URL is a
+constant in `src/broker/bus_health.py`. Same move as `databases 1` against the
+db15 vector - make the wrong destination unnameable rather than merely
+discouraged.
+
+That reasoning outlived the move; one of notifier's did not. Notifier's `:9001`
+was admitted to this node and its `/health` was byte-identical to production's,
+so the wrong port could not be caught by looking. co-status's `/health` names
+its `environment`, and the tailnet admits `tag:broker` to `:9000` only. Neither
+is a reason to make the host configurable: the constant is what keeps a typo
+from being possible at all, and a per-tick `/health` assertion would be one more
+request whose failure is silent.
 
 A failed check-in is a WARN line and never a failed unit. The probe is WARN-only
 by contract, and a monitoring unit that starts failing on its own transport
@@ -586,21 +598,28 @@ trains an operator to ignore it.
 own JSON, so they are easy to transpose. Read it back and compare:
 
 ```bash
-sudo sh -c 'set -a; . /etc/broker/notifier.env; set +a
-  curl -s -H "X-API-Key: $NOTIFIER_API_KEY" \
-    http://notifier:9000/api/v1/monitors/$NOTIFIER_MONITOR_ID' | python3 -m json.tool
+sudo sh -c 'set -a; . /etc/broker/status.env; set +a
+  printf "X-API-Key: %s\n" "$STATUS_API_KEY" |
+    curl -s -H @- http://status:9000/api/v1/monitors/$STATUS_MONITOR_ID' | python3 -m json.tool
 ```
+
+The key goes to `curl` on stdin, not as `-H "X-API-Key: $KEY"`: that form
+expands into `curl`'s `argv`, readable from `ps` for as long as it runs.
+`printf` is a shell builtin, so it has no `argv` of its own (broker#47's rule,
+applied to an HTTP header).
 
 `last_checkin_at`, `last_status` and `last_variables` should reflect the most
 recent tick. This is the only end-to-end confirmation - a clean journald line
-proves the POST returned 2xx, not that notifier recorded anything useful.
+proves the POST returned 2xx, not that co-status recorded anything useful.
 
-**`enabled: false` means the dead-man's timer is not running.** Notifier's
-`sweep_monitors` selects `enabled is True` only, so a disabled monitor records
-check-ins and reports state while alarming on nothing when they stop. Its
-check-in route does *not* gate on the flag, so `status: alert` still dispatches
-- which makes the failure asymmetric and easy to miss: findings reach a person,
-silence does not. Silence is the half this probe exists for.
+**`enabled: false` means the dead-man's timer is not running.** co-status's
+sweep selects enabled monitors only, so a disabled monitor records check-ins and
+reports state while alarming on nothing when they stop. Its check-in route does
+*not* gate on the flag, so `status: alert` still dispatches - which makes the
+failure asymmetric and easy to miss: findings reach a person, silence does not.
+Silence is the half this probe exists for. The cutover relies on the same
+asymmetry: the monitor is imported disabled, the first check-in lands on it,
+and only then is it enabled.
 
 ## The backup (broker#4)
 

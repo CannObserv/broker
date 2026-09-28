@@ -24,7 +24,7 @@ network, or a missing bucket).
 it on every job; on the node it is run by hand, and it is due before any
 ``uv sync`` or ``uv run`` that follows a ``co-core`` pin change. Skip it then
 and the probe's ``ExecStart`` fails with a ``uv`` resolution error - a failed
-unit and a missed notifier check-in, not a silent one. Archiver's service does
+unit and a missed co-status check-in, not a silent one. Archiver's service does
 run it as a non-fatal ``ExecStartPre``; that was this docstring's claim until
 broker#37, carried over with the script. Here it would put a GCS call in front
 of every probe tick, for an input only a pin change moves.

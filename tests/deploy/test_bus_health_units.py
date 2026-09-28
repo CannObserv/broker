@@ -170,7 +170,7 @@ def test_installed_timer_matches_repo() -> None:
     )
 
 
-def test_the_notifier_credential_has_a_file_of_its_own() -> None:
+def test_the_checkin_credential_has_a_file_of_its_own() -> None:
     """CannObserv/broker#3's key must not ride in /etc/broker/.env.
 
     That file is 0640 root:exedev, so the unit's own `User=` can read it at any
@@ -181,11 +181,15 @@ def test_the_notifier_credential_has_a_file_of_its_own() -> None:
     account can `cat` is not.
 
     The leading `-` is part of the contract: absent is the supported state, and
-    a node not yet wired to notifier must still start.
+    a node not yet wired to co-status must still start.
+
+    And only the one file: ``notifier.env`` is kept through the handover for
+    the key that disables notifier's copy (#66), and it is not the probe's.
     """
     text = REPO_SERVICE.read_text()
-    assert "EnvironmentFile=-/etc/broker/notifier.env" in text
-    assert "Environment=NOTIFIER_API_KEY" not in text, "a credential never belongs in the unit"
+    assert "EnvironmentFile=-/etc/broker/status.env" in text
+    assert "notifier.env" not in text, "notifier's monitor is retired (#66)"
+    assert "Environment=STATUS_API_KEY" not in text, "a credential never belongs in the unit"
 
 
 def test_the_units_name_only_reads_the_probe_issues() -> None:

@@ -133,7 +133,7 @@ anywhere.
 | the ACL credentials - plaintext for the operator users, digest-only for the five service users (broker#49; `observo` since broker#62) | `/etc/redis/broker-acl-passwords` | 0400 root | **the services carry the plaintext in their own env files** - the digest is enough to re-admit them, so a rebuild must reuse the same lines or update four services on four hosts |
 | the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`brokeradmin`); `GOOGLE_APPLICATION_CREDENTIALS` (the wheelhouse reader) is the operator's, for the sync, and the probe's unit unsets it |
 | the wheelhouse reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | the wheelhouse sync needs it; `uv sync` needs the wheelhouse |
-| the notifier check-in | `/etc/broker/notifier.env` | 0400 root | the monitor id is node-agnostic; the same monitor continues |
+| the co-status check-in | `/etc/broker/status.env` | 0400 root | the monitor id is node-agnostic; the same monitor continues |
 | the backup writer | `/etc/broker/backup.env` + `/etc/broker/co-broker-backup.json` | 0400 root | also what the **restore** reads with - `objectViewer` lists and downloads |
 
 Plus the tailnet: the services connect to `broker` by name, so the new node
@@ -311,7 +311,7 @@ loopback; the last line is not optional.
 
 The state file the job writes is `/var/lib/broker-backup/state.json`; the
 probe reads it every ten minutes and its `backup` finding is what turns a
-silent failure into a notifier alert.
+silent failure into an alert.
 
 ---
 

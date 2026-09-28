@@ -400,27 +400,30 @@ def _dlq_owner(topic: str) -> str:
     return f"{drainer}'s to triage" if drainer else DLQ_UNASSIGNED
 
 
-# --- the notifier check-in (CannObserv/broker#3) ---
+# --- the co-status check-in (CannObserv/broker#3, #66) ---
 #
 # Findings were an audience of zero: a WARN line in journald on a node nobody is
 # logged into. The check-in gives them a reader, and - the part that matters more
 # - makes SILENCE detectable. A dead probe, a stopped timer, a wedged `uv run` or
 # a dead node all produce zero findings and zero traffic, which is
 # indistinguishable from a healthy broker. So a report goes every tick regardless
-# of finding_count, and notifier alarms when one fails to arrive.
+# of finding_count, and co-status alarms when one fails to arrive.
+#
+# The monitor lived in notifier until CannObserv/notifier#83 moved dead-man's
+# timers to co-status, which kept the wire contract - path, body, 202, monitor
+# id - so #66 changed the host and the key and nothing else.
 #
 # THE BASE URL IS A CONSTANT, NOT CONFIGURATION, and that is deliberate.
-# `notifier:9001` is notifier_dev running against DEV_DATABASE_URL, the tailnet
-# policy currently admits it alongside :9000, and its /health is byte-identical
-# to production's - same status, same build - so a wrong port cannot be caught by
-# the obvious check. Since this monitor alarms on the *absence* of check-ins, a
-# one-character typo would not degrade it but invert it: check-ins land in the
-# dev database, the production monitor receives nothing, and it reports a
-# perfectly healthy broker as dead. The operator therefore supplies a monitor id
-# and never a host or a port. Same move as `databases 1` against the db15 vector
-# - make the wrong destination unnameable rather than merely discouraged.
-NOTIFIER_CHECKIN_BASE = "http://notifier:9000/api/v1/monitors"
-NOTIFIER_TIMEOUT_SECONDS = 10.0
+# `status:9001` is status_dev against its own database. Since this monitor
+# alarms on the *absence* of check-ins, a wrong destination would not degrade it
+# but invert it: check-ins land somewhere nothing alarms, the production monitor
+# receives nothing, and it reports a perfectly healthy broker as dead. The
+# retired `notifier:9000` is the same trap one host over. The operator
+# therefore supplies a monitor id and never a host or a port. Same move as
+# `databases 1` against the db15 vector - make the wrong destination unnameable
+# rather than merely discouraged.
+STATUS_CHECKIN_BASE = "http://status:9000/api/v1/monitors"
+STATUS_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -1525,7 +1528,7 @@ def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int)
 # file under its own StateDirectory. The probe reads it - read-only, as another
 # user - because a backup that fails is a unit nobody is watching, and a backup
 # that "succeeds" while shipping the same stale file is not even that. The
-# notifier check-in made the probe's own silence detectable; this does the same
+# co-status check-in made the probe's own silence detectable; this does the same
 # for the backup's.
 #
 # Three hours: two missed hourly ticks plus the timer's jitter, so one slow run
@@ -2182,7 +2185,7 @@ def _evaluate_dlq_continuity(
 
 
 def _checkin_url(monitor_id: str) -> str:
-    return f"{NOTIFIER_CHECKIN_BASE}/{monitor_id}/checkin"
+    return f"{STATUS_CHECKIN_BASE}/{monitor_id}/checkin"
 
 
 def _http_post(url: str, data: bytes, headers: dict[str, str], timeout: float) -> int:
@@ -2201,7 +2204,7 @@ def _http_post(url: str, data: bytes, headers: dict[str, str], timeout: float) -
 
 
 async def post_checkin(findings: list[Finding]) -> None:
-    """Report this tick to notifier, if this node has been wired to it.
+    """Report this tick to co-status, if this node has been wired to it.
 
     Never raises and never changes the unit's exit status. WARN-only is the
     probe's contract and the check-in does not get to break it: a monitoring unit
@@ -2209,23 +2212,23 @@ async def post_checkin(findings: list[Finding]) -> None:
     which is the failure CannObserv/broker#3 exists to prevent, arriving through
     the fix.
     """
-    monitor_id = os.environ.get("NOTIFIER_MONITOR_ID")
-    api_key = os.environ.get("NOTIFIER_API_KEY")
+    monitor_id = os.environ.get("STATUS_MONITOR_ID")
+    api_key = os.environ.get("STATUS_API_KEY")
 
     if not monitor_id and not api_key:
         # Unset is the supported default. The probe predates the check-in and a
-        # node that has not been wired to notifier is not misconfigured.
+        # node that has not been wired to co-status is not misconfigured.
         return
     if not (monitor_id and api_key):
         logger.error(
-            "notifier check-in half-configured - NOTIFIER_MONITOR_ID and "
-            "NOTIFIER_API_KEY must both be set; not checking in",
+            "co-status check-in half-configured - STATUS_MONITOR_ID and "
+            "STATUS_API_KEY must both be set; not checking in",
             extra={"has_monitor_id": bool(monitor_id), "has_api_key": bool(api_key)},
         )
         return
 
     payload = {
-        # Our judgement, not notifier's: it does not learn this repo's taxonomy.
+        # Our judgement, not co-status's: it does not learn this repo's taxonomy.
         "status": "alert" if findings else "ok",
         "variables": {
             "source": socket.gethostname(),
@@ -2241,14 +2244,14 @@ async def post_checkin(findings: list[Finding]) -> None:
             _checkin_url(monitor_id),
             json.dumps(payload).encode(),
             {"X-API-Key": api_key, "Content-Type": "application/json"},
-            NOTIFIER_TIMEOUT_SECONDS,
+            STATUS_TIMEOUT_SECONDS,
         )
     except (OSError, ValueError) as e:
-        logger.warning(f"Bus health: notifier check-in failed: {e!r}", extra={"check": "checkin"})
+        logger.warning(f"Bus health: co-status check-in failed: {e!r}", extra={"check": "checkin"})
         return
     if not 200 <= status < 300:
         logger.warning(
-            f"Bus health: notifier check-in rejected with HTTP {status}",
+            f"Bus health: co-status check-in rejected with HTTP {status}",
             extra={"check": "checkin", "status": status},
         )
 

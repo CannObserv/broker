@@ -25,7 +25,7 @@ WorkingDirectory=/home/exedev/broker
 EnvironmentFile=/etc/broker/.env
 UnsetEnvironment=GOOGLE_APPLICATION_CREDENTIALS
 
-# NOTIFIER_MONITOR_ID and NOTIFIER_API_KEY (CannObserv/broker#3), in a file of
+# STATUS_MONITOR_ID and STATUS_API_KEY (CannObserv/broker#3, #66), in a file of
 # their own at 0400 root:root - NOT in /etc/broker/.env, which is 0640
 # root:exedev and therefore readable by this unit's own User= at any time,
 # whether or not the probe is running. systemd reads EnvironmentFile as root
@@ -35,9 +35,9 @@ UnsetEnvironment=GOOGLE_APPLICATION_CREDENTIALS
 # file `exedev` can cat.
 #
 # Leading `-`: absent is the supported state. The probe predates the check-in
-# and must start without it, so a node that has not been wired to notifier is
+# and must start without it, so a node that has not been wired to co-status is
 # not a node with a broken unit.
-EnvironmentFile=-/etc/broker/notifier.env
+EnvironmentFile=-/etc/broker/status.env
 
 # This probe holds NO database credential. The outbox half of the old combined
 # probe stayed in archiver with the table it queries (archiver#193 D6), and with
