@@ -1193,6 +1193,47 @@ def test_the_probe_holds_only_what_it_issues(users) -> None:
     )
 
 
+#: redis-py client methods that are not Redis commands.
+_CLIENT_LIFECYCLE = frozenset({"aclose", "close"})
+
+
+def probe_commands(source: str) -> set[str]:
+    """The Redis commands ``bus_health.py`` issues through its ``client``.
+
+    redis-py spells a subcommand with ``_`` (``xinfo_groups`` is
+    ``XINFO GROUPS``) and an iterator with an ``_iter`` suffix
+    (``scan_iter`` is ``SCAN``), so each method maps to ``container|sub``.
+    """
+    methods = set(re.findall(r"\bclient\.([a-z_]+)\(", source)) - _CLIENT_LIFECYCLE
+    return {m.removesuffix("_iter").replace("_", "|", 1) for m in methods}
+
+
+def test_everything_the_probe_issues_is_granted(users) -> None:
+    """The other direction of the test above (CR 9 of broker#52).
+
+    That one fails a grant nothing issues; this fails an issue nothing grants.
+    Since #52 the line is exactly the probe's set, so a new ``client.xlen(`` in
+    ``src/broker/bus_health.py`` would pass every other test here and then be
+    a NOPERM on the node every tick - with the probe that reports NOPERMs being
+    the one hitting it. Read off the client calls rather than off the grant, so
+    it cannot agree with the line by construction.
+    """
+    issued = probe_commands((BROKER_SOURCE / "bus_health.py").read_text())
+    assert {"info", "scan", "xrange"} <= issued, f"the call-site scan found only {issued}"
+    ungranted = sorted(c for c in issued if not holds(granted_commands(users["brokeradmin"]), c))
+    assert not ungranted, (
+        f"src/broker/bus_health.py issues {ungranted}, which brokeradmin is not granted - "
+        f"widen it live as acladmin and in {ACL_FILE.name}, with the call site named"
+    )
+
+
+def test_the_call_site_scan_maps_redis_py_methods_to_commands() -> None:
+    source = "await client.xinfo_groups(t)\nasync for k in client.scan_iter(m)\nclient.ping()\n"
+    assert probe_commands(source + "await client.aclose()") == {"xinfo|groups", "scan", "ping"}
+    assert not holds({"+info", "+xinfo"}, "ping")
+    assert holds({"+info", "+xinfo"}, "xinfo|groups")
+
+
 def test_the_operator_identity_says_why_its_trim_stops_at_dead_letter_queues(users) -> None:
     """A capability withheld on purpose.
 
