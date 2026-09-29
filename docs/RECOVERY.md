@@ -54,38 +54,24 @@ was recovered by replaying that history; that was margin, not design.
 It holds no opinion on the AOF (never shipped - point in time is the contract),
 on configuration (this repo is the copy), or on secrets (step 0).
 
-**The ACL digests ship beside each snapshot** (CannObserv/broker#72). A lost
-node takes `/etc/redis/broker-acl-passwords` with it, and the service lines
-cannot be reproduced: each service holds its plaintext on its own host, and
-the digest is what re-admits it. So every run ships a projection of that file
-after the snapshot. It holds the `__<SERVICE>_PW_SHA256__` lines alone, sorted,
-with object metadata `taken_at`, `snapshot_at`, `sha256`, `users` and `source_host`:
+**The ACL digests ship beside each snapshot** (CannObserv/broker#72): the
+service lines of `/etc/redis/broker-acl-passwords`, sorted, as
+`<run time>.digests`. They cannot be reproduced, because each service holds its
+own plaintext, and they are what re-admits it. The reasoning is in
+`src/broker/backup.py`'s docstring. What an operator needs:
 
 - **The node users never ship.** A rebuild mints `acladmin`, `brokeradmin` and
-  `default` fresh (step 0) and *appends* their lines, and `render-acl.sh` refuses a
-  user given twice. Prose and comments never ship either: the object is built
-  from what matched, not copied.
-- **A plaintext line fails the run, commented or not** (#49's leak was
-  `#__ARCHIVER_PW__=<value>`), and the error names the line number, never a value.
-  The snapshot has already shipped by then and the error says so. But the run
-  is failed, and the probe's `backup` finding reports it: a gap in the digests
-  that nothing reports is the stale password-manager copy again.
-- **Named by the run's time.** Every run creates one, so the greatest name is
-  the newest set, and the 30-day age rule never reaches it. A name keyed by the
-  snapshot or the content would 412 on a set shipped before: after A -> B -> A
-  within one unchanged snapshot, the newest object would be B. `--list` and
-  `--latest` never offer a `.digests` object.
-- **A digest is not a credential.** `AUTH` takes the plaintext, which is why
-  "no Redis credential" survives. That holds because each plaintext is
-  high-entropy: 40 alphanumerics from urandom, about 238 bits
-  ([ACL-CUTOVER.md](ACL-CUTOVER.md), step 1). An unsalted SHA-256 of a guessable
-  password would be a credential by another name. A hash-only handoff minted
-  on the service's side (CannObserv/archiver#251) has whatever strength that
-  service chose. Whoever can read the bucket can read the digests.
-- **The unit cannot read what it does not ship.** It is root with
-  `CAP_DAC_READ_SEARCH` and reads `/etc/redis` on purpose, so
-  `InaccessiblePaths=` takes away `/etc/credstore.encrypted` and
-  `/etc/broker/.env`.
+  `default` fresh and appends them (step 2).
+- **A plaintext line fails the run, commented or not.** The error names a line,
+  never a value, and says the snapshot already shipped. The `backup` finding
+  reports it.
+- **A digest is not a credential**, because `AUTH` takes the plaintext. That
+  rests on each plaintext being high-entropy (40 alphanumerics,
+  [ACL-CUTOVER.md](ACL-CUTOVER.md) step 1). A hash-only handoff minted
+  service-side (CannObserv/archiver#251) is as strong as that service chose.
+  Whoever reads the bucket reads the digests.
+- **The newest set is the greatest name.** Every run creates one, so the
+  30-day rule never reaches it. `--list` and `--latest` never offer one.
 
 **Why the file, and not `BGSAVE` or `redis-cli --rdb`.** Both would need a
 grant on the broker and both fork the server; the file needs neither, is
@@ -157,12 +143,8 @@ may be the better copy.
 ### 0. What must exist outside the node
 
 **The ACL digests are in the backup** since CannObserv/broker#72, and step 2
-restores them from the bucket. They are **not secret, but not reproducible**:
-the services carry the plaintext in their own env files, and their digests are
-what re-admits them, so without them a rebuild updates four services on four
-hosts. A copy in the operator's password manager is now optional. Nothing
-checks it is current: it went stale once already, when `observo` was minted
-on 2026-09-24.
+restores them. Without them, a rebuild updates four services on four hosts. A
+password-manager copy is optional, and nothing checks that it is current.
 
 None of the rest are in the backup, and the runbook stops without them. Keep
 them in the operator's password manager; nothing in this repo ships them
@@ -219,11 +201,9 @@ sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
   /home/exedev/broker/.venv/bin/python -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
 ```
 
-It prints the object and the users it restored, then the lines a rebuild
-mints rather than restores. That is `default`'s tombstone (the one line it
-prints), then the two node credentials ([NODE-CREDENTIALS.md](NODE-CREDENTIALS.md),
-"On a new or rebuilt node"), which append to the file rather than truncate it.
-Then append `redis.conf.broker` with a freshly minted `requirepass`, and render
+It prints what it restored, then the lines a rebuild mints: `default`'s
+tombstone (one printed line), then the node credentials
+([NODE-CREDENTIALS.md](NODE-CREDENTIALS.md), "On a new or rebuilt node"). Then append `redis.conf.broker` with a freshly minted `requirepass`, and render
 and install the ACL file. After that come the drop-in and the wait script, the
 units, and then the memory protection (broker#21).
 
@@ -439,11 +419,9 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
   `stage_appendonlydir`; starts a second server under `appendonly yes` and
   asserts the length, `last-delivered-id`, `entries-read`, the PEL and the TTL.
   The control case, the same snapshot with no staging, comes up with `DBSIZE 0`.
-  The admission half (broker#72): the digests shipped with that snapshot are
-  restored by `restore --digests`'s path onto a "rebuilt" node, the node users
-  are appended fresh, and the result is rendered through `render-acl.sh` and
-  loaded. Every service authenticates with the plaintext only it holds;
-  `acladmin` authenticates with the new password and is refused with the old.
+  broker#72: the shipped digests are restored onto a "rebuilt" node, fresh node
+  users are appended, and the result is rendered and loaded. Every service
+  authenticates; `acladmin`'s old password is refused.
 - **2026-09-10, by hand** on `co-broker`, throwaway servers, Redis 7.0.15:
   positions intact; the control confirmed the trap.
 - **2026-09-10 16:03 UTC, before the key existed.** The unit was started once
