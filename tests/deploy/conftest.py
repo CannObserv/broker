@@ -358,7 +358,7 @@ def live_client():
         except redis_pkg.exceptions.AuthenticationError:
             pytest.fail(
                 f"the broker refuses acladmin's password from {OPERATOR_CREDENTIAL} - a "
-                'rotation left half-done? docs/NODE-CREDENTIALS.md'
+                "rotation left half-done? docs/NODE-CREDENTIALS.md"
             )
         except redis_pkg.exceptions.RedisError as e:
             pytest.skip(f"broker not answering: {e!r}")
