@@ -50,7 +50,7 @@ EnvironmentFile=-/etc/broker/status.env
 # the decrypted copy, so another process of the account can read it for that
 # second - in RAM, never on disk. Closing that means a User= of its own, which
 # `uv run` in the dev tree makes a separate change. Minted and installed by
-# docs/ACL-CUTOVER.md, "Node credentials".
+# docs/NODE-CREDENTIALS.md.
 LoadCredentialEncrypted=broker-brokeradmin:/etc/credstore.encrypted/broker-brokeradmin
 
 # This probe holds NO database credential. The outbox half of the old combined

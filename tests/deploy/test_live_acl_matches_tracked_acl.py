@@ -598,7 +598,7 @@ def test_requirepass_is_nobodys_password(live_client, live_rules) -> None:
     ]
     assert not findings, (
         "; ".join(findings) + " - it is readable through CONFIG GET, so it must belong to "
-        'nobody. docs/ACL-CUTOVER.md, "requirepass belongs to no user".'
+        'nobody. docs/NODE-CREDENTIALS.md, "requirepass belongs to no user".'
     )
 
 

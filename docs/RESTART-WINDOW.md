@@ -148,7 +148,7 @@ CannObserv/broker#46. #52 retired it instead: the window's commands moved to
 `acladmin`, whose password is an encrypted credential on this node and nowhere
 in plaintext, and `default`'s became the digest of a value nobody kept. If
 `acladmin`'s is exposed, rotate it before the window, not after:
-[ACL-CUTOVER.md](ACL-CUTOVER.md), *Node credentials*.
+[NODE-CREDENTIALS.md](NODE-CREDENTIALS.md).
 
 The rewrite destroys the AOF history, which is what recovered the incident
 recorded there. That is acceptable now that broker#4 ships an hourly snapshot to

@@ -199,7 +199,7 @@ sudo grep -c '^__<USER>_PW_SHA256__=<new-sha256>$' \
 The two **node** users - `acladmin`, `brokeradmin` - have a digest line too
 since broker#52, and one more place their password lives: the encrypted
 credential `rcli` and the probe authenticate from. Rotating one is four checked steps,
-[docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md), *Node credentials*. `default`'s
+[docs/NODE-CREDENTIALS.md](../docs/NODE-CREDENTIALS.md). `default`'s
 line is the digest of a value nobody kept, and there is nothing to rotate.
 
 `test_the_nodes_passwords_file_renders_the_credentials_that_are_live` renders
@@ -275,8 +275,8 @@ sudo sh -c 'R=$(LC_ALL=C tr -dc "A-Za-z0-9" < /dev/urandom | head -c 40); export
 sudo grep -c '^requirepass [A-Za-z0-9]\{40\}$' /etc/redis/redis.conf   # -> 1
 
 # The two node credentials, minted into systemd's store, and their digest lines
-# in the passwords file - before the ACL render: docs/ACL-CUTOVER.md,
-# "Node credentials". /etc/broker/.env's BROKER_REDIS_URL names the user alone.
+# in the passwords file - before the ACL render: docs/NODE-CREDENTIALS.md,
+# "On a new or rebuilt node". /etc/broker/.env's BROKER_REDIS_URL names the user alone.
 
 # Unit ordering + the boot-race wait
 sudo install -m 0755 deploy/wait-for-tailnet-addr.sh /usr/local/sbin/

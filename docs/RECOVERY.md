@@ -140,8 +140,8 @@ install mints and which authenticates nobody; `default`'s password, which is the
 digest of a value nobody kept; and the node credentials in
 `/etc/credstore.encrypted/`, which are encrypted to the old node's host key and
 could not be decrypted here. A rebuild mints `acladmin` and `brokeradmin` fresh
-and a new tombstone digest for `default` - [ACL-CUTOVER.md](ACL-CUTOVER.md),
-*Node credentials* - because nothing off the node authenticates as any of them.
+and a new tombstone digest for `default` -
+[NODE-CREDENTIALS.md](NODE-CREDENTIALS.md) - because nothing off the node authenticates as any of them.
 
 Plus the tailnet: the services connect to `broker` by name, so the new node
 has to join as `broker` under `tag:broker`, and the old one has to be removed
@@ -163,7 +163,7 @@ sudo ls -la /var/lib/redis        # a default-config dump.rdb is fine; no append
 
 Everything in `deploy/README.md`'s *Install* section, in order: restore the
 secrets at the paths and modes above, mint the two node credentials and append
-their digest lines (ACL-CUTOVER.md, *Node credentials*, "On a new or rebuilt
+their digest lines ([NODE-CREDENTIALS.md](NODE-CREDENTIALS.md), "On a new or rebuilt
 node" - after the passwords file is in place, since its `install` truncates), append `redis.conf.broker`
 with a freshly minted `requirepass`, render and install the ACL file, the
 drop-in and the wait script, the units, then the memory protection (broker#21).

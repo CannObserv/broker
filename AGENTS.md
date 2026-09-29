@@ -68,26 +68,17 @@ silently corrupts values.
   are pinned by `tests/deploy/test_bus_health_units.py`. `XINFO GROUPS` is
   read-only introspection; joining a group would silently swallow another
   service's messages.
-- **`brokeradmin` is the probe's, and holds only what `src/broker/` issues.**
-  Since broker#52 the operator and the deploy tests are `acladmin`, so the probe
-  is `brokeradmin`'s one caller and `tests/deploy/test_redis_acl.py` fails any
-  grant the source does not issue - cut it, or give it to `acladmin`. The
-  probe's credential is the likeliest to leak, so it is the one that can change
-  nothing. Archiver's DLQ `+xdel` still names its caller in its stanza
-  (archiver#238's triage). The inverse is withheld on purpose: `acladmin`'s
+- **`brokeradmin` is the probe's: exactly what `src/broker/` issues.** The
+  operator and the deploy tests are `acladmin` (broker#52), and
+  `tests/deploy/test_redis_acl.py` fails a mismatch either way. `acladmin`'s
   `+xtrim` stops at `~*.dlq`, the only thing keeping an operator off a **Never
-  XTRIMmed** stream (broker#34). Do not widen it in an incident; `+acl` lets it,
-  which is why the rule is here.
-- **No Redis password in plaintext at rest on this node** (broker#52). Every
-  line of `/etc/redis/broker-acl-passwords` is a digest; `acladmin` and
-  `brokeradmin` authenticate from `systemd-creds` credentials under
-  `/etc/credstore.encrypted/` (`cred`/`rcli` in `docs/RESTART-WINDOW.md`, no
-  operator prompt); `default` is a tombstone - `off`, `-@all`, the digest of a
-  value nobody kept - and a window never re-enables it; `requirepass` belongs
-  to no user. Mint and rotate: `docs/ACL-CUTOVER.md`, *Node credentials*.
-  `tests/deploy/test_live_acl_matches_tracked_acl.py` pins each on the node.
-  Root can still decrypt, and `exedev` has sudo: the rule keeps secrets out of
-  files that get copied or read into context, not away from root.
+  XTRIMmed** stream (broker#34); its own `+acl` could lift that. Do not, in an
+  incident.
+- **No Redis password in plaintext at rest here** (broker#52): digests in the
+  passwords file, `acladmin`/`brokeradmin` as `systemd-creds` credentials
+  (`cred`/`rcli`, no prompt), `default` a `-@all` tombstone no window
+  re-enables, `requirepass` nobody's. Mint, rotate, limits:
+  `docs/NODE-CREDENTIALS.md`.
 - **`ACL LOG` is evidence: never reset it, and name every denial you cause.**
   Check a live read against the user's line first. A denial you or a peer
   cause gets a row in `deploy/redis-acl.conf`'s *Denials that are not faults*,
@@ -170,6 +161,8 @@ docs/CONSUMER-REGISTRATIONS.md
                  the one-time orphan reap, and why it cannot recur
 docs/ACL-CUTOVER.md
                  the per-service credential cutover around that window
+docs/NODE-CREDENTIALS.md
+                 acladmin/brokeradmin as encrypted credentials; requirepass
 docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
 docs/SOCRATICODE.md
                  semantic search: tools, prefetch, graph health, index scope
@@ -222,13 +215,8 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   guarded by `tests/deploy/test_runbook_credentials.py`) and #46 (the `default`
   credential rotated). Neither is a tracked-file change; both live files are
   templated and the value is `NOT_COMPARED` in `tests/deploy/test_live_*.py`.
-- CannObserv/broker#52 - the operator credentials off the node's disk,
-  2026-09-29, with no operator prompt: `default` a tombstone and its window
-  commands `acladmin`'s; `brokeradmin` probe-only; `citest` off (#53 decides
-  its fate); `acladmin`/`brokeradmin` rotated into encrypted credentials; every
-  passwords-file line a digest; `/etc/redis/broker-password` shredded;
-  `requirepass` nobody's. Left open on purpose: root and `exedev`'s sudo, and
-  the probe's decrypted copy readable by `exedev` for the second a tick runs.
+- CannObserv/broker#52 - operator credentials off disk, no prompt,
+  2026-09-29; what it leaves open: `docs/NODE-CREDENTIALS.md`. #72 follows.
 - CannObserv/watcher#319 - the notice for the other end of #44's mirror:
   `RETAINED_FULL_SETS` and the `*/5` republish period are copied into
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*
@@ -248,6 +236,7 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record
 - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook and its symptom playbook
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
+- [docs/NODE-CREDENTIALS.md](docs/NODE-CREDENTIALS.md) - `acladmin`/`brokeradmin` as encrypted credentials: mint, rotate, what it does not protect; `requirepass` nobody's
 - [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, [deploy/README.md](deploy/README.md)
 - [docs/SKILLS.md](docs/SKILLS.md) - the vendored agent skills, their refresh hook, the context cadence
 - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) - semantic search over this repo and its four siblings: the tool table, the prefetch, graph health, index scope
