@@ -134,14 +134,12 @@ def test_download_and_gunzip_round_trip(tmp_path) -> None:
 
 
 def test_the_snapshot_listing_never_offers_a_digests_object() -> None:
-    """Both live under the prefix, and a digests object sorts after its
-    snapshot's name; ``--latest`` staging one as an RDB would be refused by the
-    header check, but it must not be offered at all."""
+    """Both live under the prefix, and a digests object, named by the run that
+    follows its snapshot, sorts after it. ``--latest`` staging one as an RDB
+    would be refused by the header check, but it must not be offered at all."""
     bucket = FakeBucket("a-backup-bucket")
     bucket.objects["co-broker/20260910T153511Z.rdb.gz"] = b"x"
-    _put_digests(
-        bucket, "co-broker/20260910T153511Z.0123abcd.digests", DIGESTS, "2026-09-10T15:40:00Z"
-    )
+    _put_digests(bucket, "co-broker/20260910T154000Z.digests", DIGESTS, "2026-09-10T15:40:00Z")
     client = FakeClient(bucket)
     assert newest_object(client, "a-backup-bucket", "co-broker") == (
         "co-broker/20260910T153511Z.rdb.gz"
@@ -293,13 +291,13 @@ def test_main_digests_writes_the_newest_whatever_snapshot_is_staged(
     out. So ``--digests`` takes no snapshot argument at all."""
     _put_digests(
         stub_main.bucket,
-        "co-broker/20260910T153511Z.aaaaaaaa.digests",
+        "co-broker/20260910T154000Z.digests",
         b"old",
         "2026-09-10T15:40:00Z",
     )
     _put_digests(
         stub_main.bucket,
-        "co-broker/20260910T163511Z.bbbbbbbb.digests",
+        "co-broker/20260910T164000Z.digests",
         DIGESTS,
         "2026-09-10T16:40:00Z",
     )
@@ -309,7 +307,7 @@ def test_main_digests_writes_the_newest_whatever_snapshot_is_staged(
 
     assert dest.read_bytes() == DIGESTS
     out = capsys.readouterr().out
-    assert "20260910T163511Z.bbbbbbbb.digests" in out
+    assert "20260910T164000Z.digests" in out
     assert "archiver,watcher" in out
     # The node lines a rebuild appends next are named, not remembered.
     assert "NODE-CREDENTIALS.md" in out and "__DEFAULT_PW_SHA256__" in out
