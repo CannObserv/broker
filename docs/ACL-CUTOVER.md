@@ -332,36 +332,50 @@ carries both. While a probe tick runs, systemd also grants the unit's `User=`
 read on its decrypted copy, so for that second another `exedev` process can read
 it - in RAM, never on disk (deploy/broker-bus-health.service).
 
-**Rotate one** - on exposure, not on a schedule. Run as a script. It adds before
-it retires, as #46's rotation did, so no crash leaves the user without a
-password this node holds; nothing puts the value on a command line
-(CannObserv/broker#47):
+**Rotate one** - on exposure, not on a schedule. Run it as a script (`bash
+rotate.sh`); it defines its own helpers. It adds before it retires, as #46's
+rotation did, and checks each write before the next, so a failure at any step
+leaves the old password working. That matters most for `acladmin`, the only
+`+acl` user: losing its credential means editing `users.acl` and a cohort-wide
+restart. Nothing puts the value on a command line (CannObserv/broker#47):
 
 ```bash
 set -euo pipefail
 u=acladmin                                 # or brokeradmin
+cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
+rcli() { local u=$1 p; shift
+         p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
+         REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+digest() { printf %s "$1" | sha256sum | cut -d' ' -f1; }
 mint() { (set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40); }
 C=/etc/credstore.encrypted/broker-$u
-OLDH="$(cred "$u" | sha256sum | cut -d' ' -f1)"
+OLDH="$(digest "$(cred "$u")")"
 NEW="$(mint)"; [ "${#NEW}" -eq 40 ] || { echo "minted ${#NEW} chars, want 40"; exit 1; }
-NEWH="$(printf %s "$NEW" | sha256sum | cut -d' ' -f1)"
+NEWH="$(digest "$NEW")"
 
-# 1. ADD the new password; both authenticate until 4.
-rcli acladmin ACL SETUSER "$u" "#$NEWH"
-rcli acladmin ACL SAVE
-# 2. The credential - the value on a pipe, printf being a builtin.
+# 1. ADD the new password; both authenticate until 4. Checked live, because
+#    redis-cli's exit status does not say whether the reply was an error.
+rcli acladmin ACL SETUSER "$u" "#$NEWH" >/dev/null
+rcli acladmin ACL GETUSER "$u" | grep -qx "$NEWH" || { echo "1: not live"; exit 1; }
+[ "$(rcli acladmin ACL SAVE)" = OK ]
+# 2. The credential - the value on a pipe, printf being a builtin. The old
+#    ciphertext stays as $C.old until 4 has run.
 printf %s "$NEW" | sudo systemd-creds encrypt --name="broker-$u" - "$C.new"
 unset NEW
-sudo chmod 0400 "$C.new" && sudo mv "$C.new" "$C"
-[ "$(cred "$u" | sha256sum | cut -d' ' -f1)" = "$NEWH" ]
+[ "$(digest "$(sudo -n systemd-creds decrypt --name="broker-$u" "$C.new" -)")" = "$NEWH" ]
+sudo chmod 0400 "$C.new" && sudo cp -p "$C" "$C.old" && sudo mv "$C.new" "$C"
 # 3. The digest line the render reads.
 sudo cat /etc/redis/broker-acl-passwords \
     | awk -F= -v k="__${u^^}_PW_SHA256__" -v h="$NEWH" '$1==k {print k "=" h; next} {print}' \
     | sudo install -m 0400 -o root -g root /dev/stdin /etc/redis/broker-acl-passwords.new
+sudo grep -qx "__${u^^}_PW_SHA256__=$NEWH" /etc/redis/broker-acl-passwords.new \
+    || { echo "3: no __${u^^}_PW_SHA256__ line to replace"; exit 1; }
 sudo mv /etc/redis/broker-acl-passwords.new /etc/redis/broker-acl-passwords
-# 4. RETIRE the old one.
-rcli acladmin ACL SETUSER "$u" "!$OLDH"
-rcli acladmin ACL SAVE
+# 4. RETIRE the old one - as the new credential, which proves it for acladmin.
+rcli acladmin ACL SETUSER "$u" "!$OLDH" >/dev/null
+[ "$(rcli acladmin ACL GETUSER "$u" | grep -cE '^[0-9a-f]{64}$')" -eq 1 ]
+[ "$(rcli acladmin ACL SAVE)" = OK ]
+sudo rm "$C.old"
 ```
 
 For `brokeradmin` the next tick simply authenticates with the new credential
