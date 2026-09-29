@@ -42,7 +42,7 @@ was recovered by replaying that history; that was margin, not design.
 |---|---|
 | **What** | the server's own `dump.rdb` - rewritten atomically at its `save` points (`3600 1`, `300 100`, `60 10000`), so a copy at any moment is a consistent point in time |
 | **When** | hourly - `broker-backup.timer`, `OnCalendar=hourly`, five minutes of jitter, `Persistent=true` so a reboot's missed tick still runs |
-| **Where** | `gs://co-gcs-broker-backup/co-broker/<snapshot time>.rdb.gz` - the prefix is the hostname - and the ACL digests beside it as `<snapshot time>.<sha256[:8]>.digests` (below) |
+| **Where** | `gs://co-gcs-broker-backup/co-broker/<snapshot time>.rdb.gz` - the prefix is the hostname - and the ACL digests beside it as `<run time>.digests` (below) |
 | **Named by** | the snapshot's own `ctime`, the aux field the save writes into the file, as `20260910T153511Z`. A listing reads as a timeline and the newest name is the newest data |
 | **Verified** | `redis-check-rdb` on the private copy before anything is uploaded - the format, every record, the CRC64 trailer. A file that fails is refused |
 | **Described** | object metadata: `snapshot_at`, `sha256`, `size_bytes`, `redis_version`, `rdb_version`, `keys`, `source_host` - readable without downloading |
@@ -59,7 +59,7 @@ node takes `/etc/redis/broker-acl-passwords` with it, and the service lines
 cannot be reproduced: each service holds its plaintext on its own host, and
 the digest is what re-admits it. So every run ships a projection of that file
 after the snapshot. It holds the `__<SERVICE>_PW_SHA256__` lines alone, sorted,
-with object metadata `taken_at`, `sha256`, `users` and `source_host`:
+with object metadata `taken_at`, `snapshot_at`, `sha256`, `users` and `source_host`:
 
 - **The node users never ship.** A rebuild mints `acladmin`, `brokeradmin` and
   `default` fresh (step 0) and *appends* their lines, and `render-acl.sh` refuses a
@@ -70,11 +70,11 @@ with object metadata `taken_at`, `sha256`, `users` and `source_host`:
   The snapshot has already shipped by then and the error says so. But the run
   is failed, and the probe's `backup` finding reports it: a gap in the digests
   that nothing reports is the stale password-manager copy again.
-- **Named by the snapshot stamp, then the content.** The stamp renews the
-  object under the 30-day age rule whenever the RDB moves; an object named by
-  content alone would age out while still current. The content prefix ships an
-  ACL change in an hour whose snapshot is `unchanged`. `--list` and `--latest`
-  never offer a `.digests` object.
+- **Named by the run's time.** Every run creates one, so the greatest name is
+  the newest set, and the 30-day age rule never reaches it. A name keyed by the
+  snapshot or the content would 412 on a set shipped before: after A -> B -> A
+  within one unchanged snapshot, the newest object would be B. `--list` and
+  `--latest` never offer a `.digests` object.
 - **A digest is not a credential.** `AUTH` takes the plaintext, which is why
   "no Redis credential" survives. That holds because each plaintext is
   high-entropy: 40 alphanumerics from urandom, about 238 bits

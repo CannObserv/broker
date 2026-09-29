@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.broker import backup, bus_health
+from src.broker import backup, bus_health, restore
 from src.broker.backup import (
     DIGESTS_SUFFIX,
     NODE_USERS,
@@ -95,7 +95,7 @@ SHIPPED = "".join(
     for u in ("archiver", "citest", "observo", "replicator", "watcher")
 )
 SHIPPED_SHA = hashlib.sha256(SHIPPED.encode()).hexdigest()
-DIGESTS_KEY = f"co-broker/20260910T154308Z.{SHIPPED_SHA[:8]}{DIGESTS_SUFFIX}"
+DIGESTS_KEY = f"co-broker/20260910T155308Z{DIGESTS_SUFFIX}"  # the run, NOW
 
 
 def _fake_checker(report: str = CHECK_REPORT) -> MagicMock:
@@ -299,9 +299,10 @@ def test_run_backup_reports_unchanged_when_this_snapshot_is_already_there(
     first = _run(rdb, client, tmp_path)
     second = _run(rdb, client, tmp_path, now=NOW + timedelta(hours=1))
 
-    assert len(bucket.objects) == 2  # the snapshot and its digests, once each
+    # The snapshot once; the digests every run, named by the run (broker#72).
+    assert len(bucket.objects) == 3
     assert second["outcome"] == "unchanged"
-    assert second["digests_outcome"] == "unchanged"
+    assert second["digests_outcome"] == "uploaded"
     assert second["object"] == first["object"]
     assert second["snapshot_at"] == first["snapshot_at"]
     assert second["last_success_at"] > first["last_success_at"]
@@ -436,13 +437,28 @@ def test_project_digests_refuses_a_file_with_no_service_line() -> None:
         project_digests(node_only)
 
 
-def test_digests_key_pairs_with_the_snapshot_and_names_its_content() -> None:
-    """The snapshot stamp pairs it with its RDB and renews it under the
-    bucket's 30-day age rule every time the RDB moves; the content prefix means
-    an ACL change still ships in an hour whose RDB is unchanged, where the
-    stamp alone would 412."""
-    assert digests_key("co-broker", SNAPSHOT_AT, SHIPPED_SHA) == DIGESTS_KEY
+def test_digests_key_is_the_run_time() -> None:
+    """Named by the run, not the snapshot or the content: every run creates
+    one, so the greatest name is the newest set and the 30-day age rule never
+    reaches the current one. A snapshot- or content-keyed name 412s on a set
+    shipped before - and after A -> B -> A, restore would hand back B."""
+    assert digests_key("co-broker", NOW) == DIGESTS_KEY
     assert not DIGESTS_KEY.endswith(OBJECT_SUFFIX)  # restore's snapshot listing skips it
+
+
+def test_the_newest_digests_are_the_last_run_s_even_when_a_set_comes_back(
+    rdb, client, bucket, tmp_path
+) -> None:
+    """A rotation rolled back within one unchanged snapshot: A, then B, then A
+    again. The restore must hand back A."""
+    passwords = tmp_path / "broker-acl-passwords"
+    rolled = PASSWORDS.replace(_hex("watcher"), _hex("watcher-rotated"))
+    for hour, text in enumerate((PASSWORDS, rolled, PASSWORDS)):
+        passwords.write_text(text)
+        _run(rdb, client, tmp_path, now=NOW + timedelta(hours=hour))
+    name, meta = restore.newest_digests(client, "a-backup-bucket", "co-broker")
+    assert meta["sha256"] == SHIPPED_SHA
+    assert bucket.objects[name] == SHIPPED.encode()
 
 
 def test_run_backup_ships_the_digests_beside_the_snapshot(rdb, client, bucket, tmp_path) -> None:
@@ -451,6 +467,7 @@ def test_run_backup_ships_the_digests_beside_the_snapshot(rdb, client, bucket, t
     assert bucket.content_types[DIGESTS_KEY] == "text/plain"
     meta = bucket.metadata[DIGESTS_KEY]
     assert meta["taken_at"] == "2026-09-10T15:53:08Z"
+    assert meta["snapshot_at"] == "2026-09-10T15:43:08Z"  # the RDB it was shipped beside
     assert meta["sha256"] == SHIPPED_SHA
     assert meta["users"] == "archiver,citest,observo,replicator,watcher"
     assert meta["source_host"] == "co-broker"

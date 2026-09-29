@@ -166,17 +166,19 @@ def object_key(prefix: str, snapshot_at: datetime) -> str:
     return f"{prefix.strip('/')}/{stamp}{OBJECT_SUFFIX}"
 
 
-def digests_key(prefix: str, snapshot_at: datetime, sha256: str) -> str:
-    """Beside the snapshot's own object, and named by content too.
+def digests_key(prefix: str, taken_at: datetime) -> str:
+    """Named by the run, so every run creates one and the greatest name is the
+    newest set.
 
-    The stamp pairs it with its RDB, so the bucket's 30-day age rule renews it
-    whenever the RDB moves; an object named by content alone would be written
-    once and aged out while still current. The content prefix is what ships an
-    ACL change in an hour whose snapshot is unchanged, where the stamp alone
-    would 412.
+    Not by the snapshot or the content: either name 412s on a set shipped
+    before, so after A -> B -> A over one unchanged snapshot the newest object
+    would be B. And the bucket's 30-day age rule never reaches the current set,
+    whether or not the RDB moved. The snapshot it was shipped beside is in the
+    metadata.
     """
-    stamp = snapshot_at.astimezone(UTC).strftime(KEY_TIME_FORMAT)
-    return f"{prefix.strip('/')}/{stamp}.{sha256[:8]}{DIGESTS_SUFFIX}"
+    return (
+        f"{prefix.strip('/')}/{taken_at.astimezone(UTC).strftime(KEY_TIME_FORMAT)}{DIGESTS_SUFFIX}"
+    )
 
 
 def project_digests(text: str) -> str:
@@ -346,17 +348,15 @@ def upload_digests(
     sha256: str,
     users: list[str],
     taken_at: datetime,
+    snapshot_at: datetime,
     host: str,
 ) -> str:
-    """Create the digests object; ``unchanged`` on the 412, as ``upload``.
-
-    ``taken_at`` is the run's time, and what the restore orders by: two runs
-    over one unchanged snapshot share its stamp, and the content prefix sorts
-    them at random.
-    """
+    """Create the digests object; ``unchanged`` on the 412, which only a rerun
+    within the same second can meet, since the name is the run's time."""
     blob = client.bucket(bucket).blob(key)
     blob.metadata = {
         "taken_at": iso(taken_at),
+        "snapshot_at": iso(snapshot_at),
         "sha256": sha256,
         "users": ",".join(users),
         "source_host": host,
@@ -449,7 +449,7 @@ def run_backup(
         digests_users = [m.group(1).lower() for m in _DIGEST_LINE_RE.finditer(digests)]
         digests_path = workdir / "acl.digests"
         digests_path.write_text(digests)
-        digests_obj = digests_key(prefix, snapshot.snapshot_at, digests_sha)
+        digests_obj = digests_key(prefix, at)
         digests_outcome = upload_digests(
             client,
             bucket,
@@ -458,6 +458,7 @@ def run_backup(
             sha256=digests_sha,
             users=digests_users,
             taken_at=at,
+            snapshot_at=snapshot.snapshot_at,
             host=host,
         )
     except Exception as exc:

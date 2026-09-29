@@ -147,19 +147,15 @@ def test_the_snapshot_listing_never_offers_a_digests_object() -> None:
     )
 
 
-def test_newest_digests_is_the_last_run_not_the_greatest_name() -> None:
-    """Two runs over one unchanged snapshot share its stamp, and the content
-    prefix orders them at random. The run time in the metadata is the order."""
+def test_newest_digests_is_the_greatest_name() -> None:
+    """Each run creates one, named by its time, so the greatest name is the
+    last run's - whatever snapshot names sort beside them."""
     bucket = FakeBucket("a-backup-bucket")
-    _put_digests(
-        bucket, "co-broker/20260910T153511Z.ffffffff.digests", b"old", "2026-09-10T15:40:00Z"
-    )
-    _put_digests(
-        bucket, "co-broker/20260910T153511Z.00000000.digests", DIGESTS, "2026-09-10T16:40:00Z"
-    )
-    bucket.objects["co-broker/20260910T163511Z.rdb.gz"] = b"x"
+    _put_digests(bucket, "co-broker/20260910T154000Z.digests", b"old", "2026-09-10T15:40:00Z")
+    _put_digests(bucket, "co-broker/20260910T164000Z.digests", DIGESTS, "2026-09-10T16:40:00Z")
+    bucket.objects["co-broker/20260910T173511Z.rdb.gz"] = b"x"
     name, meta = newest_digests(FakeClient(bucket), "a-backup-bucket", "co-broker")
-    assert name == "co-broker/20260910T153511Z.00000000.digests"
+    assert name == "co-broker/20260910T164000Z.digests"
     assert meta["sha256"] == DIGESTS_SHA
 
 

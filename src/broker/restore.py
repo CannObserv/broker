@@ -109,17 +109,11 @@ def newest_object(client: storage.Client, bucket: str, prefix: str) -> str | Non
 
 
 def newest_digests(client: storage.Client, bucket: str, prefix: str) -> tuple[str, dict] | None:
-    """The last run's digests object under ``prefix``, with its metadata.
-
-    Ordered by ``taken_at``, the run time, not by name: two runs over one
-    unchanged snapshot share its stamp, and the content prefix after it sorts
-    them at random.
-    """
+    """The last run's digests object under ``prefix``, with its metadata. Each
+    run creates one named by its time, so that is the greatest name."""
     blobs = client.list_blobs(bucket, prefix=f"{prefix.strip('/')}/", timeout=LIST_TIMEOUT_SECONDS)
     described = [(b.name, dict(b.metadata or {})) for b in blobs if b.name.endswith(DIGESTS_SUFFIX)]
-    if not described:
-        return None
-    return max(described, key=lambda pair: (pair[1].get("taken_at", ""), pair[0]))
+    return max(described, default=None)
 
 
 def write_digests(body: bytes, dest: Path, *, expected_sha256: str | None) -> None:
