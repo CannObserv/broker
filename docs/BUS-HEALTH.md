@@ -2,7 +2,8 @@
 
 What the bus-health probe watches, the per-stream contracts it holds each stream
 to, and what it cannot see. Which stream is which, who produces and consumes it,
-and who drains its DLQ is [STREAMS.md](STREAMS.md) - including the table whose
+and who writes its DLQ is [STREAMS.md](STREAMS.md) - who drains it,
+[DLQ-DRAINING.md](DLQ-DRAINING.md) - including the table whose
 `Health primitive` column this file expands. Its `Producer durability under OOM`
 column is expanded in [MEMORY-PROTECTION.md](MEMORY-PROTECTION.md); the probe's
 `backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s.
@@ -155,7 +156,7 @@ Per tick it probes:
   and the one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
-  named and the entries captured; see *Who drains a DLQ* in [STREAMS.md](STREAMS.md).
+  named and the entries captured; see [DLQ-DRAINING.md](DLQ-DRAINING.md).
   The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
   `XTRIM MAXLEN 0`, which was the only tool the broker had before
   CannObserv/broker#12 and which takes every *other* entry with it - on a queue
@@ -274,7 +275,7 @@ of:
 | `LWW_PRODUCER_MAXLEN` (500) | Watcher's two `DEFAULT_*_STREAM_MAXLEN`, `src/core/{fetch_policy,watch_status}.py` (CannObserv/watcher#292) |
 | `LWW_RETAINED_FULL_SETS` (10) | `RETAINED_FULL_SETS`, `CannObserv/watcher:src/core/bus.py` (CannObserv/watcher#292) - the multiplier on the floor the line above is only the *default* of |
 | `LWW_REPUBLISH_PERIOD_SECONDS` (300) | Watcher's `*/5 * * * *` republish (CannObserv/watcher#264, #265; `info.watch-status` reads `WATCHER_WATCH_STATUS_REPUBLISH_CRON` and defaults to it) - already load-bearing as 3x the LWW age threshold before it was spelled out |
-| `DLQ_DRAINERS` (who triages each `*.dlq`) | *Who drains a DLQ* in [STREAMS.md](STREAMS.md) - an assignment, so it has no computable source; the keys are still derived through co-core's `dlq_name()` |
+| `DLQ_DRAINERS` (who triages each `*.dlq`) | *Who drains a DLQ* in [DLQ-DRAINING.md](DLQ-DRAINING.md) - an assignment, so it has no computable source; the keys are still derived through co-core's `dlq_name()` |
 
 `LWW_PRODUCER_MAXLEN` was already a mirror before the split - there was never an
 import to lose - which is why the pattern was tolerable enough to extend to the

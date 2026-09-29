@@ -5,7 +5,6 @@
 
 # The three callers are listed in the same sentence - the probe, an operator at
 # a redis-cli, and the deploy tests - so the number is checkable by reading it.
-AGENTS.md :: enumerated :: That credential is three callers
 
 # Two `gated` entries pruned 2026-09-24: "its two DLQs, live 2026-09-22" left
 # AGENTS.md for README.md *Provenance* in that day's curation, and "absorbs one
@@ -14,5 +13,8 @@ AGENTS.md :: enumerated :: That credential is three callers
 
 # 2026-09-24 curation: the five are listed on the next line of the same bullet;
 # "the other four" is those five less content.blobs, two lines below.
-AGENTS.md :: enumerated :: No retention opinion on the five `content.*` streams
-AGENTS.md :: enumerated :: the other four joined it
+
+# 2026-09-29 re-judged: the rule names all eight streams in the same sentence;
+# the four are that list less content.blobs, the processing pair and content.persist.
+AGENTS.md :: enumerated :: No retention opinion on the eight `content.*` streams
+AGENTS.md :: enumerated :: four joined it when they lost

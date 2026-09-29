@@ -120,3 +120,36 @@ AGENTS.md :: disproven :: held the same way (CannObserv/archiver#238). The inver
 # carries them; --claims confirms no atom lost.
 AGENTS.md :: tighten ::   credential rotated - four writes, `docs/ACL-CUTOVER.md`,
 AGENTS.md :: tighten ::   files are templated and the value is `NOT_COMPARED` in the two live tests.
+
+# 2026-09-29 curation (STREAMS.md -> + DLQ-DRAINING.md): "the column/rows above"
+# re-aimed at STREAMS.md's table, which the moved section no longer sits under.
+docs/STREAMS.md :: retarget :: on that topic; the `DLQ` column above names it per stream. Archiver writes
+docs/STREAMS.md :: retarget :: column above, so an unowned queue reads as a blank cell rather than something
+docs/STREAMS.md :: retarget :: column above), and **dumps the entries to `dlq-evidence/` under the unit's
+docs/STREAMS.md :: retarget :: **For `*.dlq` keys only.** Four rows above say **Never XTRIMmed** -
+
+# 2026-09-29 curation (AGENTS.md): Layout's per-doc lines were a second, shorter index of
+# docs/; Detail Docs is the one index, and every atom is still there (--claims: 0 dropped).
+AGENTS.md :: tighten :: docs/STREAMS.md  the cluster stream inventory - who produces, consumes, drains
+AGENTS.md :: tighten :: docs/BUS-HEALTH.md
+AGENTS.md :: tighten :: the probe: per-stream contracts, stream and DLQ checks, loss detection
+AGENTS.md :: tighten :: docs/MEMORY-PROTECTION.md
+AGENTS.md :: tighten :: the maxmemory cap: what it does to the producers, why `noeviction`
+AGENTS.md :: tighten :: docs/UNDELIVERED-CONSUMERS.md
+AGENTS.md :: tighten :: the group-undelivered check: positions, not pending or lag
+AGENTS.md :: tighten :: docs/RECOVERY.md node loss: the backup, the restore, the rehearsal record
+AGENTS.md :: tighten :: docs/RESTART-WINDOW.md
+AGENTS.md :: tighten :: the cohort restart window and its identities
+AGENTS.md :: tighten :: docs/INCIDENT-2026-09-10.md
+AGENTS.md :: tighten :: what `databases 1` did to db0, and the order that avoids it
+AGENTS.md :: tighten :: docs/NETWORK-PATHS.md
+AGENTS.md :: tighten :: measured latency per participant, its path, the DERP risk
+AGENTS.md :: tighten :: docs/CONSUMER-REGISTRATIONS.md
+AGENTS.md :: tighten :: the one-time orphan reap, and why it cannot recur
+AGENTS.md :: tighten :: docs/ACL-CUTOVER.md
+AGENTS.md :: tighten :: the per-service credential cutover around that window
+AGENTS.md :: tighten :: docs/NODE-CREDENTIALS.md
+AGENTS.md :: tighten :: acladmin/brokeradmin as encrypted credentials; requirepass
+AGENTS.md :: tighten :: docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
+AGENTS.md :: tighten :: docs/SOCRATICODE.md
+AGENTS.md :: tighten :: semantic search: tools, prefetch, graph health, index scope

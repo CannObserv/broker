@@ -57,6 +57,30 @@ owns:
   #59 then cut the two DLQs: archiver's `+xtrim` is `~info.changes` alone,
   and it disposes of dead letters by `+xdel` (live 2026-09-24).
 
+Onboarding and credential history since, moved from AGENTS.md's *Related*
+(2026-09-29):
+
+- CannObserv/broker#62 - Observo onboarded ahead of its consumer, 2026-09-24:
+  ACL user `observo`, watcher's grants on the pair, the `content.process` /
+  `content.derived` rows, two probed groups cannobserv v0.19.4 marks *pending
+  broker#62*, and the co-core pin at `>=0.19.4`. The tailnet rule and the
+  credential handoff (`CO_OBSERVO_BROKER_TOKEN` in `/etc/observo/.env`, the
+  node's line a digest) were done the same day. Open: observo#629's consumer,
+  then telling cannobserv both groups are live.
+- CannObserv/broker#64 - `content.persist` (archiver -> replicator, cannobserv
+  #493), provisioned 2026-09-26 ahead of both ends: archiver's `+xadd` in a
+  selector only, replicator's third worker pool, `replicator.persist` probed,
+  co-core `>=0.19.6`. The canonical stream set in tests is now read off
+  co-core (`tests/canonical.py`), because the hand list let this stream past
+  a green suite. Replicator's loop is live (2026-09-26T21:38Z); open: archiver
+  issuing (archiver#276), the second half of the go-live order.
+- CannObserv/archiver#251 - a broker credential in archiver's journald, from
+  the application's start log and from one `sudo` command line. Both halves
+  landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
+  guarded by `tests/deploy/test_runbook_credentials.py`) and #46 (the `default`
+  credential rotated). Neither is a tracked-file change; both live files are
+  templated and the value is `NOT_COMPARED` in `tests/deploy/test_live_*.py`.
+
 ## What stayed in archiver
 
 The split is not clean, and the seam is worth knowing:

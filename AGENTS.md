@@ -143,29 +143,7 @@ Types: feat, fix, refactor, docs, test, chore.
 ```
 deploy/          the artifacts the node deploys + the bus-health and backup units;
                  see deploy/README.md
-docs/STREAMS.md  the cluster stream inventory - who produces, consumes, drains
-docs/BUS-HEALTH.md
-                 the probe: per-stream contracts, stream and DLQ checks, loss detection
-docs/MEMORY-PROTECTION.md
-                 the maxmemory cap: what it does to the producers, why `noeviction`
-docs/UNDELIVERED-CONSUMERS.md
-                 the group-undelivered check: positions, not pending or lag
-docs/RECOVERY.md node loss: the backup, the restore, the rehearsal record
-docs/RESTART-WINDOW.md
-                 the cohort restart window and its identities
-docs/INCIDENT-2026-09-10.md
-                 what `databases 1` did to db0, and the order that avoids it
-docs/NETWORK-PATHS.md
-                 measured latency per participant, its path, the DERP risk
-docs/CONSUMER-REGISTRATIONS.md
-                 the one-time orphan reap, and why it cannot recur
-docs/ACL-CUTOVER.md
-                 the per-service credential cutover around that window
-docs/NODE-CREDENTIALS.md
-                 acladmin/brokeradmin as encrypted credentials; requirepass
-docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
-docs/SOCRATICODE.md
-                 semantic search: tools, prefetch, graph health, index scope
+docs/            one reference doc per topic - see Detail Docs below
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  logging.py (service-local, not a mirror)
@@ -195,26 +173,10 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   group commands on its root, so it can `XACK` its consumer's work away -
   #14's hole the other way round). `content.process` is the first stream that
   does not open it: its producer's pattern rides the `+xadd` selector alone.
-- CannObserv/broker#62 - Observo onboarded ahead of its consumer, 2026-09-24:
-  ACL user `observo`, watcher's grants on the pair, the `content.process` /
-  `content.derived` rows, two probed groups cannobserv v0.19.4 marks *pending
-  broker#62*, and the co-core pin at `>=0.19.4`. The tailnet rule and the
-  credential handoff (`CO_OBSERVO_BROKER_TOKEN` in `/etc/observo/.env`, the
-  node's line a digest) were done the same day. Open: observo#629's consumer,
-  then telling cannobserv both groups are live.
-- CannObserv/broker#64 - `content.persist` (archiver -> replicator, cannobserv
-  #493), provisioned 2026-09-26 ahead of both ends: archiver's `+xadd` in a
-  selector only, replicator's third worker pool, `replicator.persist` probed,
-  co-core `>=0.19.6`. The canonical stream set in tests is now read off
-  co-core (`tests/canonical.py`), because the hand list let this stream past
-  a green suite. Replicator's loop is live (2026-09-26T21:38Z); open: archiver
-  issuing (archiver#276), the second half of the go-live order.
-- CannObserv/archiver#251 - a broker credential in archiver's journald, from
-  the application's start log and from one `sudo` command line. Both halves
-  landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
-  guarded by `tests/deploy/test_runbook_credentials.py`) and #46 (the `default`
-  credential rotated). Neither is a tracked-file change; both live files are
-  templated and the value is `NOT_COMPARED` in `tests/deploy/test_live_*.py`.
+- Open: observo#629's consumer, then telling cannobserv both of #62's groups are
+  live; archiver issuing `content.persist` (archiver#276, #64's second half);
+  #53 (CI off co-broker, or `citest` re-minted); #72; #73. The closed history of
+  #62, #64 and archiver#251: [README.md](README.md), *Provenance*.
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
   2026-09-29; what it leaves open: `docs/NODE-CREDENTIALS.md`. #72 follows.
 - CannObserv/watcher#319 - the notice for the other end of #44's mirror:
@@ -228,6 +190,7 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 ## Detail Docs
 
 - [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each; non-stream keys; where each participant runs
+- [docs/DLQ-DRAINING.md](docs/DLQ-DRAINING.md) - who writes, triages and backstops each `*.dlq`, the capture, and the `XTRIM MINID` drain
 - [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - the measured latency from each participant, the path beside every number, and the accepted DERP risk
 - [docs/CONSUMER-REGISTRATIONS.md](docs/CONSUMER-REGISTRATIONS.md) - the one-time reap of orphaned consumer registrations, and why it cannot recur
 - [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why

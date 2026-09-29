@@ -682,7 +682,7 @@ on the tick that first sees a non-resting queue rather than by an operator
 under time pressure. Delete a topic's dumps once its triage is finished; the
 high-water mark is read back from the filenames, so deleting them correctly
 re-arms capture rather than leaving a gap. See
-[`../docs/STREAMS.md`](../docs/STREAMS.md), *Who drains a DLQ*.
+[`../docs/DLQ-DRAINING.md`](../docs/DLQ-DRAINING.md).
 
 The **disposal** step is `XDEL <queue> <id>`, per entry, and since broker#12
 each named drainer can do it for its own queues without an operator - a

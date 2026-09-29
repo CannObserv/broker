@@ -111,7 +111,9 @@ Until #52 it was `default`'s password, in three plaintext places -
 directive - and the reason `/etc/redis/broker-password` existed. That file is
 gone.
 
-## Rotating `__DEFAULT_PW__` - retired by CannObserv/broker#52
+## Rotating `__DEFAULT_PW__` - retired
+
+Retired by CannObserv/broker#52.
 
 It was four writes, and they ran once: on 2026-09-23, as `acladmin`, after the
 credential every service held before the cutover leaked into archiver's

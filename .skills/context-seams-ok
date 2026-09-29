@@ -13,14 +13,11 @@ docs/SKILLS.md :: | `curating-context` | curate context, context budget, trim AG
 # --- 2026-09-11 split of docs/STREAMS.md into STREAMS.md + BUS-HEALTH.md ------
 # BUS-HEALTH.md pointing back at what stayed in STREAMS.md: the table, its
 # columns, and *Who drains a DLQ*.
-docs/BUS-HEALTH.md :: and who drains its DLQ is [STREAMS.md](STREAMS.md)
 docs/BUS-HEALTH.md :: Moved out of STREAMS.md on 2026-09-11
 docs/BUS-HEALTH.md :: The `info.changes` row's `Health primitive` cell in [STREAMS.md](STREAMS.md)
 docs/BUS-HEALTH.md :: Note the *permanently* in `content.fetch-policy`'s STREAMS.md row.
-docs/BUS-HEALTH.md :: see *Who drains a DLQ* in [STREAMS.md](STREAMS.md);
 docs/BUS-HEALTH.md :: retention trims in the [STREAMS.md](STREAMS.md) table.
 docs/BUS-HEALTH.md :: `Producer durability under OOM` column of [STREAMS.md](STREAMS.md).
-docs/BUS-HEALTH.md :: *Who drains a DLQ* in [STREAMS.md](STREAMS.md) - an assignment
 # Mentions of the probe inside the doc the probe's section now lives in.
 docs/BUS-HEALTH.md :: What the bus-health probe watches, the per-stream contracts
 docs/BUS-HEALTH.md :: (badge + journald line) and the bus-health probe
@@ -140,3 +137,27 @@ tests/test_bus_health.py :: three causes (docs/BUS-HEALTH.md), and a message ass
 # reply both stayed. New back-references, and correct ones.
 docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md) catches a consumer wedged
 docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md) read out of the same
+
+# --- 2026-09-29 split of docs/STREAMS.md into STREAMS.md + DLQ-DRAINING.md ----
+# Each points at what stayed in STREAMS.md: the table, its columns and rows,
+# and *Non-stream keys on `db0`* - none at the DLQ section that moved.
+docs/BUS-HEALTH.md :: and who writes its DLQ is [STREAMS.md](STREAMS.md)
+docs/BUS-HEALTH.md :: retention. [STREAMS.md](STREAMS.md) marks each row
+docs/BUS-HEALTH.md :: `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table;
+docs/DLQ-DRAINING.md :: procedure that empties one. Split out of [STREAMS.md](STREAMS.md), whose table
+docs/DLQ-DRAINING.md :: the `DLQ` column of [STREAMS.md](STREAMS.md) names it per stream.
+docs/DLQ-DRAINING.md :: column of [STREAMS.md](STREAMS.md), so an unowned queue reads as a blank cell
+docs/DLQ-DRAINING.md :: column in [STREAMS.md](STREAMS.md)), and **dumps the entries
+docs/DLQ-DRAINING.md :: Four rows of [STREAMS.md](STREAMS.md) say **Never XTRIMmed**
+docs/MEMORY-PROTECTION.md :: `Producer durability under OOM` column of [STREAMS.md](STREAMS.md).
+docs/UNDELIVERED-CONSUMERS.md :: [STREAMS.md](STREAMS.md).
+deploy/redis-acl.conf :: # ../docs/STREAMS.md.
+deploy/redis-acl.conf :: # ../docs/STREAMS.md's **Never XTRIMmed**, on two rows for two reasons
+deploy/redis-acl.conf :: written content-addressed and if-absent (../docs/STREAMS.md, "Non-stream keys
+deploy/redis-acl.conf :: # (../docs/STREAMS.md, "Producer durability under OOM").
+deploy/redis-acl.conf :: # ../docs/STREAMS.md say **Never XTRIMmed**: a cap on a command stream deletes
+src/broker/bus_health.py :: ``docs/STREAMS.md``'s **No retention cap** by the deploy tests.
+tests/deploy/test_redis_acl.py :: key here (../docs/STREAMS.md, *Non-stream keys on `db0`*).
+tests/deploy/test_redis_acl.py :: Read off ../docs/STREAMS.md for the reason the producer column is
+tests/deploy/test_redis_acl.py :: which ../docs/STREAMS.md "
+tests/test_bus_health.py :: `content.blobs` broadcasts (docs/STREAMS.md), and there a group beside the
