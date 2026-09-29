@@ -173,10 +173,10 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   group commands on its root, so it can `XACK` its consumer's work away -
   #14's hole the other way round). `content.process` is the first stream that
   does not open it: its producer's pattern rides the `+xadd` selector alone.
-- Open: observo#629's consumer, then telling cannobserv both of #62's groups are
-  live; archiver issuing `content.persist` (archiver#276, #64's second half);
-  #53 (CI off co-broker, or `citest` re-minted); #72; #73. The closed history of
-  #62, #64 and archiver#251: [README.md](README.md), *Provenance*.
+- Open: #62 (observo#629's consumer, then telling cannobserv both groups are
+  live); archiver switching on `content.persist` issuance (archiver#283, #64's
+  second half); #53 (CI off co-broker, or `citest` re-minted); #72; #73. The
+  history of #62, #64 and archiver#251: [README.md](README.md), *Provenance*.
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
   2026-09-29; what it leaves open: `docs/NODE-CREDENTIALS.md`. #72 follows.
 - CannObserv/watcher#319 - the notice for the other end of #44's mirror:

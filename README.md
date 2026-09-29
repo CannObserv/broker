@@ -74,6 +74,8 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   co-core (`tests/canonical.py`), because the hand list let this stream past
   a green suite. Replicator's loop is live (2026-09-26T21:38Z); open: archiver
   issuing (archiver#276), the second half of the go-live order.
+  *(archiver#276 closed 2026-09-27 with issuance shipped off; switching it on
+  is archiver#283.)*
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
