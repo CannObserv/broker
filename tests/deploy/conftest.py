@@ -289,7 +289,9 @@ def node_credential(path: Path) -> str | None:
     ``None`` off the node - no passwordless sudo, or no such credential - so the
     caller skips. The value goes from ``systemd-creds``' stdout into memory and
     nowhere else: no argv, no file, and a helper frame of its own so a failing
-    test's ``pytest -l`` locals never hold it.
+    test's ``pytest -l`` locals never hold it. A trailing newline is stripped,
+    as the probe strips it (``src/broker/bus_health.py``'s ``_unit_credential``),
+    so both read an ``echo``-minted credential as the same password.
     """
     result = subprocess.run(
         ["sudo", "-n", "systemd-creds", "decrypt", f"--name={path.name}", str(path), "-"],
@@ -297,7 +299,8 @@ def node_credential(path: Path) -> str | None:
         text=True,
         check=False,
     )
-    return result.stdout if result.returncode == 0 and result.stdout else None
+    value = result.stdout.rstrip("\r\n") if result.returncode == 0 else ""
+    return value or None
 
 
 def _sudo_status(*argv: str) -> int:

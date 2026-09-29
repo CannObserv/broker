@@ -71,7 +71,8 @@ from pathlib import Path
 import pytest
 import redis as redis_pkg
 
-from src.broker.bus_health import BROKER_CREDENTIAL
+from src.broker.bus_health import BROKER_CREDENTIAL, _unit_credential
+from tests.deploy import conftest
 from tests.deploy.conftest import (
     ACL_FILE,
     OPERATOR_CREDENTIAL,
@@ -784,3 +785,24 @@ def test_a_setuser_never_saved_is_reported_and_a_save_clears_it(tmp_path) -> Non
         assert "b" * 64 not in " ".join(unsaved), "a digest is reported by prefix only"
         broker.execute_command("ACL", "SAVE")
         assert compare("saved") == []
+
+
+def test_a_node_credential_is_read_the_way_the_probe_reads_it(monkeypatch, tmp_path) -> None:
+    """One newline rule for every reader of a node credential (CR 7 of broker#52).
+
+    ``systemd-creds encrypt`` keeps whatever it is fed, so a credential minted
+    with ``echo`` ends in a newline. The probe strips it; were the tests not to,
+    the probe would authenticate while every digest check here failed against
+    the same credential - and the runbooks hash ``$(cred ...)``, which strips it
+    too.
+    """
+    stored = "minted-value\r\n"
+    monkeypatch.setattr(
+        conftest.subprocess,
+        "run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=stored, stderr=""),
+    )
+    (tmp_path / BROKER_CREDENTIAL).write_text(stored)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    from_tests = node_credential(Path("/etc/credstore.encrypted") / BROKER_CREDENTIAL)
+    assert from_tests == _unit_credential(BROKER_CREDENTIAL) == "minted-value"
