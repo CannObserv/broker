@@ -1337,7 +1337,9 @@ def test_a_not_a_fault_row_is_still_a_denial(users) -> None:
             )
             if not holds(granted_commands(rules), command) or reaches:
                 stale.append(row)
-        elif row["object"] != "AUTH" or row["command"] != "-":
+        # redis-py authenticates through `HELLO <proto> AUTH <user> <pw>`, so its
+        # failures log `HELLO` where redis-cli's log `AUTH`.
+        elif row["object"] not in {"AUTH", "HELLO"} or row["command"] != "-":
             stale.append(row)
     assert not stale, f"these not-a-fault rows no longer describe a denial: {stale}"
 

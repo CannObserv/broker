@@ -300,6 +300,10 @@ def node_credential(path: Path) -> str | None:
     return result.stdout if result.returncode == 0 and result.stdout else None
 
 
+def _sudo_status(*argv: str) -> int:
+    return subprocess.run(["sudo", "-n", *argv], capture_output=True, check=False).returncode
+
+
 def _operator_client(url: str) -> redis_pkg.Redis | None:
     """``acladmin`` at the broker ``url`` names, or ``None`` off the node.
 
@@ -332,12 +336,27 @@ def live_client():
     # No ``importorskip``: this module imports redis at the top, so a clone
     # without it never reaches here - and redis is a hard dependency of the
     # project, not an extra.
+    #
+    # Skips only where the node's prerequisites are ABSENT. Once sudo works and
+    # the credential file exists, a credential that will not decrypt or that
+    # the broker refuses is a finding - the half-done rotation
+    # test_each_node_credential_authenticates_its_user exists for, and a skip
+    # would hide it behind the very fixture that test depends on.
+    if _sudo_status("true"):
+        pytest.skip("no passwordless sudo - not the broker node")
+    if _sudo_status("test", "-f", str(OPERATOR_CREDENTIAL)):
+        pytest.skip(f"{OPERATOR_CREDENTIAL} absent - not the broker node")
     client = _operator_client(url)
     if client is None:
-        pytest.skip(f"{OPERATOR_CREDENTIAL} not decryptable through sudo -n - not the node")
+        pytest.fail(f"{OPERATOR_CREDENTIAL} exists but does not decrypt through sudo -n")
     try:
         try:
             client.ping()
+        except redis_pkg.exceptions.AuthenticationError:
+            pytest.fail(
+                f"the broker refuses acladmin's password from {OPERATOR_CREDENTIAL} - a "
+                'rotation left half-done? docs/ACL-CUTOVER.md, "Node credentials"'
+            )
         except redis_pkg.exceptions.RedisError as e:
             pytest.skip(f"broker not answering: {e!r}")
         yield client
