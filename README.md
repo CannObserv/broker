@@ -25,7 +25,7 @@ imported by any service; the services reach the broker over the network, by URL.
 | [`docs/BUS-HEALTH.md`](docs/BUS-HEALTH.md) | What the probe watches and why: the per-stream monitoring contracts, its stream, memory, DLQ and disk checks, loss detection, and the constants it mirrors - including the one threshold read off the stream rather than mirrored, because a corpus size is not a number anyone can mirror (its `backup` and `persistence` findings are in `docs/RECOVERY.md`) |
 | [`docs/MEMORY-PROTECTION.md`](docs/MEMORY-PROTECTION.md) | The `maxmemory` cap: that all three producers survive `OOM command not allowed` without dropping or dead-lettering, which commands stay admitted at the cap, and why `noeviction` is load-bearing beyond refusing writes |
 | [`docs/UNDELIVERED-CONSUMERS.md`](docs/UNDELIVERED-CONSUMERS.md) | A consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and the positions the probe compares instead |
-| [`docs/RECOVERY.md`](docs/RECOVERY.md) | Losing the node: what is exposed, the backup's design and its grant, the rebuild runbook, the rehearsal record |
+| [`docs/RECOVERY.md`](docs/RECOVERY.md) | Losing the node: what is exposed, the backup's design and its grant, the ACL digests shipped with it (broker#72), the rebuild runbook, the rehearsal record |
 | [`docs/RESTART-WINDOW.md`](docs/RESTART-WINDOW.md) | The cohort restart window: the identities and the steps as run |
 | [`docs/INCIDENT-2026-09-10.md`](docs/INCIDENT-2026-09-10.md) | What `databases 1` did to db0, and why `BGREWRITEAOF` comes before it |
 | [`docs/ACL-CUTOVER.md`](docs/ACL-CUTOVER.md) | The per-service credential cutover around that window: the passwords, the dry run, each service onto its own user, retiring `default`, the `nopass` trap, and why `CONFIG GET requirepass` reports a value that does not authenticate (broker#46) |
@@ -83,6 +83,11 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   guarded by `tests/deploy/test_runbook_credentials.py`) and #46 (the `default`
   credential rotated). Neither is a tracked-file change; both live files are
   templated and the value is `NOT_COMPARED` in `tests/deploy/test_live_*.py`.
+- CannObserv/broker#72 - the service users' ACL digests ship with every
+  backup, 2026-09-29, so a rebuilt node re-admits each service without a new
+  password. A plaintext line fails the run, the node users are minted fresh
+  and never ship, and `restore --digests` writes the newest set. This retired
+  the password-manager copy that went stale when `observo` was minted.
 
 ## What stayed in archiver
 
