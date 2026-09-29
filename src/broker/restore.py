@@ -137,9 +137,14 @@ def write_digests(body: bytes, dest: Path, *, expected_sha256: str | None) -> No
         fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, DIGESTS_FILE_MODE)
     except FileExistsError as exc:
         raise RestoreError(f"{dest} exists; refusing to overwrite it") from exc
-    with os.fdopen(fd, "wb") as out:
-        out.write(body)
-    os.chmod(dest, DIGESTS_FILE_MODE)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(body)
+        os.chmod(dest, DIGESTS_FILE_MODE)
+    except BaseException:
+        # A partial file would refuse every retry as "exists".
+        dest.unlink(missing_ok=True)
+        raise
 
 
 def download(client: storage.Client, bucket: str, name: str, dest: Path) -> Path:

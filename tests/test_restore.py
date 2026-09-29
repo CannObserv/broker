@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import os
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -185,6 +186,21 @@ def test_write_digests_refuses_a_download_that_is_not_what_was_shipped(tmp_path)
     dest = tmp_path / "broker-acl-passwords"
     with pytest.raises(RestoreError, match="sha256"):
         write_digests(DIGESTS, dest, expected_sha256="0" * 64)
+    assert not dest.exists()
+
+
+def test_write_digests_leaves_nothing_when_the_write_fails(tmp_path, monkeypatch) -> None:
+    """A partial file would refuse every retry as "exists" - a disk full
+    mid-rebuild turned into a wedge nothing explains."""
+    dest = tmp_path / "broker-acl-passwords"
+
+    def fail(fd, mode):
+        os.close(fd)
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(restore.os, "fdopen", fail)
+    with pytest.raises(OSError):
+        write_digests(DIGESTS, dest, expected_sha256=DIGESTS_SHA)
     assert not dest.exists()
 
 
