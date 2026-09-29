@@ -16,8 +16,6 @@ docs/SKILLS.md :: | `curating-context` | curate context, context budget, trim AG
 docs/BUS-HEALTH.md :: Moved out of STREAMS.md on 2026-09-11
 docs/BUS-HEALTH.md :: The `info.changes` row's `Health primitive` cell in [STREAMS.md](STREAMS.md)
 docs/BUS-HEALTH.md :: Note the *permanently* in `content.fetch-policy`'s STREAMS.md row.
-docs/BUS-HEALTH.md :: retention trims in the [STREAMS.md](STREAMS.md) table.
-docs/BUS-HEALTH.md :: `Producer durability under OOM` column of [STREAMS.md](STREAMS.md).
 # Mentions of the probe inside the doc the probe's section now lives in.
 docs/BUS-HEALTH.md :: What the bus-health probe watches, the per-stream contracts
 docs/BUS-HEALTH.md :: (badge + journald line) and the bus-health probe
@@ -35,9 +33,7 @@ tests/deploy/test_redis_acl.py :: the inventory row is in ../docs/STREAMS.md.
 tests/deploy/test_redis_acl.py :: which is the exact hazard `docs/STREAMS.md` carves
 # The group-missing finding (CR 1) pointing at the probe's section where it now
 # lives; tests/test_bus_health.py resolves it against the heading every run.
-src/broker/bus_health.py :: stream was recreated; see docs/BUS-HEALTH.md, "The bus-health probe"
 # The probe named as a thing, not as a pointer into a doc.
-deploy/redis-acl.conf :: # The bus-health probe and the backstop DLQ drainer.
 pyproject.toml :: Operational code for the Cannabis Observer change-bus broker
 
 # --- 2026-09-11 split of docs/RESTART-WINDOW.md into + ACL-CUTOVER.md ---------
@@ -45,20 +41,16 @@ pyproject.toml :: Operational code for the Cannabis Observer change-bus broker
 # block at the top, step 1d.
 docs/ACL-CUTOVER.md :: ([RESTART-WINDOW.md](RESTART-WINDOW.md)): before it - minting the passwords
 docs/ACL-CUTOVER.md :: stay in RESTART-WINDOW.md.
-docs/ACL-CUTOVER.md :: RESTART-WINDOW.md; `$U` (`default:`) authenticates only
 docs/ACL-CUTOVER.md :: continue from Step 1 (1a to 1d) in RESTART-WINDOW.md
 docs/ACL-CUTOVER.md :: Moved out of RESTART-WINDOW.md on 2026-09-11
 docs/ACL-CUTOVER.md :: and after the restart in [RESTART-WINDOW.md](RESTART-WINDOW.md) step 1d.
 # The `nopass` trap named where it now lives, or linked to it.
-docs/ACL-CUTOVER.md :: plus the `nopass` trap the dry run exists to catch
 docs/RESTART-WINDOW.md :: `nopass` trap - are [ACL-CUTOVER.md](ACL-CUTOVER.md).
 docs/RESTART-WINDOW.md :: the `nopass` trap ([ACL-CUTOVER.md](ACL-CUTOVER.md))
 # The incident and step 1a-bis / step 1d stayed in RESTART-WINDOW.md.
 docs/RECOVERY.md :: the incident in `docs/RESTART-WINDOW.md` was
 docs/SKILLS.md :: [RESTART-WINDOW.md](RESTART-WINDOW.md), never a ship step.
 deploy/redis.conf.broker :: docs/RESTART-WINDOW.md step 1a-bis is the runbook
-tests/deploy/test_live_acl_matches_tracked_acl.py :: ``docs/RESTART-WINDOW.md`` step 1d runs
-tests/deploy/test_live_acl_matches_tracked_acl.py :: docs/RESTART-WINDOW.md step 1d runs this suite
 tests/deploy/test_redis_acl.py :: That sequence is recorded in docs/RESTART-WINDOW.md
 
 # 2026-09-18 curation. The Code Exploration Policy block did NOT move in this
@@ -80,8 +72,6 @@ docs/SOCRATICODE.md :: - `docs/STREAMS.md` claims who produces, consumes and dra
 .socraticodecontextartifacts.json :: "path": "./docs/STREAMS.md"
 .socraticodecontextartifacts.json :: "path": "./docs/RESTART-WINDOW.md"
 deploy/redis-acl.conf :: # publish selector naming only what ../docs/STREAMS.md says it produces
-deploy/redis-acl.conf :: # issue a command onto it and cannot cap it. That is ../docs/STREAMS.md's
-deploy/redis-acl.conf :: # ../docs/STREAMS.md documents for a queue nobody claimed
 tests/deploy/test_redis_acl.py :: """``stream -> the service that produces it``, read off ../docs/STREAMS.md.
 tests/deploy/test_redis_acl.py :: The sharpest case is `content.replicate`, whose row in ../docs/STREAMS.md
 tests/deploy/test_redis_acl.py :: delivered and orphans the PEL entries naming them, so ../docs/STREAMS.md
@@ -109,7 +99,6 @@ docs/INCIDENT-2026-09-10.md :: [RESTART-WINDOW.md](RESTART-WINDOW.md). Moved out
 #
 # The two new docs pointing back at the probe that runs what they describe.
 docs/MEMORY-PROTECTION.md :: `eviction-policy` finding - is [BUS-HEALTH.md](BUS-HEALTH.md).
-docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md); which stream carries which group is
 # Their provenance lines - a demotion naming where it came from.
 docs/MEMORY-PROTECTION.md :: Moved out of BUS-HEALTH.md on 2026-09-22, when it ran past the per-doc
 docs/UNDELIVERED-CONSUMERS.md :: Moved out of BUS-HEALTH.md on 2026-09-22, when it ran past the per-doc
@@ -124,7 +113,6 @@ docs/STREAMS.md :: | `info.watch-status` | Watcher → **Archiver**
 # test_the_doc_section_a_finding_points_at_exists.
 src/broker/bus_health.py :: Outbox monitoring is therefore archiver's; see `docs/BUS-HEALTH.md` for the
 src/broker/bus_health.py :: # See docs/BUS-HEALTH.md, "Mirrored constants".
-src/broker/bus_health.py :: and docs/BUS-HEALTH.md for the measured tables.
 src/broker/bus_health.py :: tail = 'See docs/BUS-HEALTH.md, "The bus-health probe"'
 tests/test_bus_health.py :: set sizes docs/BUS-HEALTH.md says it was measured at, so the claim there
 tests/test_bus_health.py :: named on each (docs/BUS-HEALTH.md, "Mirrored constants")."""
@@ -148,8 +136,8 @@ docs/DLQ-DRAINING.md :: column of [STREAMS.md](STREAMS.md), so an unowned queue 
 docs/DLQ-DRAINING.md :: column in [STREAMS.md](STREAMS.md)), and **dumps the entries
 docs/DLQ-DRAINING.md :: Four rows of [STREAMS.md](STREAMS.md) say **Never XTRIMmed**
 docs/MEMORY-PROTECTION.md :: `Producer durability under OOM` column of [STREAMS.md](STREAMS.md).
-docs/UNDELIVERED-CONSUMERS.md :: [STREAMS.md](STREAMS.md).
-deploy/redis-acl.conf :: # ../docs/STREAMS.md.
+docs/UNDELIVERED-CONSUMERS.md :: is [STREAMS.md](STREAMS.md).
+deploy/redis-acl.conf :: # row of ../docs/STREAMS.md.
 deploy/redis-acl.conf :: # ../docs/STREAMS.md's **Never XTRIMmed**, on two rows for two reasons
 deploy/redis-acl.conf :: written content-addressed and if-absent (../docs/STREAMS.md, "Non-stream keys
 deploy/redis-acl.conf :: # (../docs/STREAMS.md, "Producer durability under OOM").

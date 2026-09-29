@@ -5,8 +5,8 @@ The `group-undelivered` check: the 2026-09-16 event that asked for it, why
 instead, and what no duration can size.
 
 The probe that runs it, and every other check on this node, is
-[BUS-HEALTH.md](BUS-HEALTH.md); which stream carries which group is
-[STREAMS.md](STREAMS.md).
+[BUS-HEALTH.md](BUS-HEALTH.md); which stream carries which group
+is [STREAMS.md](STREAMS.md).
 
 Moved out of BUS-HEALTH.md on 2026-09-22, when it ran past the per-doc
 context budget. The one-line contract stayed there, in *The bus-health
