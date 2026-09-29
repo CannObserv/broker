@@ -2,8 +2,8 @@
 
 Who writes, who triages and who backstops each dead-letter queue, and the
 procedure that empties one. Split out of [STREAMS.md](STREAMS.md), whose table
-names each queue's writer; its **Never XTRIMmed** rows are the streams the
-drain below is refused on.
+names each queue's writer and drainer - the assignment this doc explains; its
+**Never XTRIMmed** rows are the streams the drain below is refused on.
 
 ## Who drains a DLQ
 
