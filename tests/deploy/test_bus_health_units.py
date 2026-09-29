@@ -97,14 +97,18 @@ def _url_carries_a_password(path: Path, name: str) -> bool | None:
         text = path.read_text()
     except FileNotFoundError:
         return None
-    values = [
-        line.split("=", 1)[1].strip().strip("\"'")
-        for line in text.splitlines()
-        if line.startswith(f"{name}=")
-    ]
-    if not values:
-        return None
-    return any(urlsplit(value).password is not None for value in values)
+    # Commented lines count: a copy "kept as the rollback" is still plaintext
+    # at rest. A comment with no password in it is prose and says nothing.
+    assignment = re.compile(rf"^\s*(?P<comment>#\s*)?(?:export\s+)?{name}\s*=\s*(?P<value>\S*)")
+    live, commented = [], []
+    for line in text.splitlines():
+        if match := assignment.match(line):
+            value = match.group("value").strip("\"'")
+            (commented if match.group("comment") else live).append(value)
+    carrying = [value for value in live + commented if urlsplit(value).password is not None]
+    if carrying:
+        return True
+    return False if live else None
 
 
 def _variables_the_probe_reads() -> set[str]:
@@ -375,4 +379,30 @@ def test_the_shared_env_carries_no_redis_password() -> None:
 def test_a_url_password_is_detected_in_any_spelling(tmp_path, url, carries) -> None:
     env = tmp_path / ".env"
     env.write_text(f"OTHER=x\nBROKER_REDIS_URL={url}\n")
+    assert _url_carries_a_password(env, "BROKER_REDIS_URL") is carries
+
+
+@pytest.mark.parametrize(
+    ("lines", "carries"),
+    [
+        (["export BROKER_REDIS_URL=redis://brokeradmin:minted@localhost:6379/0"], True),
+        (["  BROKER_REDIS_URL = redis://brokeradmin:minted@localhost:6379/0"], True),
+        (
+            [
+                "BROKER_REDIS_URL=redis://brokeradmin@localhost:6379/0",
+                "#BROKER_REDIS_URL=redis://brokeradmin:minted@localhost:6379/0",
+            ],
+            True,
+        ),
+        (["# BROKER_REDIS_URL=redis://brokeradmin@localhost:6379/0 (the old form)"], None),
+    ],
+    ids=["export", "spaced", "commented-rollback", "commented-without-password"],
+)
+def test_a_url_password_is_detected_in_any_assignment_form(tmp_path, lines, carries) -> None:
+    """A commented copy kept "as the rollback" is the shape #49 found a leaked
+    secret in; `export` is honoured by the `set -a; .` sourcing this repo uses;
+    and systemd's parser accepts whitespace around `=`. A comment carrying no
+    password is not an assignment, so it neither passes nor fails the file."""
+    env = tmp_path / ".env"
+    env.write_text("\n".join(["OTHER=x", *lines]) + "\n")
     assert _url_carries_a_password(env, "BROKER_REDIS_URL") is carries
