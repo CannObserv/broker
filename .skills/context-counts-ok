@@ -3,16 +3,10 @@
 
 # 2026-09-22 curation.
 
-# The three callers are listed in the same sentence - the probe, an operator at
-# a redis-cli, and the deploy tests - so the number is checkable by reading it.
-
 # Two `gated` entries pruned 2026-09-24: "its two DLQs, live 2026-09-22" left
 # AGENTS.md for README.md *Provenance* in that day's curation, and "absorbs one
 # missed republish and not two" went with broker#45, which closed the gap it
 # described.
-
-# 2026-09-24 curation: the five are listed on the next line of the same bullet;
-# "the other four" is those five less content.blobs, two lines below.
 
 # 2026-09-29 re-judged: the rule names all eight streams in the same sentence;
 # the four are that list less content.blobs, the processing pair and content.persist.
