@@ -207,9 +207,10 @@ The prefix defaults to the hostname. On a VM not named `co-broker`, pass
 
 It prints what it restored, then the lines a rebuild mints: `default`'s
 tombstone (one printed line), then the node credentials
-([NODE-CREDENTIALS.md](NODE-CREDENTIALS.md), "On a new or rebuilt node"). Then append `redis.conf.broker` with a freshly minted `requirepass`, and render
-and install the ACL file. After that come the drop-in and the wait script, the
-units, and then the memory protection (broker#21).
+([NODE-CREDENTIALS.md](NODE-CREDENTIALS.md), "On a new or rebuilt node").
+Then append `redis.conf.broker` with a freshly minted `requirepass`, and
+render and install the ACL file. After that come the drop-in and the wait
+script, the units, and then the memory protection (broker#21).
 
 Do not start `redis-server` yet. `appendonly yes` is now in its config, and
 started empty it would create the fresh base the trap above describes.
