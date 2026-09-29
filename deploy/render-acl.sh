@@ -30,7 +30,7 @@ PASSWORDS="${1:?usage: render-acl.sh <passwords-file>}"
 SOURCE="$(dirname "$(readlink -f "$0")")/redis-acl.conf"
 
 # What an empty value hashes to - a valid digest redis accepts, for a password
-# that is nothing. docs/ACL-CUTOVER.md, "Rotating __DEFAULT_PW__".
+# that is nothing. docs/NODE-CREDENTIALS.md, "Rotating __DEFAULT_PW__".
 EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
 rendered=$(grep -v '^\s*#' "$SOURCE" | grep -v '^\s*$')

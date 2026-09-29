@@ -37,7 +37,7 @@ from tests.deploy.conftest import (
 PLACEHOLDERS = sorted(set(re.findall(r"__[A-Z]+_PW__", ACL_FILE.read_text())))
 
 # What an empty value hashes to - a valid digest `ACL SETUSER` accepts, which
-# is why it is refused by value (docs/ACL-CUTOVER.md, "Rotating __DEFAULT_PW__").
+# is why it is refused by value (docs/NODE-CREDENTIALS.md, "Rotating __DEFAULT_PW__").
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
