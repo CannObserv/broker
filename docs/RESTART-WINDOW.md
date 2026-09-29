@@ -30,9 +30,12 @@ The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
 > # this node, decrypted by root on demand - no prompt, and no plaintext at rest
 > # (CannObserv/broker#52). It reaches redis-cli's ENVIRONMENT and never its
 > # argv - CannObserv/broker#47, and the reason no line here says `-u`.
-> cred() { sudo systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
-> rcli() { local u=$1; shift
->          REDISCLI_AUTH="$(cred "$u")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+> cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
+> # Refuses rather than connecting with an empty password: a failed decrypt would
+> # otherwise be a WRONGPASS naming the user in ACL LOG, the evidence log.
+> rcli() { local u=$1 p; shift
+>          p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
+>          REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
 > ```
 >
 > `rcli acladmin` is the operator: reads, diagnoses, sweeps a dead-letter queue,
