@@ -374,14 +374,12 @@ def test_project_digests_ships_every_service_line_sorted_and_nothing_else() -> N
     assert project_digests(PASSWORDS) == SHIPPED
 
 
-def test_node_users_are_the_ones_a_rebuild_mints() -> None:
-    """A rebuild appends fresh ``acladmin``/``brokeradmin`` lines and a new
-    ``default`` tombstone (docs/RECOVERY.md step 2). A restored file still
-    carrying the old ones would hold each twice, and render-acl.sh refuses
-    that - so they never ship. Each must be a user the tracked file declares, or
-    this list has drifted from the ACL it filters."""
+def test_every_node_user_is_declared_by_the_tracked_acl() -> None:
+    """A rebuild appends fresh node lines (docs/RECOVERY.md step 2), so these
+    never ship. A name the tracked file does not declare filters nothing. Which
+    users they are is pinned against the node credentials, in
+    ``test_the_backup_withholds_exactly_the_users_a_rebuild_mints``."""
     declared = set(re.findall(r"^user (\S+) ", TRACKED_ACL.read_text(), flags=re.M))
-    assert set(NODE_USERS) == {"acladmin", "brokeradmin", "default"}
     assert set(NODE_USERS) <= declared
 
 
