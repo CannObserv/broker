@@ -162,8 +162,9 @@ sudo ls -la /var/lib/redis        # a default-config dump.rdb is fine; no append
 ### 2. The repo, the config, the secrets
 
 Everything in `deploy/README.md`'s *Install* section, in order: restore the
-secrets at the paths and modes above, mint the two node credentials and their
-digest lines (ACL-CUTOVER.md, *Node credentials*), append `redis.conf.broker`
+secrets at the paths and modes above, mint the two node credentials and append
+their digest lines (ACL-CUTOVER.md, *Node credentials*, "On a new or rebuilt
+node" - after the passwords file is in place, since its `install` truncates), append `redis.conf.broker`
 with a freshly minted `requirepass`, render and install the ACL file, the
 drop-in and the wait script, the units, then the memory protection (broker#21).
 Then:

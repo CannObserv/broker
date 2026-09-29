@@ -385,11 +385,25 @@ counts two against one - and after 4 it holds all three places to each other:
 `test_each_node_credential_authenticates_its_user` and
 `test_the_nodes_passwords_file_renders_the_credentials_that_are_live`.
 
-**On a new or rebuilt node, mint rather than restore.** Steps 2 and 3 alone,
-with the digest line added rather than replaced, before the first render. No
-copy of either password exists off the node, and none needs to: nothing off the
-node authenticates as either user, and a rebuilt node has a new host key that
-could not decrypt the old credential anyway (RECOVERY.md).
+**On a new or rebuilt node, mint rather than restore.** No copy of either
+password exists off the node, and none needs to: nothing off the node
+authenticates as either user, and a rebuilt node has a new host key that could
+not decrypt the old credential anyway (RECOVERY.md). Run this **after** step 1's
+`install` of the passwords file, which truncates it, and before the first render:
+
+```bash
+set -euo pipefail
+mint() { (set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40); }
+sudo install -d -m 0700 -o root -g root /etc/credstore.encrypted
+for u in acladmin brokeradmin; do
+    NEW="$(mint)"; [ "${#NEW}" -eq 40 ] || { echo "minted ${#NEW} chars, want 40"; exit 1; }
+    printf %s "$NEW" | sudo systemd-creds encrypt --name="broker-$u" - "/etc/credstore.encrypted/broker-$u"
+    sudo chmod 0400 "/etc/credstore.encrypted/broker-$u"
+    echo "__${u^^}_PW_SHA256__=$(printf %s "$NEW" | sha256sum | cut -d' ' -f1)" \
+        | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
+    unset NEW
+done
+```
 
 ### `requirepass` belongs to no user
 
