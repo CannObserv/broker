@@ -24,15 +24,12 @@ docs/BUS-HEALTH.md :: (badge + journald line) and the bus-health probe
 # Non-stream keys stayed in STREAMS.md.
 docs/RECOVERY.md :: [STREAMS.md](STREAMS.md), *Non-stream keys on `db0`*.
 # Source pointing at STREAMS.md content that stayed: the inventory rows, the
-# content.replicate no-trim carve-out, non-stream keys, Who drains a DLQ.
+# content.replicate no-trim carve-out, non-stream keys. (Who drains a DLQ left for
+# DLQ-DRAINING.md on 2026-09-29; its four source pointers were repointed, not acked.)
 deploy/redis-acl.conf :: hazard ../docs/STREAMS.md carves that stream out of the trim set for.
 deploy/redis-acl.conf :: inventoried in ../docs/STREAMS.md,
 deploy/redis.conf.broker :: # ../docs/STREAMS.md grows.
-src/broker/bus_health.py :: ``docs/STREAMS.md`` orders the drain
-src/broker/bus_health.py :: # docs/STREAMS.md, "Who drains a DLQ", and mirrored here
 src/broker/bus_health.py :: mirroring the ``docs/STREAMS.md`` inventory.
-src/broker/bus_health.py :: resting state is 0; see docs/STREAMS.md, "Who drains a DLQ"
-src/broker/bus_health.py :: these payloads are gone. See docs/STREAMS.md, "Who drains a DLQ"
 tests/deploy/test_live_broker_matches_tracked_config.py :: eviction candidate set; see docs/STREAMS.md,
 tests/deploy/test_redis_acl.py :: the inventory row is in ../docs/STREAMS.md.
 tests/deploy/test_redis_acl.py :: which is the exact hazard `docs/STREAMS.md` carves

@@ -2965,6 +2965,17 @@ _DOC_POINTER = re.compile(r'docs/(?P<doc>[A-Z][A-Z-]*\.md), "(?P<title>[^"]+)"')
 _DOCS = Path(__file__).resolve().parent.parent / "docs"
 
 
+def _section_body(doc: Path, title: str) -> str:
+    """The first prose under the heading starting ``title``, blank lines skipped."""
+    lines = doc.read_text().splitlines()
+    start = next(
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("#") and line.lstrip("#").strip().replace("`", "").startswith(title)
+    )
+    return next((line for line in lines[start + 1 :] if line.strip()), "")
+
+
 def _headings(doc: Path) -> list[str]:
     """Markdown headings, backticks dropped, skipping fenced code - whose `#`
     lines are shell comments, and one could otherwise stand in for a heading."""
@@ -3027,4 +3038,11 @@ async def test_the_doc_section_a_finding_points_at_exists(fake_redis, check) -> 
         assert path.is_file(), f"{check} points at docs/{doc}, which does not exist"
         assert any(h.startswith(title) for h in _headings(path)), (
             f"{check} points at docs/{doc}, {title!r} - no heading there starts that way"
+        )
+        # A split leaves a stub heading behind so inbound links resolve, which
+        # satisfied the check above while the operator landed on a redirect:
+        # the 2026-09-29 split of STREAMS.md did exactly that to the DLQ findings.
+        assert not _section_body(path, title).startswith("Moved to"), (
+            f"{check} points at docs/{doc}, {title!r}, which is a moved-section stub - "
+            "point it at where the section went"
         )

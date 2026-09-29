@@ -80,7 +80,7 @@ the payloads to tell residue from a real permanent failure, and the ``XTRIM``
 that follows, needs a model of the messages this repo deliberately does not
 have; that half belongs to the stream's own consumer, per ``DLQ_DRAINERS``.
 
-Evidence capture is the load-bearing half. ``docs/STREAMS.md`` orders the drain
+Evidence capture is the load-bearing half. ``docs/DLQ-DRAINING.md`` orders the drain
 audit, back up, trim, verify - reversing it destroys what the trim needed
 justifying with - and the back-up is the step an operator under time pressure
 skips. Doing it on the tick that first sees the depth means the evidence exists
@@ -342,7 +342,8 @@ PERSIST_GROUP = group_name(CONTENT_PERSIST, "replicator")
 # The *key* is derived through co-core's ``dlq_name``, the same helper the
 # writers use, so this cannot name a queue nothing writes. The *value* is an
 # assignment and cannot be derived from anything - it is recorded in
-# docs/STREAMS.md, "Who drains a DLQ", and mirrored here so the finding an
+# docs/STREAMS.md's `DLQ (writer / drainer)` column, the rule behind it in
+# docs/DLQ-DRAINING.md, and mirrored here so the finding an
 # operator actually reads carries the addressee.
 #
 # The rule behind the values: the drainer is the stream's consumer, because it
@@ -2071,7 +2072,7 @@ async def _collect_dlqs(
             parts = [f"depth {depth} - {owner}"]
             if evidence_dir is not None:
                 parts.append(await _capture_dlq_evidence(client, topic, evidence_dir))
-            parts.append('resting state is 0; see docs/STREAMS.md, "Who drains a DLQ"')
+            parts.append('resting state is 0; see docs/DLQ-DRAINING.md, "Who drains a DLQ"')
             findings.append(Finding(check="dlq", subject=topic, message="; ".join(parts)))
 
         try:
@@ -2185,7 +2186,7 @@ def _evaluate_dlq_continuity(
                 f"at least {unobserved} entries were added and removed between ticks with no "
                 f"evidence captured - entries-added {before} -> {added} against depth {depth} "
                 f"({owner}); capture only runs on a tick that sees a non-resting queue, so "
-                f'these payloads are gone. See docs/STREAMS.md, "Who drains a DLQ"'
+                f'these payloads are gone. See docs/DLQ-DRAINING.md, "Who drains a DLQ"'
             ),
         )
     ]
