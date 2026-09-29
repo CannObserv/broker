@@ -2229,6 +2229,18 @@ def test_main_outside_the_unit_leaves_the_url_to_authenticate(stub_main_deps, mo
     assert stub_main_deps.from_url.call_args.kwargs.get("password") is None
 
 
+def test_an_empty_credential_passes_no_password(stub_main_deps, monkeypatch, tmp_path) -> None:
+    """An empty credential file is no credential. Passed on, it would send
+    ``AUTH brokeradmin ""`` every tick - a denial in ``ACL LOG`` naming the probe
+    every ten minutes, in the log operators read as evidence."""
+    (tmp_path / bus_health.BROKER_CREDENTIAL).write_text("\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+
+    assert bus_health.main(["--state-file", str(stub_main_deps.state_file)]) == 0
+
+    assert stub_main_deps.from_url.call_args.kwargs.get("password") is None
+
+
 def test_main_without_a_broker_url_reports_and_exits_clean(stub_main_deps, monkeypatch) -> None:
     """The one contract that inverts on the move. In archiver an unset URL meant
     *dormancy* - a legitimate, INFO-level configuration. Here the unit exists

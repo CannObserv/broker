@@ -2416,19 +2416,25 @@ def _unit_credential(name: str) -> str | None:
     """A credential systemd decrypted for this unit, or ``None`` outside one.
 
     ``None`` passes no password, and redis-py then takes the URL's own - so a
-    run by hand with a full URL still works, and a unit whose credential is
-    missing fails at AUTH, which the collector reports as the unreachable
-    finding. A URL that carries a password wins over this one (redis-py's
-    ``from_url`` lets the URL override its keyword arguments), which is why the
-    node's ``BROKER_REDIS_URL`` must carry none: tests/deploy/test_bus_health_units.py.
+    run by hand with a full URL still works. Inside the unit a missing
+    credential never gets this far: ``LoadCredentialEncrypted=`` on an absent
+    file stops systemd starting the unit at all (exit 243, CREDENTIALS), so no
+    tick runs, no finding is logged, and what notices is the co-status
+    check-in going quiet. An empty one is treated as absent rather than sent as
+    ``AUTH brokeradmin ""``, which would log a denial every tick.
+
+    A URL that carries a password wins over this one (redis-py's ``from_url``
+    lets the URL override its keyword arguments), which is why the node's
+    ``BROKER_REDIS_URL`` must carry none: tests/deploy/test_bus_health_units.py.
     """
     directory = os.environ.get("CREDENTIALS_DIRECTORY")
     if not directory:
         return None
     try:
-        return (Path(directory) / name).read_text().rstrip("\r\n")
+        value = (Path(directory) / name).read_text().rstrip("\r\n")
     except FileNotFoundError:
         return None
+    return value or None
 
 
 def main(argv: list[str] | None = None) -> int:
