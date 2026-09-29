@@ -201,6 +201,10 @@ sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
   /home/exedev/broker/.venv/bin/python -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
 ```
 
+The prefix defaults to the hostname. On a VM not named `co-broker`, pass
+`--prefix co-broker` here and in step 3, and set `BROKER_BACKUP_PREFIX` in
+`backup.env` so later backups continue the same history.
+
 It prints what it restored, then the lines a rebuild mints: `default`'s
 tombstone (one printed line), then the node credentials
 ([NODE-CREDENTIALS.md](NODE-CREDENTIALS.md), "On a new or rebuilt node"). Then append `redis.conf.broker` with a freshly minted `requirepass`, and render
