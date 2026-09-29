@@ -138,7 +138,8 @@ docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md) read out of the 
 # --- 2026-09-29 split of docs/STREAMS.md into STREAMS.md + DLQ-DRAINING.md ----
 # Each points at what stayed in STREAMS.md: the table, its columns and rows,
 # and *Non-stream keys on `db0`* - none at the DLQ section that moved.
-docs/BUS-HEALTH.md :: and who writes its DLQ is [STREAMS.md](STREAMS.md)
+docs/BUS-HEALTH.md :: and who drains its DLQ is [STREAMS.md](STREAMS.md)
+docs/BUS-HEALTH.md :: the `DLQ (writer / drainer)` column of [STREAMS.md](STREAMS.md), the rule in
 docs/BUS-HEALTH.md :: retention. [STREAMS.md](STREAMS.md) marks each row
 docs/BUS-HEALTH.md :: `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table;
 docs/DLQ-DRAINING.md :: procedure that empties one. Split out of [STREAMS.md](STREAMS.md), whose table
