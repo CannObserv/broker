@@ -110,7 +110,7 @@ stream that is not carved out.
 
 **It costs no grant, no round trip, and joins nothing.** `XINFO STREAM`,
 `XINFO GROUPS` and `XRANGE` are all read-only introspection `brokeradmin`
-already held, so the check shipped without touching `deploy/redis-acl.conf`;
+already held - and, since CannObserv/broker#52, about all it holds - so the check shipped without touching `deploy/redis-acl.conf`;
 since CannObserv/broker#29 that `XINFO GROUPS` is the one the pending count
 comes from; `test_the_probe_can_read_a_groups_position_without_joining_it`
 asserts both halves - that the reads are permitted, and that `XREADGROUP` and

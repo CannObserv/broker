@@ -7,10 +7,10 @@ which is precisely how the cap is meant to be applied without a restart
 it can drift the running broker from the tracked file in either direction and no
 comparison of files can tell.
 
-Reading the values back through ``CONFIG GET`` catches both directions at once,
-and it needs no privilege: the probe's own ``BROKER_REDIS_URL`` is enough, where
-reading ``/etc/redis/redis.conf`` would need root or a group membership that
-widens who can see the credential.
+Reading the values back through ``CONFIG GET`` catches both directions at once.
+It runs as ``acladmin``, the one user holding ``+config|get`` since
+CannObserv/broker#52 - the probe held it for this test until then, and with it
+``CONFIG GET requirepass`` (broker#50).
 
 One assertion here is about the live *keyspace* rather than the live config
 (``test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance``): it sits
@@ -20,10 +20,10 @@ cannot see this" argument, and because what it pins is the premise of
 ``docs/MEMORY-PROTECTION.md``, "``noeviction`` is load-bearing beyond refusing
 writes".
 
-Skips unless ``BROKER_REDIS_URL`` is set and the broker answers, so CI and dev
-clones pass. On the broker node, source the env first - and as
-``set -a; . /etc/broker/.env; set +a``, never ``export $(cat ... | xargs)``,
-which silently corrupts values.
+Skips off the node - without ``BROKER_REDIS_URL``, passwordless sudo, or the
+operator's credential - so CI and dev clones pass. On the broker node, source
+the env first - and as ``set -a; . /etc/broker/.env; set +a``, never
+``export $(cat ... | xargs)``, which silently corrupts values.
 """
 
 import re
@@ -45,11 +45,11 @@ from tests.deploy.test_installed_redis_config_matches_repo import (
 # correct.
 SIZE_VALUED = {"maxmemory"}
 
-# The secret, which the tracked copy templates on purpose. Asserting the live
-# broker HAS a password is worth doing; asserting WHICH one belongs nowhere a
-# test failure could print it. This exclusion is also what makes a rotation of
-# `default` test-neutral by construction (CannObserv/broker#46), alongside the
-# same name in ``test_live_acl_matches_tracked_acl.py``.
+# The value, which the tracked copy templates on purpose. Asserting the live
+# broker HAS one is worth doing; asserting WHICH one belongs nowhere a test
+# failure could print it. Since CannObserv/broker#52 it is nobody's password -
+# ``test_requirepass_is_nobodys_password`` in
+# ``test_live_acl_matches_tracked_acl.py`` holds it to that, by digest.
 NOT_COMPARED = {"requirepass"}
 
 
@@ -87,9 +87,10 @@ def test_the_live_broker_requires_a_password(live_config) -> None:
     ``user default on >fromaclfile`` answers ``PONG`` to the aclfile's value and
     ``WRONGPASS`` to the config file's - while ``CONFIG GET requirepass`` still
     reports ``fromredisconf``. It reports a value that does not authenticate,
-    and after a rotation it reports the *retired* one until the next restart,
-    because the rotation writes the file and never ``CONFIG SET`` (which
-    replaces ``default``'s password instead of the directive).
+    and since CannObserv/broker#52 a value that is nobody's password at all.
+    After the value in redis.conf changes it reports the old one until the next
+    restart, because that change writes the file and never ``CONFIG SET``
+    (which replaces ``default``'s password instead of the directive).
 
     So what this pins is the **last-resort recovery path** - restart with the
     ``aclfile`` line commented out, where ``requirepass`` does govern - and

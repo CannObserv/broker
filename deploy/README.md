@@ -5,12 +5,12 @@ the health probe's, two are the backup's, and five protect the node's memory.
 
 | File | Installs as | Purpose |
 |---|---|---|
-| `redis.conf.broker` | appended to `/etc/redis/redis.conf` | The tuning: bind, `requirepass`, AOF `everysec`, `maxmemory-policy noeviction`, explicit `maxmemory`. `__REQUIREPASS__` is substituted at install time from `/etc/redis/broker-password` |
+| `redis.conf.broker` | appended to `/etc/redis/redis.conf` | The tuning: bind, `requirepass`, AOF `everysec`, `maxmemory-policy noeviction`, explicit `maxmemory`. `__REQUIREPASS__` is substituted at install time with a value minted there and kept nowhere - nobody's password since broker#52 |
 | `redis-server.service.d/broker.conf` | `/etc/systemd/system/redis-server.service.d/broker.conf` | Unit **ordering only**: `After=tailscaled.service`, widened restart limits, and the `ExecStartPre=+` wait |
 | `wait-for-tailnet-addr.sh` | `/usr/local/sbin/` | R1's boot-race insurance. Probes `/proc/net/fib_trie`, never `ip addr` |
 | `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory and eviction policy, per-stream length, last-entry age, per-group pending count and undelivered age, DLQ depth + evidence capture + `entries-added` continuity, disk, persistence status, backup freshness. Never blocks anything |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
-| `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day. Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
+| `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day, and `default` made a tombstone on 2026-09-29 (broker#52). Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
 | `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
 | `sysctl.d/60-broker-memory.conf` | `/etc/sysctl.d/` | `vm.min_free_kbytes` 64 MiB: the reserve atomic allocations draw on (broker#21) |
@@ -61,10 +61,14 @@ by reading it:
 ## Installing the ACL users
 
 ```bash
-# passwords file, 0400 root:root, one line per placeholder:
-#   __ACLADMIN_PW__=<plaintext>           a credential this node uses
+# passwords file, 0400 root:root, one line per placeholder, every one a digest
+# since broker#52 - nothing on this node holds a Redis password in plaintext:
 #   __ARCHIVER_PW_SHA256__=<64-hex>       one only its service holds (broker#49)
-# every user renders as #<sha256>; the output carries no plaintext
+#   __ACLADMIN_PW_SHA256__=<64-hex>       one this node authenticates as, from
+#                                         /etc/credstore.encrypted/broker-acladmin
+# `__X_PW__=<plaintext>` still renders - for the interval a new service's
+# password waits to be handed off - and the live suite fails while one exists.
+# Every user renders as #<sha256>; the output carries no plaintext.
 sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
     | sudo install -m 0640 -o root -g redis /dev/stdin /etc/redis/users.acl
 # then, in the restart window, add `aclfile /etc/redis/users.acl` to redis.conf
@@ -80,10 +84,11 @@ side effect of turning on the mechanism meant to prevent it. And setting it
 that restart lands before any of them has moved onto its own credential. So on
 this cluster the file went in reading `on` with the then-current password,
 retiring it was the last step rather than the first, and **the tracked file now
-says `off`** - still carrying its password, because `off` is a flag that leaves
-the password set intact and the rollback `ACL SETUSER default on` would
-otherwise enable a `nopass` user with `+@all`. A new cluster repeats the order:
-`on` for the first load, migrate, `off` live.
+says `off`** - and since broker#52 grants nothing, behind the digest of a value
+nobody kept. It still carries a password, because `off` is a flag that leaves
+the password set intact, and a line with none would be `nopass` the moment
+anything flipped it `on`. A new cluster repeats the order: `on` with the shared
+grants for the first load, migrate, then the tombstone live.
 
 1. **In the window** - install `/etc/redis/users.acl`, add `aclfile` to
    `redis.conf` (and `databases 1` only after a `BGREWRITEAOF` - see the
@@ -93,13 +98,15 @@ otherwise enable a `nopass` user with `+@all`. A new cluster repeats the order:
    `redis-cli` is refused.
 2. **Rolling, no window** - flip each service's URL to its own credential, one
    at a time, verifying each before the next.
-3. **Rolling** - flip the probe's `BROKER_REDIS_URL` to `brokeradmin`.
+3. **Rolling** - flip the probe's `BROKER_REDIS_URL` to `brokeradmin` (the
+   user alone; the password is the unit's encrypted credential since
+   broker#52).
 4. **Live** - `ACL SETUSER default off` then `ACL SAVE`, run as **`acladmin`**,
-   the break-glass user that exists because `+acl` would otherwise belong to
+   the operator user that exists because `+acl` would otherwise belong to
    nobody once `default` is off, freezing every grant on the broker
-   permanently. Done 2026-09-10. Reversing it, widening any grant afterwards,
-   and re-opening `default` for a restart window are all done the same way.
-   See `docs/ACL-CUTOVER.md` step 4.
+   permanently. Done 2026-09-10; `default` became a tombstone, and the
+   window's commands `acladmin`'s, on 2026-09-29 (broker#52). Widening any
+   grant afterwards is done the same way. See `docs/ACL-CUTOVER.md` step 4.
 
 Steps 2 to 4 are reversible and need no restart, which is the point of putting
 the irreversible-feeling step last. And all three participants classify `NOPERM`
@@ -114,11 +121,13 @@ cohort-wide restart is an ACL nobody will dare tighten, which is the whole
 reason the grants are in a separate `aclfile` rather than in `redis.conf`:
 
 ```bash
-pw()   { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
-# $1 is the ACL user. The password reaches redis-cli's ENVIRONMENT and never its
+# $1 is the ACL user - acladmin, or the probe's brokeradmin. Each password is a
+# systemd-creds credential encrypted to this node, decrypted by root on demand
+# with no prompt (broker#52). It reaches redis-cli's ENVIRONMENT and never its
 # argv - CannObserv/broker#47, and the reason no line here says `-u`.
+cred() { sudo systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
 rcli() { local u=$1; shift
-         REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+         REDISCLI_AUTH="$(cred "$u")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
 
 rcli acladmin ACL SETUSER <user> <rule>   # applies now
 rcli acladmin ACL SAVE                    # -> /etc/redis/users.acl
@@ -164,7 +173,7 @@ filename. For a user `/etc/redis/broker-acl-passwords` holds by digest
 ```bash
 rcli acladmin ACL SETUSER <user> "#<new-sha256>" "!<old-sha256>"   # rotate, no plaintext
 rcli acladmin ACL SAVE
-rcli brokeradmin ACL GETUSER <user>        # -> exactly one hash, and it is the new one
+rcli acladmin ACL GETUSER <user>           # -> exactly one hash, and it is the new one
 ```
 
 `>newsecret <oldsecret` is the plaintext spelling of the same pair. It is the
@@ -184,10 +193,11 @@ sudo grep -c '^__<USER>_PW_SHA256__=<new-sha256>$' \
     /etc/redis/broker-acl-passwords      # -> 1; sed says nothing when no line matched
 ```
 
-Not for an **operator** user - `acladmin`, `brokeradmin`, `default`. Those keep a
-plaintext line, because `pw` reads it to authenticate, and a digest there locks
-`rcli` out of the user just rotated. Their line is replaced through a pipe, as
-[docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md), *Rotating `__DEFAULT_PW__`*, does.
+The two **node** users - `acladmin`, `brokeradmin` - have a digest line too
+since broker#52, and one more place their password lives: the encrypted
+credential `rcli` and the probe authenticate from. Rotating one is three writes,
+[docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md), *Node credentials*. `default`'s
+line is the digest of a value nobody kept, and there is nothing to rotate.
 
 `test_the_nodes_passwords_file_renders_the_credentials_that_are_live` renders
 the node's file under `sudo -n` and compares every user's digest with
@@ -196,7 +206,8 @@ rebuild (CannObserv/broker#49). The four service users - `archiver`, `watcher`,
 `replicator`, `citest` - are held by digest alone since 2026-09-23; nothing on
 this node needs their plaintext. `observo` joined them on 2026-09-24, once
 Observo held its credential (CannObserv/broker#62) - the handoff order is in
-[docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md), step 1.
+[docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md), step 1 - and the three operator
+lines on 2026-09-29 (broker#52).
 
 **The third line is the one that gets skipped.** Until broker#11 nothing
 checked it, and it rested on someone remembering four times: eleven corrections
@@ -216,16 +227,15 @@ nothing `ACL SAVE` writes is a credential - loads it into a second throwaway
 server, and compares every tracked user's rules *and* digests with the live
 ACL (CannObserv/broker#54).
 
-It costs `brokeradmin` the read-only `+acl|getuser`. Two limits, both
-deliberate and both recorded on the grant itself:
+It runs as `acladmin` since broker#52, the operator's credential decrypted
+through `sudo -n`; until then it cost the probe's `brokeradmin` a
+`+acl|getuser` that put every digest behind a credential readable without sudo.
+One limit, deliberate:
 
-- **It cannot enumerate.** `+acl|getuser` permits `ACL GETUSER` alone -
-  `ACL USERS`, `ACL LIST`, `ACL WHOAMI` and `ACL CAT` are each denied
-  separately - so a user the tracked file never declared is invisible to a
-  per-name lookup. An untracked identity that is actually *in use* is still
-  caught, by the `user=` field in `CLIENT LIST`, and one that was *saved* by
-  the saved file, which lists every user it holds. An idle, unsaved one goes
-  unseen, and the next restart drops it.
+- **It enumerates now**, which the probe's grant never could: `ACL USERS`
+  catches a user the tracked file never declared, idle or not. `CLIENT LIST`'s
+  `user=` and the saved file each still catch what they did - who is connected,
+  and what a restart would load.
 - **It cannot see a grant that is wrong in both places.** Both real ACL bugs
   in this epic were exactly that. Where a grant has a derivable source, prefer
   a test over the source - `test_replicator_can_name_every_dedupe_namespace`
@@ -252,8 +262,18 @@ keeps it that way.
 
 ```bash
 # Redis tuning (first install only; the block is delimited in redis.conf)
-sudo sed "s/__REQUIREPASS__/$(sudo cat /etc/redis/broker-password)/" \
-    deploy/redis.conf.broker | sudo tee -a /etc/redis/redis.conf >/dev/null
+# `requirepass` is minted here and kept nowhere else: it is nobody's password
+# (broker#52; the aclfile's `default` line overrides it), and its only job is
+# the last-resort restart with `aclfile` commented out. Minted inside the root
+# shell, so the value is only ever a shell variable and awk's environment -
+# never an argv, including sudo's.
+sudo sh -c 'R=$(LC_ALL=C tr -dc "A-Za-z0-9" < /dev/urandom | head -c 40); export R
+    awk "/^requirepass / { sub(/__REQUIREPASS__/, ENVIRON[\"R\"]) } 1" deploy/redis.conf.broker >> /etc/redis/redis.conf'
+sudo grep -c '^requirepass [A-Za-z0-9]\{40\}$' /etc/redis/redis.conf   # -> 1
+
+# The two node credentials, minted into systemd's store, and their digest lines
+# in the passwords file - before the ACL render: docs/ACL-CUTOVER.md,
+# "Node credentials". /etc/broker/.env's BROKER_REDIS_URL names the user alone.
 
 # Unit ordering + the boot-race wait
 sudo install -m 0755 deploy/wait-for-tailnet-addr.sh /usr/local/sbin/
@@ -402,21 +422,19 @@ Prefer applying it live - no restart, no dropped client connections - then
 persist it in both places:
 
 ```bash
-# `pw` and `rcli` as defined under "Changing a grant" above.
-rcli default CONFIG SET maxmemory <value>   # applies now; window-only, see below
+# `cred` and `rcli` as defined under "Changing a grant" above.
+rcli acladmin CONFIG SET maxmemory <value>  # applies now
 sudo sed -i 's/^maxmemory .*/maxmemory <value>/' /etc/redis/redis.conf
 sed -i 's/^maxmemory .*/maxmemory <value>/' deploy/redis.conf.broker
 ```
 
-**`CONFIG SET` is `default`'s, not `brokeradmin`'s.** This line handed the probe's
-own `BROKER_REDIS_URL` straight to `redis-cli` until CannObserv/broker#47 swept
-the credential out of `argv`, and that URL is `brokeradmin`, which holds
-`+config|get` and nothing else - so it has been a `NOPERM` since the 2026-09-10
-cutover and nothing said so. Raising the cap therefore opens a window:
-`ACL SETUSER default on` as `acladmin`, the `CONFIG SET`, then `off` again -
-[`../docs/ACL-CUTOVER.md`](../docs/ACL-CUTOVER.md) step 4, both directions. The
-restart the section's first sentence saves is still saved; only the identity
-was wrong.
+**`CONFIG SET` is `acladmin`'s, and only since broker#52.** This line handed the
+probe's own `BROKER_REDIS_URL` straight to `redis-cli` until CannObserv/broker#47
+swept the credential out of `argv`, and that URL is `brokeradmin`, which never
+held `CONFIG SET` - so it was a `NOPERM` from the 2026-09-10 cutover and nothing
+said so. Until #52 raising the cap then meant `ACL SETUSER default on`, the
+`CONFIG SET`, and `off` again; the operator holds the command by name now, and
+`default` holds nothing.
 
 Pass the value **exactly as the config file spells it** - `CONFIG SET` accepts
 the same unit suffixes, so there is no byte conversion to get wrong.
@@ -483,7 +501,11 @@ rewrite time, which `maxmemory` also caps.
 `/etc/broker/.env` (`root:exedev`, `0640`) carries:
 
 - `BROKER_REDIS_URL` - what the probe connects to:
-  `redis://brokeradmin:<password>@localhost:6379/0`. The username is
+  `redis://brokeradmin@localhost:6379/0`, **the user alone**. The password is
+  the unit's `LoadCredentialEncrypted=` credential (broker#52), and a password
+  put back here would override it - redis-py lets the URL win - and be readable
+  by the account again; `tests/deploy/test_bus_health_units.py` reads this file
+  for one, verdict only. The username is
   load-bearing twice over: the empty-username form means `default`, which is
   disabled since 2026-09-10, and even while it worked it **failed** for
   `redis-cli`, which sends a two-argument `AUTH "" <password>`, so every shell
@@ -662,10 +684,11 @@ re-arms capture rather than leaving a gap. See
 The **disposal** step is `XDEL <queue> <id>`, per entry, and since broker#12
 each named drainer can do it for its own queues without an operator - a
 selector, `(+xdel ~<its own>.dlq)`, which cannot reach the stream the queue
-copies from. `brokeradmin` holds `(+xdel +xtrim ~*.dlq)` as the backstop for a
-queue nobody claimed - `+xtrim` joined that selector in broker#14, having been a
-root grant riding `~*`, where the one identity that can see every stream on the
-instance could also cap any of them. Before that the only tool was `XTRIM MAXLEN 0`, which empties
+copies from. The operator's `acladmin` holds `(+xdel +xtrim ~*.dlq)` as the
+backstop for a queue nobody claimed - `brokeradmin`'s until broker#52, which left
+the probe unable to delete anything. `+xtrim` joined that selector in broker#14,
+having been a root grant riding `~*`, where the one identity that can see every
+stream on the instance could also cap any of them. Before that the only tool was `XTRIM MAXLEN 0`, which empties
 the queue: on one that has reached 110 entries, removing a single triaged frame
 took the other 109 with it.
 

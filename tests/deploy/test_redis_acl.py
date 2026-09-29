@@ -982,6 +982,25 @@ def test_default_is_declared_disabled_and_still_carries_a_password(users) -> Non
     assert "nopass" not in rules
 
 
+def test_default_is_a_tombstone_that_grants_nothing(users) -> None:
+    """`default` is declared because it must be, and holds nothing (CannObserv/broker#52).
+
+    Until #52 it was the window identity, `~* &* +@all` behind a password kept
+    in three plaintext copies - and `+acl` on `acladmin` already reached
+    everything it could, so there were two superuser keys to one door. The
+    window's commands moved to `acladmin`; `default`'s password became the
+    digest of a value nobody kept; and its line grants no command, key or
+    channel, so a flip to `on` - by accident, or by the rollback reflex this
+    line used to invite - admits a user who can do nothing.
+    """
+    root, selectors = split_rules(users["default"])
+    assert not selectors, f"default carries a selector: {selectors}"
+    assert "-@all" in root, "default must deny every command explicitly"
+    granted = sorted(rule for rule in root if rule.startswith(("+", "~", "%", "&")))
+    assert not granted, f"default is a tombstone and grants {granted}"
+    assert not {"allkeys", "allcommands", "allchannels"} & set(root)
+
+
 def test_a_grant_can_still_be_widened_after_default_is_disabled(users) -> None:
     """The recovery story the whole cutover rests on has to survive step 4.
 
@@ -1014,53 +1033,55 @@ def test_the_nodes_diagnostics_survive_disabling_default(users) -> None:
     ``idle`` does not update on an empty read, and ``consumers=0`` on a stream
     that has never carried a message means nothing at all.
 
-    No service user holds either, and none should: connection shape and denial
-    history are the node's business, not a participant's.
+    They are the OPERATOR'S, which since CannObserv/broker#52 is `acladmin`
+    (`+acl` carries `ACL LOG`). The probe issues neither, and no service user
+    holds either: connection shape and denial history are the node's business,
+    not a participant's.
     """
-    assert "+client|list" in users["brokeradmin"]
-    assert "+acl|log" in users["brokeradmin"]
-    for user in SERVICE_USERS:
+    assert "+client|list" in users["acladmin"]
+    assert "+acl" in users["acladmin"]
+    for user in (*SERVICE_USERS, "brokeradmin"):
         assert "+client|list" not in users[user]
-        assert "+acl|log" not in users[user]
+        assert not {"+acl", "+acl|log"} & set(users[user])
 
 
-def test_only_the_probe_can_read_an_acl(users) -> None:
-    """`+acl|getuser` is the mirror test's grant, and it is also a credential read.
+def test_only_the_operator_can_read_an_acl(users) -> None:
+    """`ACL GETUSER` is the mirror test's read, and it is also a credential read.
 
-    `ACL GETUSER` returns the target user's password *hash* - unsalted sha256 -
-    for every user on the instance, so it belongs only to the one identity that
-    already reads every key and every stream. A service user acquiring it reads
-    the whole cohort's credential material.
-
-    Asserted here rather than only live, because
-    `tests/deploy/test_live_acl_matches_tracked_acl.py` skips without
-    `BROKER_REDIS_URL` - so without this, CI protects neither half of the grant
-    that makes that test possible.
+    It returns the target user's password *hash* - unsalted sha256 - for every
+    user on the instance. Until CannObserv/broker#52 the probe held
+    `+acl|getuser` for the mirror test, which put every digest behind the one
+    credential `exedev` could read without sudo. The test now runs as
+    `acladmin`, whose `+acl` reads and changes the ACL anyway, so no other user
+    holds any part of it.
     """
-    assert "+acl|getuser" in users["brokeradmin"], (
-        "the mirror test needs it: tests/deploy/test_live_acl_matches_tracked_acl.py"
-    )
+    assert "+acl" in users["acladmin"]
     for name, rules in users.items():
-        if name in {"brokeradmin", "acladmin", "default"}:
+        if name == "acladmin":
             continue
-        assert "+acl|getuser" not in rules, f"{name} can read every user's password hash"
+        held = {rule for rule in granted_commands(rules) if rule.startswith("+acl")}
+        assert not held, f"{name} can read the ACL: {sorted(held)}"
 
 
-def test_no_service_can_read_the_break_glass_credential(users) -> None:
+def test_only_the_operator_can_read_the_config(users) -> None:
     """`+config|get` is also `CONFIG GET requirepass` (CannObserv/broker#50).
 
     Redis 7.0 refuses a first-arg rule on a subcommand, so the grant cannot be
-    narrowed to `maxmemory`: whoever can read the cap can read the `default`
-    user's break-glass password, and a restart makes the running value the
-    current one. The one service caller, archiver's floor check, reads the cap
-    from `INFO memory` since CannObserv/archiver#257 - served by `+info`, which
-    every service holds.
+    narrowed to `maxmemory`. The one service caller, archiver's floor check,
+    reads the cap from `INFO memory` since CannObserv/archiver#257 - served by
+    `+info`, which every service holds. The probe reads the cap there too, and
+    lost the grant in CannObserv/broker#52: the config mirror test runs as
+    `acladmin` now, and `requirepass` belongs to no user, so what the read
+    returns authenticates nobody - the operator's stanza has to say so.
     """
-    for user in SERVICE_USERS:
-        held = granted_commands(users[user]) & {"+config", "+config|get", "+@all"}
-        assert not held, f"{user} can CONFIG GET requirepass: {sorted(held)}"
-    assert "requirepass" in stanza("brokeradmin"), (
-        "brokeradmin keeps +config|get, and its stanza has to say the credential is readable to it"
+    for name, rules in users.items():
+        if name in {"acladmin", "citest"}:
+            continue
+        held = granted_commands(rules) & {"+config", "+config|get", "+@all"}
+        assert not held, f"{name} can CONFIG GET requirepass: {sorted(held)}"
+    assert "+config|get" in users["acladmin"]
+    assert "requirepass" in stanza("acladmin"), (
+        "acladmin holds +config|get, and its stanza has to say what requirepass is"
     )
 
 
@@ -1134,73 +1155,92 @@ def test_the_drainer_can_delete_from_every_queue_it_drains_and_can_read(users) -
         )
 
 
-def test_the_probe_cannot_write_to_a_stream(users) -> None:
+def test_the_probe_cannot_write_or_delete(users) -> None:
     """`brokeradmin` is instance-wide by necessity - `INFO memory` has no key and
     the DLQ sweep is `SCAN MATCH *.dlq` so it finds queues nobody declared. Wide
-    keys make a narrow command list the only remaining boundary, so the one thing
-    it must not be able to do is publish."""
-    assert root_key_patterns(users["brokeradmin"]) == {"*"}
-    assert "+xadd" not in users["brokeradmin"]
-    assert "+@all" not in users["brokeradmin"]
-    # It can DELETE, as the declared backstop for a queue nobody drains
-    # (`DLQ_UNASSIGNED`), and that is the one exception - scoped by a selector to
-    # dead-letter queues, so the instance-wide `~*` above cannot carry it onto a
-    # fact or a command stream. Publishing remains the thing it cannot do.
-    assert selector_patterns(users["brokeradmin"], "+xdel") == {"*.dlq"}
-    assert selector_patterns(users["brokeradmin"], "+xtrim") == {"*.dlq"}
+    keys make a narrow command list the only remaining boundary.
+
+    Until CannObserv/broker#52 it could also DELETE, from `*.dlq`, as the
+    backstop for a queue nobody drains (`DLQ_UNASSIGNED`). The probe never
+    issued that; an operator did, and the operator is `acladmin` now. So the
+    probe's credential - the one most likely to leak, from a unit or a log -
+    can change nothing at all."""
+    rules = users["brokeradmin"]
+    assert root_key_patterns(rules) == {"*"}
+    _root, selectors = split_rules(rules)
+    assert not selectors, f"the probe holds a selector: {selectors}"
+    written = granted_commands(rules) & {"+xadd", "+xdel", "+xtrim", "+set", "+@all", "+@write"}
+    assert not written, f"the probe can write: {sorted(written)}"
 
 
-def test_a_probe_grant_nothing_issues_says_why_it_is_kept(users) -> None:
-    """The one kind of entry an OBSERVED command list cannot explain by itself.
+def test_the_probe_holds_only_what_it_issues(users) -> None:
+    """broker#14's principle, with no exceptions left to explain.
 
-    This file's header says the lists are observed rather than drafted, which
-    leaves a grant nothing exercises reading as residue from a command that used
-    to be issued - and broker#14's principle is that an identity holds what it
-    uses, precisely so the grant nobody exercises cannot be the one that goes
-    wrong quietly. Twice now a probe change has left one behind: broker#13 took
-    `XLEN` out of the tick, broker#29 took `XPENDING`. Both were kept, for
-    different reasons, and a decision is worth nothing if the next reader cannot
-    tell it from an oversight (broker#32).
-
-    So the rule this asserts is not "cut it". It is that a command
-    `src/broker/` never issues is NAMED in the stanza above the rule, because
-    the reason to keep one is always the caller the source tree cannot show:
-    `brokeradmin` is also the operator's read-only identity, the
-    `rcli brokeradmin` of every runbook under `docs/`.
+    Until CannObserv/broker#52 `brokeradmin` had three callers - the probe, an
+    operator at a `redis-cli`, and these deploy tests - and a grant the probe
+    never issued had to NAME the other caller in its stanza (broker#32), since
+    `src/broker/` cannot show either. #52 moved the operator and the tests to
+    `acladmin`, so the probe is the only caller left, and the rule collapses to
+    the one the header states: an identity holds what it uses. Every command on
+    the line is one `src/broker/` issues, or it comes off.
     """
-    prose = stanza("brokeradmin")
-    unexplained = sorted(
-        command
-        for command in granted_commands(users["brokeradmin"])
-        if not issued_in_src(command)
-        and command not in prose
-        and command.removeprefix("+").upper().replace("|", " ") not in prose
+    unissued = sorted(
+        command for command in granted_commands(users["brokeradmin"]) if not issued_in_src(command)
     )
-    assert not unexplained, (
-        f"nothing in src/broker/ issues {', '.join(unexplained)}, and the brokeradmin stanza "
-        f"in {ACL_FILE.name} does not say why it is kept: record the caller that is not the "
-        "probe, or cut the grant"
+    assert not unissued, (
+        f"nothing in src/broker/ issues {', '.join(unissued)}, and brokeradmin has no caller "
+        "but the probe since CannObserv/broker#52: cut the grant, or give it to acladmin"
     )
 
 
 def test_the_operator_identity_says_why_its_trim_stops_at_dead_letter_queues(users) -> None:
-    """The inverse of the check above: a capability withheld on purpose.
+    """A capability withheld on purpose.
 
-    `brokeradmin` is the credential an operator holds at a `redis-cli`, it reads
-    every key on the instance, and its `+xtrim` is confined to `~*.dlq`. With
-    `default` off and no service selector naming them, that confinement is the
-    whole reason nothing on this broker can `XTRIM` a stream the inventory says
-    is never XTRIMmed (CannObserv/broker#34). Widening it is one `ACL SETUSER`,
-    and the moment somebody reaches for one is an incident, where "the operator
-    should be able to trim anything" sounds like help. So the stanza has to name
-    every stream the confinement protects, where whoever widens it reads it.
+    `acladmin` is the credential an operator holds at a `redis-cli` since
+    CannObserv/broker#52, it reads every key on the instance, and its `+xtrim`
+    is confined to `~*.dlq`. With `default` a tombstone and no service selector
+    naming them, that confinement is why nothing on this broker can `XTRIM` a
+    stream the inventory says is never XTRIMmed (CannObserv/broker#34).
+    `acladmin` could lift it with its own `+acl`, so it is a guard against the
+    incident reflex, not against intent - and the moment somebody reaches for
+    one is an incident, where "the operator should be able to trim anything"
+    sounds like help. So the stanza has to name every stream the confinement
+    protects, where whoever widens it reads it.
     """
-    prose = stanza("brokeradmin")
+    assert selector_patterns(users["acladmin"], "+xtrim") == {"*.dlq"}
+    assert selector_patterns(users["acladmin"], "+xdel") == {"*.dlq"}
+    root, _ = split_rules(users["acladmin"])
+    assert not {"+xtrim", "+xdel", "+xadd"} & set(root), "acladmin writes on its root"
+    prose = stanza("acladmin")
     unnamed = sorted(topic for topic in documented_never_xtrimmed() if topic not in prose)
     assert not unnamed, (
-        f"brokeradmin's +xtrim is confined to *.dlq so that nobody can trim {unnamed}, and "
+        f"acladmin's +xtrim is confined to *.dlq so that nobody can trim {unnamed}, and "
         f"its stanza in {ACL_FILE.name} does not say so"
     )
+
+
+#: What a restart window issues, which was `default`'s until CannObserv/broker#52
+#: (docs/RESTART-WINDOW.md): the snapshot, the AOF rewrite and its progress, the
+#: live cap change, and the database-index checks `redis-cli -n` makes.
+WINDOW_COMMANDS = ("+save", "+bgrewriteaof", "+info", "+config|set", "+select")
+
+#: What the operator must never hold, `+acl` notwithstanding: the reflexes that
+#: destroy data. `acladmin` can grant itself any of them, and has to say so.
+OPERATOR_WITHHELD = ("+flushall", "+flushdb", "+shutdown", "+@all", "+@dangerous", "+xadd")
+
+
+def test_the_operator_runs_the_window_and_holds_no_destructive_command(users) -> None:
+    """The window moved to `acladmin`, by name and without `+@all` (CannObserv/broker#52).
+
+    `+acl` already reaches everything - it can create a user with `+@all` - so
+    the window's commands add no reach. They are granted by name anyway, so a
+    typo at a `redis-cli` cannot `FLUSHALL`.
+    """
+    granted = granted_commands(users["acladmin"])
+    missing = sorted(set(WINDOW_COMMANDS) - granted)
+    assert not missing, f"acladmin cannot run a restart window: {missing}"
+    held = sorted(set(OPERATOR_WITHHELD) & granted)
+    assert not held, f"acladmin holds destructive grants: {held}"
 
 
 # --- ACL LOG's other half: denials that are not faults (broker#48) ---
@@ -1347,35 +1387,65 @@ def test_anonymous_access_is_refused_at_first_load(tracked_acl_broker) -> None:
         tracked_acl_broker().ping()
 
 
-def test_retiring_default_is_reversible_live_as_acladmin(tracked_acl_broker) -> None:
-    """The last step of the cutover and its undo, exercised as the users that
-    actually perform them.
+@contextlib.contextmanager
+def _enabled(tracked_acl_broker, user: str):
+    """``user``, switched ``on`` by `acladmin` for the block and ``off`` after.
+
+    For the identities the tracked file ships ``off`` - `default`, and `citest`
+    until CannObserv/broker#53 decides what CI uses - whose rules are still
+    worth exercising. Issued WITHOUT re-supplying a password: that is the
+    assertion that ``off`` leaves the password set intact, which is what makes
+    carrying one on a disabled user worth its apparent redundancy.
+    """
+    admin = tracked_acl_broker("acladmin")
+    admin.execute_command("ACL", "SETUSER", user, "on")
+    try:
+        yield tracked_acl_broker(user)
+    finally:
+        admin.execute_command("ACL", "SETUSER", user, "off")
+
+
+def test_enabling_default_admits_a_user_who_can_do_nothing(tracked_acl_broker) -> None:
+    """The tombstone, exercised (CannObserv/broker#52).
 
     The tracked file ships `default off`, so on this throwaway server the shared
     identity is refused from the first load - the state the production broker
-    has been in since 2026-09-10. The rollback is one live `ACL SETUSER` as
-    `acladmin`, the only user holding `+acl`, and it is issued WITHOUT
-    re-supplying a password: that is the assertion that `off` leaves the
-    password set intact, which is what makes carrying a password on a disabled
-    user worth its apparent redundancy. Then it is disabled again the same way.
-
-    An earlier version of this test ran as `default` and disabled itself, which
-    demonstrated the mechanism and nothing about the production path - there
-    `default` is the user being disabled and cannot undo its own disabling.
+    has been in since 2026-09-10. Until #52 the undo was the window's opening
+    move: one `ACL SETUSER default on` as `acladmin`, and `default` held
+    `+@all`. Now the same flip admits a user refused every command, and the
+    production password is the digest of a value nobody kept - so the flip is
+    neither a window nor a way in.
     """
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
         tracked_acl_broker("default").ping()
     # The per-service users are untouched by it - that is the whole point.
     assert tracked_acl_broker("archiver").ping()
 
-    admin = tracked_acl_broker("acladmin")
-    try:
-        admin.execute_command("ACL", "SETUSER", "default", "on")
-        assert tracked_acl_broker("default").ping()
-    finally:
-        admin.execute_command("ACL", "SETUSER", "default", "off")
+    with _enabled(tracked_acl_broker, "default") as default:
+        for refused in (
+            default.ping,
+            lambda: default.info("server"),
+            lambda: default.xrange(CONTENT_FETCH),
+            lambda: default.config_set("maxmemory", "0"),
+        ):
+            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+                refused()
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
         tracked_acl_broker("default").ping()
+
+
+def test_the_operator_can_run_a_window_and_not_flush(tracked_acl_broker) -> None:
+    """docs/RESTART-WINDOW.md's commands, as the user that now issues them."""
+    admin = tracked_acl_broker("acladmin")
+    assert admin.save()
+    assert admin.bgrewriteaof()
+    assert "aof_rewrite_in_progress" in admin.info("persistence")
+    maxmemory = admin.config_get("maxmemory")["maxmemory"]
+    assert admin.config_set("maxmemory", maxmemory)
+    assert admin.execute_command("SELECT", "0")
+    for refused in (admin.flushall, admin.flushdb, lambda: admin.xadd(CONTENT_FETCH, {"k": "v"})):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
 
 
 def test_archiver_is_refused_content_blobs_but_served_its_own_streams(tracked_acl_broker) -> None:
@@ -1527,33 +1597,54 @@ def test_each_service_reads_the_cap_without_reading_the_config(tracked_acl_broke
         client.config_get("requirepass")
 
 
-@pytest.mark.parametrize(
-    "user",
-    sorted(set(parse_users(ACL_FILE.read_text())) - {"brokeradmin", "default"}),
-)
-def test_only_the_probe_can_read_requirepass(tracked_acl_broker, user) -> None:
-    """Every declared user but `brokeradmin` is refused `CONFIG GET requirepass`.
+_TRACKED = parse_users(ACL_FILE.read_text())
 
-    The services above are three of them; this is the claim the brokeradmin
-    stanza makes, over every user the file declares. Asked of redis rather than
-    of the rules, because `citest` holds `+@all` and is kept off `CONFIG` only by
+
+@pytest.mark.parametrize("user", sorted(set(_TRACKED) - {"acladmin"}))
+def test_only_the_operator_can_read_requirepass(tracked_acl_broker, user) -> None:
+    """Every declared user but `acladmin` is refused `CONFIG GET requirepass`.
+
+    The claim the acladmin stanza makes, over every user the file declares -
+    the probe included since CannObserv/broker#52. Asked of redis rather than of
+    the rules, because `citest` holds `+@all` and is kept off `CONFIG` only by
     `-@admin -@dangerous` - a subtraction the parsing helpers here do not model.
-    `default` is `off`, so it cannot authenticate to be asked.
+    A user shipped `off` is switched on for the question, since the question is
+    about its rules.
     """
-    client = tracked_acl_broker(user)
+    if "off" in _TRACKED[user]:
+        with (
+            _enabled(tracked_acl_broker, user) as client,
+            pytest.raises(redis_pkg.exceptions.NoPermissionError),
+        ):
+            client.config_get("requirepass")
+        return
     with pytest.raises(redis_pkg.exceptions.NoPermissionError):
-        client.config_get("requirepass")
+        tracked_acl_broker(user).config_get("requirepass")
 
 
-def test_the_probe_can_sweep_but_cannot_publish(tracked_acl_broker) -> None:
+def test_the_probe_can_sweep_but_cannot_change_anything(tracked_acl_broker) -> None:
     """`brokeradmin` holds `~*` because `INFO memory` has no key and the DLQ
     sweep must find queues nobody declared. Wide keys make the command list the
-    only remaining boundary, so the assertion is on what it cannot do."""
+    only remaining boundary, so the assertion is on what it cannot do - which
+    since CannObserv/broker#52 includes every read that was the operator's."""
     client = tracked_acl_broker("brokeradmin")
     assert client.info("memory")["maxmemory"] is not None
     assert list(client.scan_iter(match="*.dlq")) == []
-    with pytest.raises(redis_pkg.exceptions.NoPermissionError):
-        client.xadd(CONTENT_REVISIONS, {"k": "v"})
+    with _seeder(tracked_acl_broker) as seeder:
+        parked = seeder.xadd("nobody.claims.this.dlq", {"k": "v"})
+        for refused in (
+            lambda: client.xadd(CONTENT_REVISIONS, {"k": "v"}),
+            lambda: client.xdel("nobody.claims.this.dlq", parked),
+            lambda: client.xtrim("nobody.claims.this.dlq", maxlen=0),
+            lambda: client.config_get("maxmemory"),
+            lambda: client.acl_getuser("acladmin"),
+            lambda: client.execute_command("ACL", "LOG"),
+            client.client_list,
+            client.ping,
+        ):
+            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+                refused()
+        tracked_acl_broker("acladmin").xdel("nobody.claims.this.dlq", parked)
 
 
 @pytest.mark.parametrize("topic", REPLICATOR_COMMAND_STREAMS)
@@ -1622,8 +1713,8 @@ def _seeder(tracked_acl_broker, *extra_rules: str):
     """A throwaway publisher, because no tracked user can write everywhere.
 
     These tests need bait on a stream the user under test cannot publish to -
-    that denial being half of what is asserted - and `acladmin` holds `+acl` and
-    `+ping` only. Created with the same throwaway password the fixture connects
+    that denial being half of what is asserted - and `acladmin` holds no
+    `+xadd`. Created with the same throwaway password the fixture connects
     with, and deleted in a `finally` so the module-scoped server is left as the
     tracked file describes it.
 
@@ -1709,7 +1800,7 @@ def test_the_probe_can_read_a_groups_position_without_joining_it(tracked_acl_bro
                 refused()
 
 
-def test_the_probe_can_dispose_of_one_dlq_entry_and_nothing_else(tracked_acl_broker) -> None:
+def test_the_operator_can_dispose_of_one_dlq_entry_and_nothing_else(tracked_acl_broker) -> None:
     """The backstop half, and the precision it exists to buy.
 
     `DLQ_UNASSIGNED` makes the broker the drainer of a `*.dlq` key nobody
@@ -1717,19 +1808,25 @@ def test_the_probe_can_dispose_of_one_dlq_entry_and_nothing_else(tracked_acl_bro
     queue holding more than the one triaged entry takes the rest with it. So the
     assertion is not just that a delete is permitted but that **the other entry
     survives it**. `~*.dlq` is deliberately a glob: the queue this exists for is
-    by definition one nobody declared.
+    by definition one nobody declared. The operator does it, as `acladmin` since
+    CannObserv/broker#52; the probe only reports the queue.
     """
     orphan = "nobody.claims.this.dlq"
-    probe = tracked_acl_broker("brokeradmin")
+    operator = tracked_acl_broker("acladmin")
     with _seeder(tracked_acl_broker) as seeder:
         doomed = seeder.xadd(orphan, {"k": "triaged"})
         kept = seeder.xadd(orphan, {"k": "keep"})
         stream_id = seeder.xadd(CONTENT_FETCH, {"k": "v"})
-        assert probe.xdel(orphan, doomed) == 1
-        assert probe.xlen(orphan) == 1, "a per-entry disposal must leave the rest"
-        assert probe.xrange(orphan)[0][0] == kept
-        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
-            probe.xdel(CONTENT_FETCH, stream_id)
+        assert operator.xdel(orphan, doomed) == 1
+        assert operator.xlen(orphan) == 1, "a per-entry disposal must leave the rest"
+        assert operator.xrange(orphan)[0][0] == kept
+        for refused in (
+            lambda: operator.xdel(CONTENT_FETCH, stream_id),
+            lambda: operator.xtrim(CONTENT_FETCH, maxlen=0),
+        ):
+            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+                refused()
+        operator.xdel(orphan, kept)
 
 
 def test_observo_serves_the_processing_pair_and_is_refused_the_rest(tracked_acl_broker) -> None:
@@ -1840,9 +1937,21 @@ def test_citest_cannot_name_a_production_topic(tracked_acl_broker) -> None:
     """R4, on the axis ACLs can actually enforce. The db-15 guard was never the
     enforcement - Redis ACLs cannot partition by database index at all - so a
     credential that cannot NAME a production topic is. The database-index axis is
-    closed separately by `databases 1` (CannObserv/broker#5)."""
-    client = tracked_acl_broker("citest")
-    assert client.xadd("probe.scratch", {"k": "v"})
-    for topic in (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_BLOBS):
-        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
-            client.xadd(topic, {"k": "v"})
+    closed separately by `databases 1` (CannObserv/broker#5).
+
+    Shipped `off` since CannObserv/broker#52 - its password is held nowhere, so
+    an enabled `citest` was surface nobody could use - and switched on here,
+    because the rules are what CannObserv/broker#53 will re-mint against."""
+    with _enabled(tracked_acl_broker, "citest") as client:
+        assert client.xadd("probe.scratch", {"k": "v"})
+        for topic in (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_BLOBS):
+            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+                client.xadd(topic, {"k": "v"})
+
+
+def test_citest_is_off_until_something_holds_its_password(users) -> None:
+    """Its digest is on the node and its plaintext nowhere (CannObserv/broker#49),
+    so `on` bought nothing but an identity to guess at. Back `on` when
+    CannObserv/broker#53 re-mints it for a CI target, or deleted if that issue
+    takes CI off co-broker."""
+    assert users["citest"][0] == "off"

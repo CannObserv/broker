@@ -14,8 +14,13 @@ they are here:
     ``BROKER_REDIS_URL``, so it cannot reach ``co-broker``.
 
 ``live_client``
-    The **running broker**, as the probe's own ``brokeradmin`` credential.
-    Skips unless ``BROKER_REDIS_URL`` is set and the node answers.
+    The **running broker**, as ``acladmin`` - the operator, whose password is
+    decrypted from the node's credential store through ``sudo -n`` for the life
+    of the module. Until CannObserv/broker#52 this was the probe's
+    ``brokeradmin``, which then had to carry every grant these tests read with.
+    ``BROKER_REDIS_URL`` supplies the address alone. Skips off the node: without
+    the URL, without passwordless sudo, without the credential, or when the
+    broker does not answer.
 
 Each lived in the module that first needed it until
 ``test_live_acl_matches_tracked_acl.py`` needed both *in one test* - which is
@@ -42,6 +47,7 @@ from pathlib import Path
 
 import pytest
 import redis as redis_pkg
+from redis.connection import parse_url
 
 DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
 ACL_FILE = DEPLOY / "redis-acl.conf"
@@ -175,6 +181,11 @@ def acl_server(acl: Path, workdir: Path):
                 "",
                 "--appendonly",
                 "no",
+                # A test that runs SAVE or BGREWRITEAOF - the operator's window
+                # commands (CannObserv/broker#52) - writes here rather than into
+                # whatever directory pytest was started from.
+                "--dir",
+                str(workdir),
                 "--aclfile",
                 str(acl),
             ],
@@ -237,8 +248,8 @@ def tracked_acl_broker(tmp_path_factory):
 
     **Module-scoped deliberately, not by oversight.** Sharing it across the two
     modules that use it would save one spawn, and cost the isolation that
-    `test_retiring_default_is_reversible_live_as_acladmin` needs - that test
-    disables and re-enables `default` on this server. It restores it in a
+    `_enabled` in `test_redis_acl.py` needs - it switches `default` and `citest`
+    on and off again on this server. It restores them in a
     `finally`, but a fixture every module in the directory leans on is the wrong
     place to rely on that.
     """
@@ -267,6 +278,51 @@ def tracked_acl_broker(tmp_path_factory):
         yield connect
 
 
+#: The operator's password, a ``systemd-creds`` credential encrypted to the node
+#: (CannObserv/broker#52). Its name inside the envelope is the file's own.
+OPERATOR_CREDENTIAL = Path("/etc/credstore.encrypted/broker-acladmin")
+
+
+def node_credential(path: Path) -> str | None:
+    """A credential from the node's store, decrypted through ``sudo -n``, or ``None``.
+
+    ``None`` off the node - no passwordless sudo, or no such credential - so the
+    caller skips. The value goes from ``systemd-creds``' stdout into memory and
+    nowhere else: no argv, no file, and a helper frame of its own so a failing
+    test's ``pytest -l`` locals never hold it.
+    """
+    result = subprocess.run(
+        ["sudo", "-n", "systemd-creds", "decrypt", f"--name={path.name}", str(path), "-"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 and result.stdout else None
+
+
+def _operator_client(url: str) -> redis_pkg.Redis | None:
+    """``acladmin`` at the broker ``url`` names, or ``None`` off the node.
+
+    Only the address is taken from ``url``: it names ``brokeradmin``, and
+    redis-py lets a URL's own fields override keyword arguments, so passing it
+    through would authenticate as the probe with the operator's password.
+    """
+    password = node_credential(OPERATOR_CREDENTIAL)
+    if password is None:
+        return None
+    address = parse_url(url)
+    return redis_pkg.Redis(
+        host=address.get("host", "localhost"),
+        port=address.get("port", 6379),
+        db=address.get("db", 0),
+        username="acladmin",
+        password=password,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+        decode_responses=True,
+    )
+
+
 @pytest.fixture(scope="module")
 def live_client():
     url = os.environ.get("BROKER_REDIS_URL")
@@ -276,9 +332,9 @@ def live_client():
     # No ``importorskip``: this module imports redis at the top, so a clone
     # without it never reaches here - and redis is a hard dependency of the
     # project, not an extra.
-    client = redis_pkg.Redis.from_url(
-        url, socket_connect_timeout=2, socket_timeout=2, decode_responses=True
-    )
+    client = _operator_client(url)
+    if client is None:
+        pytest.skip(f"{OPERATOR_CREDENTIAL} not decryptable through sudo -n - not the node")
     try:
         try:
             client.ping()

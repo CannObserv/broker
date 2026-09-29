@@ -2194,6 +2194,41 @@ def test_main_releases_the_client_pool(stub_main_deps) -> None:
     stub_main_deps.client.aclose.assert_awaited_once()
 
 
+def test_main_authenticates_with_the_units_credential(
+    stub_main_deps, monkeypatch, tmp_path
+) -> None:
+    """The password comes from the unit's decrypted credential, not the URL.
+
+    CannObserv/broker#52: ``/etc/broker/.env`` is ``0640 root:exedev``, so a
+    password in ``BROKER_REDIS_URL`` was plaintext any process of the account
+    could read at any time. The unit's ``LoadCredentialEncrypted=`` puts it in
+    ``$CREDENTIALS_DIRECTORY`` for the life of the tick instead, and the URL
+    names the user alone. A trailing newline - what ``echo`` into
+    ``systemd-creds encrypt`` leaves - is not part of the password.
+    """
+    credentials = tmp_path / "credentials"
+    credentials.mkdir()
+    (credentials / bus_health.BROKER_CREDENTIAL).write_text("minted-value\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credentials))
+    monkeypatch.setenv("BROKER_REDIS_URL", "redis://brokeradmin@localhost:6379/0")
+
+    assert bus_health.main(["--state-file", str(stub_main_deps.state_file)]) == 0
+
+    assert stub_main_deps.from_url.call_args.args == ("redis://brokeradmin@localhost:6379/0",)
+    assert stub_main_deps.from_url.call_args.kwargs["password"] == "minted-value"
+
+
+def test_main_outside_the_unit_leaves_the_url_to_authenticate(stub_main_deps, monkeypatch) -> None:
+    """No ``$CREDENTIALS_DIRECTORY`` - a run by hand, or a unit without the
+    credential - passes no password, so a URL that carries one still works and
+    one that does not fails at AUTH as the finding it is."""
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+
+    assert bus_health.main(["--state-file", str(stub_main_deps.state_file)]) == 0
+
+    assert stub_main_deps.from_url.call_args.kwargs.get("password") is None
+
+
 def test_main_without_a_broker_url_reports_and_exits_clean(stub_main_deps, monkeypatch) -> None:
     """The one contract that inverts on the move. In archiver an unset URL meant
     *dormancy* - a legitimate, INFO-level configuration. Here the unit exists

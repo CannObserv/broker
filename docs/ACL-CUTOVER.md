@@ -13,9 +13,11 @@ a grant on this one, see [deploy/README.md](../deploy/README.md), *Changing a gr
 
 Steps 2 to 4 below continue from Step 1 (1a to 1d) in RESTART-WINDOW.md; the
 numbered items under *Before the window* are preparation, not steps. Commands use
-the `pw` and `rcli` helpers defined at the top of RESTART-WINDOW.md; `rcli` takes
-the ACL user as its first argument, and `rcli default` authenticates only while a
-window is open.
+the `cred` and `rcli` helpers defined at the top of RESTART-WINDOW.md; `rcli` takes
+the ACL user as its first argument, and works for the two users this node holds
+a credential for, `acladmin` and `brokeradmin` (*Node credentials*, below). The
+steps are recorded as they ran on 2026-09-10, when those helpers read plaintext
+from the passwords file; since CannObserv/broker#52 none is held there.
 
 Moved out of RESTART-WINDOW.md on 2026-09-11, when the runbook ran past the
 per-doc context budget.
@@ -24,29 +26,36 @@ per-doc context budget.
 
 ### 1. Mint the ACL passwords
 
-Seven, one per placeholder, plus `default` - `observo`'s joined on 2026-09-24
-by the same recipe, ahead of its consumer (CannObserv/broker#62). **On a
-migrating cluster**
-`__DEFAULT_PW__` is the current `requirepass` value, not a new one - that is what
-makes the first restart a no-op for every service, and it stays on the line after
-`default` is retired so that the rollback can never land on `nopass`. On this
-cluster that was true from 2026-09-10 until CannObserv/broker#46 rotated it;
-`__DEFAULT_PW__` is now a value that was never a live `requirepass` anywhere, and
-the section below is how it got there and how it is done again.
+One per service - `observo`'s joined on 2026-09-24 by the same recipe, ahead
+of its consumer (CannObserv/broker#62) - and `citest`. These are the plaintexts
+that leave the node: each is handed to its service and then replaced here by its
+digest (below). The two users that stay on the node, `acladmin` and
+`brokeradmin`, are minted straight into encrypted credentials and never touch
+this file in plaintext - *Node credentials*, below.
+
+`default` depends on the cluster. **On a migrating cluster** whose services still
+say `default:`, `__DEFAULT_PW__` is the current `requirepass` value, not a new
+one, and the tracked `default` line has to read `on ~* &* +@all` for the first
+load - that is what makes the first restart a no-op for every service. Step 4
+makes it the tombstone. **On a new cluster**, or once step 4 has run, it is the
+digest of a value minted and discarded, and the line is the tombstone from the
+start. This cluster ran the first shape on 2026-09-10 and has been in the second
+since CannObserv/broker#52.
 
 ```bash
 # In a script that sets pipefail, `head` closing the pipe SIGPIPEs `tr` and the
 # subshell exits 141 - so the mint disables it for itself and asserts the length.
 mint() { set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40; }
 sudo install -m 0400 -o root -g root /dev/null /etc/redis/broker-acl-passwords
-for p in ARCHIVER WATCHER REPLICATOR OBSERVO BROKERADMIN ACLADMIN CITEST; do
+for p in ARCHIVER WATCHER REPLICATOR OBSERVO CITEST; do
     echo "__${p}_PW__=$(mint)"
 done | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
-echo "__DEFAULT_PW__=$(sudo cat /etc/redis/broker-password)" \
+# default, on a new cluster: the digest of a value nobody keeps.
+echo "__DEFAULT_PW_SHA256__=$(mint | sha256sum | cut -d' ' -f1)" \
     | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
 sudo chmod 0400 /etc/redis/broker-acl-passwords
-awk -F= '{ printf "%-16s %s chars\n", $1, length($2) }' \
-    <(sudo cat /etc/redis/broker-acl-passwords)     # -> 40 each, and CHECK IT
+awk -F= '{ printf "%-24s %s chars\n", $1, length($2) }' \
+    <(sudo cat /etc/redis/broker-acl-passwords)     # -> 40 each, 64 for a digest; CHECK IT
 ```
 
 `tr -dc 'A-Za-z0-9'` is not fussiness: these end up in `redis://user:pass@host`
@@ -63,17 +72,17 @@ mints under 40 about one time in twenty and says nothing - `P(X>=4)` for
 nothing here is short; the recipe was lucky six times. The length check on the
 last line is the point, whichever source you draw from.
 
-**Then take the service plaintexts off this node.** The mint writes all six in
+**Then take the service plaintexts off this node.** The mint writes each in
 plaintext because each has to be handed to its service. Once `archiver`,
 `watcher` and `replicator` hold theirs - *Step 2 - each service onto its own
 credential*, after the window, not preparation item 2 below - and `citest` is
 wherever CannObserv/broker#53 puts it, replace each of those four lines with
 `__<USER>_PW_SHA256__=<its digest>` - deploy/README.md, *Changing a grant*.
 Nothing here authenticates as them, and
-`test_the_node_holds_no_plaintext_for_a_service_user` fails until it is done
-(CannObserv/broker#49). `observo`'s went through that interval on 2026-09-24,
-minted ahead of its consumer (CannObserv/broker#62): read out with `pw OBSERVO`
-into the operator's password manager, verified by a `PING` from
+`test_the_node_holds_no_plaintext_for_any_user` fails until it is done
+(CannObserv/broker#49, #52). `observo`'s went through that interval on 2026-09-24,
+minted ahead of its consumer (CannObserv/broker#62): read out of the passwords
+file into the operator's password manager, verified by a `PING` from
 `observo-primary` as `observo`, written to `/etc/observo/.env` as
 `CO_OBSERVO_BROKER_TOKEN`, and only then replaced here by its digest - in that
 order, because after the last step this node holds no plaintext and a lost copy
@@ -102,15 +111,16 @@ sleep 1
 redis-cli -p 6399 PING                                  # -> NOAUTH  (not PONG!)
 # Spelled out, NOT `rcli`: that helper is pinned to 6379, and reaching for it
 # here would talk to production instead of the throwaway server.
-REDISCLI_AUTH="$(pw ACLADMIN)" redis-cli --user acladmin -h 127.0.0.1 -p 6399 ACL LIST
+REDISCLI_AUTH="$(cred acladmin)" redis-cli --user acladmin -h 127.0.0.1 -p 6399 ACL LIST
 sudo kill "$(sudo cat /root/aclcheck.pid)"              # no user holds +shutdown, by design
 sudo shred -u /root/users.acl.check /root/aclcheck.log
 ```
 
 **`PING` must return `NOAUTH`.** If it returns `PONG`, stop - see *The `nopass`
 trap* below. `ACL LIST` must show eight users: `archiver`, `watcher`,
-`replicator`, `observo`, `brokeradmin`, `acladmin`, `citest`, and `default` -
-**`off`** since step 4, still carrying its password hash.
+`replicator`, `observo`, `brokeradmin`, `acladmin`, `citest` (`off` until
+CannObserv/broker#53), and `default` - **`off`**, `-@all`, still carrying a
+password hash.
 
 ### 3. Note where each service lives
 
@@ -190,16 +200,18 @@ LOG` named the command in one query, and the `SETUSER` above drained the PEL to
 ### Step 3 - the probe onto `brokeradmin`
 
 ```bash
-# /etc/broker/.env: BROKER_REDIS_URL -> redis://brokeradmin:<pw>@localhost:6379/0
+# /etc/broker/.env: BROKER_REDIS_URL -> redis://brokeradmin@localhost:6379/0
+#   - the user alone; the password is the unit's encrypted credential
+#   (Node credentials, below; CannObserv/broker#52)
 sudo systemctl start broker-bus-health.service
 journalctl -u broker-bus-health -n 5 -o cat --no-pager   # -> finding_count: 0
 ```
 
-`brokeradmin` is narrowed to read-and-trim: no `XADD`, no `CONFIG SET`, no
-`FLUSHDB`, and nothing that can CHANGE an ACL. It reads one - `+acl|log` and,
-since broker#11, `+acl|getuser` - and read-versus-change is the line `acladmin`
-sits on the other side of. If the probe reports `broker unreachable or probe
-failed: NoPermissionError`, it is a missing grant, not an outage.
+`brokeradmin` is the probe's tick and nothing else since CannObserv/broker#52:
+`INFO`, `SCAN`, `EXISTS`, `XINFO`, `XRANGE`. On 2026-09-10 it was also the
+operator's read identity and the DLQ backstop; both moved to `acladmin`. If the
+probe reports `broker unreachable or probe failed: NoPermissionError`, it is a
+missing grant, not an outage.
 
 ### Step 4 - retire the shared password
 
@@ -211,14 +223,18 @@ check is not "the services look fine"; it is that no connection is
 authenticated as `default`:
 
 ```bash
-rcli brokeradmin CLIENT LIST | grep -oE 'user=[^ ]+' | sort | uniq -c
+rcli acladmin CLIENT LIST | grep -oE 'user=[^ ]+' | sort | uniq -c
 #   4 user=archiver  1 user=brokeradmin  3 user=replicator  3 user=watcher  - and no user=default
-rcli brokeradmin ACL LOG 5                                # explained: redis-acl.conf's grant provenance (header or stanza) or its not-a-fault list names each entry
+rcli acladmin ACL LOG 5                                   # explained: redis-acl.conf's grant provenance (header or stanza) or its not-a-fault list names each entry
 rcli acladmin ACL LIST | grep '^user acladmin'            # precondition, not optional
 ```
 
 ```bash
-rcli acladmin ACL SETUSER default off
+# As run on 2026-09-10: `off` alone. A new cluster goes straight to the
+# tombstone, as CannObserv/broker#52 did here on 2026-09-29 - no grants, and a
+# password that is the digest of a value nobody keeps:
+DH="$(mint | sha256sum | cut -d' ' -f1)"
+rcli acladmin ACL SETUSER default off resetpass "#$DH" resetkeys resetchannels -@all
 rcli acladmin ACL SAVE
 ```
 
@@ -226,16 +242,13 @@ Then verify every axis, not only the one that changed:
 
 ```bash
 redis-cli PING                                             # -> NOAUTH Authentication required.
-rcli default PING                                          # -> WRONGPASS ... or user is disabled
-for u in archiver watcher replicator observo brokeradmin acladmin citest; do
-    if [ -z "$(pw "${u^^}")" ]; then
-        echo "$u: held by digest on this node - verify from its own host"
-        continue
-    fi
-    printf '%-13s %s\n' "$u" "$(rcli "$u" PING)"           # -> PONG, each one it can reach
+rcli acladmin ACL GETUSER default                          # -> flags off, one hash, commands -@all
+rcli brokeradmin INFO server | grep redis_version          # the probe's credential still answers
+for u in archiver watcher replicator observo citest; do
+    echo "$u: held by digest on this node - verify from its own host"
 done
-rcli brokeradmin CLIENT LIST | grep -c 'flags=b'           # same count as before the flip
-sudo grep '^user default' /etc/redis/users.acl             # -> user default off #<hash> ~* &* +@all
+rcli acladmin CLIENT LIST | grep -c 'flags=b'              # same count as before the flip
+sudo grep '^user default' /etc/redis/users.acl             # -> user default off #<hash> resetchannels -@all
 ```
 
 **The skip in that loop is the general case, not an archiver exception.** Any
@@ -251,29 +264,27 @@ service user does: `archiver`, `watcher`, `replicator` and `citest` are all
 held by digest alone, and so is `observo` since its handoff on 2026-09-24
 (CannObserv/broker#62). The replacements are verification **from the
 service's own host**, or an assertion about the ACL rather than about
-authentication - `rcli brokeradmin ACL GETUSER <user>` showing exactly one
-password hash, which `brokeradmin` can already do.
+authentication - `rcli acladmin ACL GETUSER <user>` showing exactly one
+password hash.
 
 `ACL SETUSER default off` does **not** disconnect clients already authenticated
 as `default` on this Redis (7.0): they keep working until they reconnect, and
 then fail. That is why the `CLIENT LIST` check comes first - a straggler would
 break at its next restart rather than now, and look healthy in between.
 
-Then update `deploy/redis-acl.conf` to `user default off` - keeping its
-`>__DEFAULT_PW__` - and commit, so the tracked file matches what `ACL SAVE`
-wrote. `tests/deploy/test_redis_acl.py` pins the line as declared, `off`, and
-carrying a password.
+Then update `deploy/redis-acl.conf` to `user default off >__DEFAULT_PW__
+resetchannels -@all`, and the passwords file's `default` line to
+`__DEFAULT_PW_SHA256__=$DH`, and commit, so the tracked file matches what
+`ACL SAVE` wrote. `tests/deploy/test_redis_acl.py` pins the line as declared,
+`off`, carrying a password, and granting nothing.
 
-Reversing step 4 - and, from now on, **opening any restart window**, since no
-other user can `BGREWRITEAOF`, `CONFIG SET` or shut the server down:
-
-```bash
-rcli acladmin ACL SETUSER default on      # the password survives 'off'
-rcli acladmin ACL SAVE
-# ... the window ...
-rcli acladmin ACL SETUSER default off
-rcli acladmin ACL SAVE
-```
+**There is no reversing it, and nothing needs to.** Until CannObserv/broker#52
+the reversal - `ACL SETUSER default on` - was also how every restart window
+opened, because no other user could `BGREWRITEAOF`, `CONFIG SET` or `SAVE`.
+`acladmin` holds those now, and an enabled tombstone grants nothing. A
+migrating cluster that needs `default` back for a straggler restores the grants
+and a known password in one `ACL SETUSER`, as `acladmin`, and should ask why
+first.
 
 **Why `acladmin` exists at all**, because this was nearly got wrong: `ACL
 SETUSER` requires `+acl`, and until that user was added **no user had it** -
@@ -286,8 +297,10 @@ editing `users.acl` and restarting - a cohort-wide event, for a typo.
 `acladmin` is deliberately *not* `brokeradmin` with more grants. `brokeradmin`
 holds `~*` because `INFO` and the DLQ sweep need it, so its narrow command list
 is the only boundary it has, and `+acl` would let it grant itself `+xadd`.
-Verified live: `acladmin` can run `ACL LIST` and `ACL SETUSER` and is refused
-`XADD`, `XLEN`, `INFO`, `CONFIG SET` and `FLUSHALL`.
+On 2026-09-10 `acladmin` was refused `XADD`, `XLEN`, `INFO`, `CONFIG SET` and
+`FLUSHALL`; since CannObserv/broker#52 it holds the operator's reads and the
+window's commands by name, and is still refused `XADD` and `FLUSHALL`. The split
+that survives is the other direction: the probe's credential changes nothing.
 
 **Keep a shell on the node** through step 4 regardless. The last-resort recovery
 is still `redis-server`'s own config - restart with the `aclfile` line commented
@@ -296,116 +309,106 @@ is exactly why `acladmin` is the path you want to reach for first.
 
 ---
 
-## Rotating `__DEFAULT_PW__` - a supported operation, and four writes
+## Node credentials - `acladmin` and `brokeradmin`
 
-`default` being `off` is not the end of its exposure, which is why this section
-exists (CannObserv/broker#46). One secret wears three hats here by construction:
-step 1 mints `__DEFAULT_PW__` **as** the current `requirepass`, so
-`/etc/redis/broker-acl-passwords`, `/etc/redis/broker-password` and
-`redis.conf`'s `requirepass` line all carry the same value, and the live
-`default` password is that value's hash. Three documented paths turn it back
-into a live credential, and all three are what you reach for when something is
-already wrong: opening **any** restart window (`ACL SETUSER default on` - no
-other user holds `BGREWRITEAOF`, `CONFIG SET` or `SHUTDOWN`), step 4's rollback,
-and the last-resort restart with `aclfile` commented out, which does not even
-need `default` to be `on`. So the break-glass for every window, and the
-break-glass behind it, are one string; if it leaks, it is rotated, and `off`
-buys nothing.
+The two users something on this node authenticates as: the operator (and the
+deploy tests), and the probe. Since CannObserv/broker#52 neither password exists
+in plaintext at rest. Each is a `systemd-creds` credential in
+`/etc/credstore.encrypted/` (`0700 root`), named `broker-<user>` and encrypted
+with the host key `/var/lib/systemd/credential.secret` (created on first use;
+this VM has no TPM). The passwords file carries each one's digest, for the
+render. Root decrypts on demand - `cred` at the top of RESTART-WINDOW.md - with
+no prompt; the probe's unit decrypts `broker-brokeradmin` into its own
+`$CREDENTIALS_DIRECTORY` for each tick.
 
-It leaked on 2026-09-23: CannObserv/archiver#251 found `ARCHIVER_REDIS_URL`
-logged unredacted at every archiver publisher start, which put **the credential
-every service used before the 2026-09-10 cutover** into another host's journald
-in cleartext, back to the start of retention there. Rotated the same day. Not
-vacuuming that journal is deliberate - it is the journal that answered
-CannObserv/archiver#247, and deletion costs evidence this cohort has already had
-to use once.
+**What that buys, and what it does not.** Root on this node can decrypt either,
+and so can `exedev`, which has passwordless sudo; nothing on this node could
+change that without taking sudo away. What it removes is the plaintext in a file
+- the thing that gets copied, grepped, backed up or read into an agent's
+context, which is how CannObserv/archiver#251 happened - and host-bound
+ciphertext is useless off the node. The host key sits on the same disk
+(`systemd-creds` says "not located on encrypted media"), so an image of the disk
+carries both. While a probe tick runs, systemd also grants the unit's `User=`
+read on its decrypted copy, so for that second another `exedev` process can read
+it - in RAM, never on disk (deploy/broker-bus-health.service).
 
-**Four writes, or a restart silently reverts part of it** - and the ACL is
-touched twice, at both ends, so that no crash in between leaves this node
-without a credential it knows. None of it puts a secret on a command line
-(CannObserv/broker#47). **Run it as a script, not pasted line by line:** the
-guard below exits, and `set +o pipefail` only means something where a script set
-it.
+**Rotate one** - on exposure, not on a schedule. Run as a script. It adds before
+it retires, as #46's rotation did, so no crash leaves the user without a
+password this node holds; nothing puts the value on a command line
+(CannObserv/broker#47):
 
 ```bash
-pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
-rcli() { local u=$1; shift
-         REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
-
-OLD="$(pw DEFAULT)"; OLDH="$(printf %s "$OLD" | sha256sum | cut -d' ' -f1)"
-# `set +o pipefail`: `head` closing the pipe SIGPIPEs `tr`, and under pipefail
-# that is exit 141 for a command that did exactly its job. It is what this
-# rotation hit on the day, inside a `set -euo pipefail` script.
-NEW="$(set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40)"
-[ "${#NEW}" -eq 40 ] || { echo "minted ${#NEW} chars, want 40"; exit 1; }
+set -euo pipefail
+u=acladmin                                 # or brokeradmin
+mint() { (set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40); }
+C=/etc/credstore.encrypted/broker-$u
+OLDH="$(cred "$u" | sha256sum | cut -d' ' -f1)"
+NEW="$(mint)"; [ "${#NEW}" -eq 40 ] || { echo "minted ${#NEW} chars, want 40"; exit 1; }
 NEWH="$(printf %s "$NEW" | sha256sum | cut -d' ' -f1)"
 
-# 1a. ADD the new password to the live `default`, keeping the old one. Both
-#     authenticate from here until 1b - verified on a scratch 7.0.15, as is
-#     `!<hash>` keeping the `off` flag. deploy/README.md, "Changing a grant".
-rcli acladmin ACL SETUSER default "#$NEWH"
+# 1. ADD the new password; both authenticate until 4.
+rcli acladmin ACL SETUSER "$u" "#$NEWH"
 rcli acladmin ACL SAVE
-
-# 2. The placeholders file - `pw DEFAULT`, and any future re-render.
-# 3. /etc/redis/broker-password - the `aclfile`-commented-out recovery path.
-# 4. /etc/redis/redis.conf's `requirepass` line - the same path's directive.
-#    Values travel on a pipe, never on a `sudo sed -i` command line:
-#      sudo cat <file> | awk ... | sudo tee <file>.new  &&  sudo mv
-
-# 1b. Only once 2, 3 and 4 are verified below: RETIRE the old password.
-rcli acladmin ACL SETUSER default "!$OLDH"
+# 2. The credential - the value on a pipe, printf being a builtin.
+printf %s "$NEW" | sudo systemd-creds encrypt --name="broker-$u" - "$C.new"
+unset NEW
+sudo chmod 0400 "$C.new" && sudo mv "$C.new" "$C"
+[ "$(cred "$u" | sha256sum | cut -d' ' -f1)" = "$NEWH" ]
+# 3. The digest line the render reads.
+sudo cat /etc/redis/broker-acl-passwords \
+    | awk -F= -v k="__${u^^}_PW_SHA256__" -v h="$NEWH" '$1==k {print k "=" h; next} {print}' \
+    | sudo install -m 0400 -o root -g root /dev/stdin /etc/redis/broker-acl-passwords.new
+sudo mv /etc/redis/broker-acl-passwords.new /etc/redis/broker-acl-passwords
+# 4. RETIRE the old one.
+rcli acladmin ACL SETUSER "$u" "!$OLDH"
 rcli acladmin ACL SAVE
-sudo grep -q "^user default off #$NEWH ~\* &\* +@all$" /etc/redis/users.acl   # or STOP
 ```
 
-**Why the ACL is written at both ends.** A single `"#$NEWH" "!$OLDH"` leaves a
-window in either order: crash after it and `NEW` is lost with `OLD` already
-gone, so the break-glass for every restart window is a string nobody holds;
-crash before it, with the files already written, and the same is true the other
-way round. Adding first costs nothing - `ACL SETUSER` ADDS, which is the same
-property `deploy/README.md` warns about for rules - and between 1a and 1b the
-user simply carries two passwords, both live. **The live suite is legitimately
-red in that interval**: `test_every_tracked_user_still_carries_a_password`
-compares password *counts*, and two-against-one is what it is there to notice.
-Finish 1b before reading anything into it.
+For `brokeradmin` the next tick simply authenticates with the new credential
+(`systemctl start broker-bus-health.service` to see it now). Between 1 and 4 the
+live suite is red by design - `test_every_tracked_user_still_carries_a_password`
+counts two against one - and after 4 it holds all three places to each other:
+`test_each_node_credential_authenticates_its_user` and
+`test_the_nodes_passwords_file_renders_the_credentials_that_are_live`.
 
-**`[ "${#NEW}" -eq 40 ]` is not belt and braces.** An empty `NEW` hashes to
-`e3b0c442...`, a perfectly valid 64-hex digest that `ACL SETUSER` accepts, and
-the verification below would then compare an empty `pw DEFAULT` against an empty
-file against an empty directive and report four agreeing digests. It is the one
-failure in this procedure that ends with every check green and the instance's
-break-glass set to the hash of the empty string.
+**On a new or rebuilt node, mint rather than restore.** Steps 2 and 3 alone,
+with the digest line added rather than replaced, before the first render. No
+copy of either password exists off the node, and none needs to: nothing off the
+node authenticates as either user, and a rebuilt node has a new host key that
+could not decrypt the old credential anyway (RECOVERY.md).
 
-**Not `CONFIG SET requirepass`.** Verified on a scratch 7.0.15: it *replaces*
-`default`'s password rather than adding one, and does not clear `off` - so it is
-a fifth way to set the credential, wearing the name of the directive. Leave the
-running value alone. It then reports the **retired** secret until the next
-restart, which is correct and worth knowing: see *What `CONFIG GET requirepass`
-does not tell you* below.
+### `requirepass` belongs to no user
 
-Verify by digest, printing no cleartext - all four must agree, and the live user
-must still be `off` with exactly one password:
+It accepts plaintext only, so it is the one Redis secret-shaped value left on
+disk, in `/etc/redis/redis.conf` (`0640 redis:redis`). Since CannObserv/broker#52
+it is a random value minted at install and kept nowhere else (deploy/README.md),
+and it authenticates nobody: the aclfile's `default` line overrides it while the
+aclfile loads, and `default` is a tombstone besides. Its only job is the
+last-resort restart with `aclfile` commented out, where it keeps `default` from
+being `nopass`; whoever makes that edit is root, and writes a fresh one in the
+same edit. `test_requirepass_is_nobodys_password` holds both the running value
+and the file's to that, by digest.
 
-```bash
-d() { tr -d '\n' | sha256sum | cut -c1-16; }
-sudo sed -n 's/^user default off #\([0-9a-f]*\) .*/\1/p' /etc/redis/users.acl | cut -c1-16
-pw DEFAULT | d
-sudo cat /etc/redis/broker-password | d
-sudo cat /etc/redis/redis.conf | sed -n 's/^requirepass //p' | d
-rcli brokeradmin ACL GETUSER default        # -> off, one hash, the same one
-```
+Until #52 it was `default`'s password, in three plaintext places -
+`/etc/redis/broker-acl-passwords`, `/etc/redis/broker-password` and this
+directive - and the reason `/etc/redis/broker-password` existed. That file is
+gone.
 
-**Nothing is committed.** `deploy/redis.conf.broker` holds `__REQUIREPASS__` and
-`deploy/redis-acl.conf` holds `>__DEFAULT_PW__`, and the two live-comparison
-tests exclude the value by name - `NOT_COMPARED` in
-`test_live_broker_matches_tracked_config.py` and in
-`test_live_acl_matches_tracked_acl.py`. The suite is the confirmation, not the
-assumption: run `uv run pytest tests/deploy` after, and `git status` should be
-clean.
+## Rotating `__DEFAULT_PW__` - retired by CannObserv/broker#52
 
-**Done 2026-09-23**, as `acladmin`, `default` never enabled, retired digest
-`9c4ea97f...`. No service reconnected, no window opened, 191 deploy tests green
-after.
+It was four writes, and they ran once: on 2026-09-23, as `acladmin`, after the
+credential every service held before the cutover leaked into archiver's
+journald (CannObserv/archiver#251, CannObserv/broker#46). That credential was
+also the break-glass for every restart window, because opening one meant
+`ACL SETUSER default on` - so one leaked string was also every future window's
+key. The procedure is in this file's history.
+
+On 2026-09-29 #52 retired it instead of rotating it again. The window's commands
+moved to `acladmin`; `default` lost every grant; its password became the digest
+of a value nobody kept; `/etc/redis/broker-password` was shredded; and
+`requirepass` was re-minted to belong to no user. There is nothing left to
+rotate: the digest is of a value nobody has, and the tombstone would grant
+nothing if it were found.
 
 ### What `CONFIG GET requirepass` does not tell you
 
@@ -424,13 +427,13 @@ empty one is `nopass` by another door, on the one path where the directive does
 govern - and its docstring says which guarantee that is and which it is not.
 
 **Who can read it is who holds `+config|get`**, and Redis 7.0 cannot narrow that
-grant to a parameter (CannObserv/broker#50). After a restart the running value is
-the current break-glass password, so each holder is a reader of it. All three
-services lost the grant on 2026-09-23: watcher and replicator first - neither
-ever issued `CONFIG` - then archiver, once CannObserv/archiver#257 moved its
-floor check's cap read to `INFO memory`. `brokeradmin` keeps it for the config
-mirror test, and that is accepted on its stanza in `deploy/redis-acl.conf`: a
-rotation is not a secret from this node's own identity.
+grant to a parameter (CannObserv/broker#50). Until CannObserv/broker#52 the
+running value was `default`'s break-glass password, so each holder was a reader
+of it. All three services lost the grant on 2026-09-23: watcher and replicator
+first - neither ever issued `CONFIG` - then archiver, once
+CannObserv/archiver#257 moved its floor check's cap read to `INFO memory`. The
+probe lost it in #52, when the config mirror test moved to `acladmin`; and the
+value it would read is nobody's password now anyway.
 
 ---
 

@@ -166,6 +166,13 @@ DISK_PATH = "/"
 SOCKET_CONNECT_TIMEOUT_SECONDS = 5.0
 SOCKET_TIMEOUT_SECONDS = 10.0
 
+# The probe's password, as the unit's `LoadCredentialEncrypted=` names it
+# (deploy/broker-bus-health.service). systemd decrypts it into
+# `$CREDENTIALS_DIRECTORY` for the life of the tick, so `BROKER_REDIS_URL` names
+# the user alone and no plaintext sits in `/etc/broker/.env`, which the account
+# can read at any time (CannObserv/broker#52).
+BROKER_CREDENTIAL = "broker-brokeradmin"
+
 # The period both LWW streams republish their full set on, `*/5 * * * *`
 # (CannObserv/watcher#264, #265; `info.watch-status` reads it from
 # ``WATCHER_WATCH_STATUS_REPUBLISH_CRON`` and defaults to it). Spelled as a
@@ -2405,6 +2412,25 @@ async def run_once(
     return findings
 
 
+def _unit_credential(name: str) -> str | None:
+    """A credential systemd decrypted for this unit, or ``None`` outside one.
+
+    ``None`` passes no password, and redis-py then takes the URL's own - so a
+    run by hand with a full URL still works, and a unit whose credential is
+    missing fails at AUTH, which the collector reports as the unreachable
+    finding. A URL that carries a password wins over this one (redis-py's
+    ``from_url`` lets the URL override its keyword arguments), which is why the
+    node's ``BROKER_REDIS_URL`` must carry none: tests/deploy/test_bus_health_units.py.
+    """
+    directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not directory:
+        return None
+    try:
+        return (Path(directory) / name).read_text().rstrip("\r\n")
+    except FileNotFoundError:
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     """Timer entrypoint. Always exits 0 once the probe ran - WARN-only means a
     finding is a journald line, never a failed unit. Only a probe crash (a bug
@@ -2431,6 +2457,8 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("BROKER_REDIS_URL not set - nothing to probe")
         return 0
 
+    password = _unit_credential(BROKER_CREDENTIAL)
+
     async def _run() -> None:
         # Bounded sockets: a hung (rather than refusing) broker would otherwise
         # block until systemd's TimeoutStartSec kills the unit, turning the
@@ -2440,6 +2468,7 @@ def main(argv: list[str] | None = None) -> int:
         # finding.
         client = Redis.from_url(
             redis_url,
+            password=password,
             socket_connect_timeout=SOCKET_CONNECT_TIMEOUT_SECONDS,
             socket_timeout=SOCKET_TIMEOUT_SECONDS,
         )

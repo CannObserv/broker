@@ -8,8 +8,11 @@ repo copy (runs everywhere) and for byte-parity against ``/etc/systemd/system/``
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
+
+from src.broker.bus_health import BROKER_CREDENTIAL
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DEPLOY = _ROOT / "deploy"
@@ -22,6 +25,9 @@ PROBE_SOURCE = _ROOT / "src" / "broker" / "bus_health.py"
 # the account these tests run as, by design.
 SHARED_ENV = Path("/etc/broker/.env")
 WHEELHOUSE_KEY = "GOOGLE_APPLICATION_CREDENTIALS"
+# systemd's own search path for encrypted credentials, 0700 root. The probe's
+# password is here, encrypted to this host (CannObserv/broker#52).
+CREDSTORE = Path("/etc/credstore.encrypted")
 
 
 def _read_if_installed(path: Path) -> str | None:
@@ -65,9 +71,10 @@ def _directive(text: str, key: str) -> list[str]:
 def _names_assigned_in(path: Path) -> set[str] | None:
     """The variable names an ``EnvironmentFile`` assigns, or ``None`` if absent.
 
-    A helper rather than inline, so the file's text - which holds a password in
-    ``BROKER_REDIS_URL`` - is never a local of the test frame: ``pytest -l``
-    prints a failing test's locals, and this frame has returned by then.
+    A helper rather than inline, so the file's text - which held a password in
+    ``BROKER_REDIS_URL`` until CannObserv/broker#52, and would again were it put
+    back - is never a local of the test frame: ``pytest -l`` prints a failing
+    test's locals, and this frame has returned by then.
     """
     try:
         text = path.read_text()
@@ -78,6 +85,26 @@ def _names_assigned_in(path: Path) -> set[str] | None:
         for line in text.splitlines()
         if "=" in line and not line.lstrip().startswith(("#", ";"))
     }
+
+
+def _url_carries_a_password(path: Path, name: str) -> bool | None:
+    """Whether ``name`` in ``path`` is a URL with a password, or ``None`` if unset.
+
+    A helper for the same reason as ``_names_assigned_in``: the value never
+    becomes a local of the test frame, and only the verdict crosses back.
+    """
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return None
+    values = [
+        line.split("=", 1)[1].strip().strip("\"'")
+        for line in text.splitlines()
+        if line.startswith(f"{name}=")
+    ]
+    if not values:
+        return None
+    return any(urlsplit(value).password is not None for value in values)
 
 
 def _variables_the_probe_reads() -> set[str]:
@@ -294,3 +321,58 @@ def test_every_variable_the_probe_inherits_is_one_it_reads() -> None:
         "Read it in src/broker/bus_health.py, or add it to the unit's "
         "UnsetEnvironment= and say whose it is"
     )
+
+
+def test_the_probe_password_is_an_encrypted_credential() -> None:
+    """``brokeradmin``'s password reaches the probe decrypted, and only the probe.
+
+    Until CannObserv/broker#52 it was the password segment of
+    ``BROKER_REDIS_URL`` in ``/etc/broker/.env``, ``0640 root:exedev`` - the one
+    Redis credential on this node readable without sudo, at any time. Now it is a
+    ``systemd-creds`` credential encrypted to this host, which systemd decrypts
+    into the unit's ``$CREDENTIALS_DIRECTORY`` for the life of the tick. The ID
+    here is the name ``src/broker/bus_health.py`` reads, and the path is
+    systemd's own credential store.
+    """
+    loads = _directive(REPO_SERVICE.read_text(), "LoadCredentialEncrypted")
+    assert loads == [f"{BROKER_CREDENTIAL}:{CREDSTORE / BROKER_CREDENTIAL}"], loads
+    assert not _directive(REPO_SERVICE.read_text(), "LoadCredential"), (
+        "a plaintext LoadCredential= would put the password back on disk"
+    )
+    assert not _directive(REPO_SERVICE.read_text(), "SetCredential"), (
+        "SetCredential= writes the password into the unit"
+    )
+
+
+def test_the_shared_env_carries_no_redis_password() -> None:
+    """The other half: the URL names the user, never the password.
+
+    redis-py's ``from_url`` lets a password in the URL override the one the
+    probe passes from its credential, so one put back in ``/etc/broker/.env``
+    would silently win - and be readable by the account again. The verdict
+    alone leaves the file.
+    """
+    carries = _url_carries_a_password(SHARED_ENV, "BROKER_REDIS_URL")
+    if carries is None:
+        pytest.skip(f"{SHARED_ENV} absent or without BROKER_REDIS_URL - not the node")
+    assert not carries, (
+        f"BROKER_REDIS_URL in {SHARED_ENV} carries a password. It overrides the unit's "
+        f"encrypted credential and is readable without sudo: make it "
+        "redis://brokeradmin@<host>:6379/0 (CannObserv/broker#52)."
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "carries"),
+    [
+        ("redis://brokeradmin@localhost:6379/0", False),
+        ("redis://brokeradmin:minted@localhost:6379/0", True),
+        ("'redis://brokeradmin:minted@localhost:6379/0'", True),
+        ("redis://:minted@localhost:6379/0", True),
+    ],
+    ids=["user-only", "user-and-password", "quoted", "password-only"],
+)
+def test_a_url_password_is_detected_in_any_spelling(tmp_path, url, carries) -> None:
+    env = tmp_path / ".env"
+    env.write_text(f"OTHER=x\nBROKER_REDIS_URL={url}\n")
+    assert _url_carries_a_password(env, "BROKER_REDIS_URL") is carries

@@ -1,7 +1,8 @@
 # The broker's Redis tuning, as deployed (CannObserv/broker#1 D3/D5/D6).
 #
 # INSTALL: appended verbatim to /etc/redis/redis.conf on the broker node, with
-# __REQUIREPASS__ replaced by the value in /etc/redis/broker-password. Redis
+# the requirepass placeholder replaced by a value minted at install and kept
+# nowhere else (../deploy/README.md, "Install"; CannObserv/broker#52). Redis
 # takes the LAST occurrence of a directive, so this block wins over everything
 # the packaged file sets above it, which keeps the diff against the packaged
 # file to a single appended, clearly delimited section.
@@ -43,10 +44,13 @@
 bind 127.0.0.1 100.97.91.19
 protected-mode yes
 
-# D3. requirepass is the floor, not the destination: per-service ACL users are
+# D3. requirepass was the floor, not the destination: per-service ACL users are
 # what actually scope watcher/archiver/replicator to their own streams, and are
 # the only mechanism that can enforce archiver's content.blobs boundary rather
-# than merely documenting it. Tracked as remaining D3 work.
+# than merely documenting it. Since the aclfile below, the aclfile's `default`
+# line overrides this, and since CannObserv/broker#52 the value is nobody's
+# password: its one job is the last-resort restart with `aclfile` commented
+# out, where it keeps `default` from being `nopass`.
 requirepass __REQUIREPASS__
 
 # D5. AOF so stream entries and consumer-group state survive a restart.

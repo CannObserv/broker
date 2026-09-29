@@ -10,7 +10,9 @@ Type=oneshot
 User=exedev
 WorkingDirectory=/home/exedev/broker
 
-# BROKER_REDIS_URL. The file also carries GOOGLE_APPLICATION_CREDENTIALS, the
+# BROKER_REDIS_URL, which names the user and never the password
+# (CannObserv/broker#52; tests/deploy/test_bus_health_units.py reads the live
+# file for one). The file also carries GOOGLE_APPLICATION_CREDENTIALS, the
 # read-only co-pypi-reader key, and that one is the OPERATOR'S: it is what the
 # manual wheelhouse sync in AGENTS.md authenticates with, and it shares this
 # file so that sync is one `source` away. No unit runs the sync. This one has no
@@ -38,6 +40,18 @@ UnsetEnvironment=GOOGLE_APPLICATION_CREDENTIALS
 # and must start without it, so a node that has not been wired to co-status is
 # not a node with a broken unit.
 EnvironmentFile=-/etc/broker/status.env
+
+# brokeradmin's password (CannObserv/broker#52). A `systemd-creds` credential
+# encrypted to this host, in systemd's credential store (0700 root); systemd
+# decrypts it into $CREDENTIALS_DIRECTORY for the life of the tick, and
+# src/broker/bus_health.py reads it from there. Until #52 it sat in
+# BROKER_REDIS_URL above, plaintext in a file this unit's User= can read at any
+# time. What is left: while a tick runs, systemd grants that same User= read on
+# the decrypted copy, so another process of the account can read it for that
+# second - in RAM, never on disk. Closing that means a User= of its own, which
+# `uv run` in the dev tree makes a separate change. Minted and installed by
+# docs/ACL-CUTOVER.md, "Node credentials".
+LoadCredentialEncrypted=broker-brokeradmin:/etc/credstore.encrypted/broker-brokeradmin
 
 # This probe holds NO database credential. The outbox half of the old combined
 # probe stayed in archiver with the table it queries (archiver#193 D6), and with

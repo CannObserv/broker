@@ -17,28 +17,22 @@ for each password, the rule string reordered, ``-@admin`` folded into
 ``redis-server`` the parse tests already spawn, and the two servers are asked
 the same question.
 
-WHAT IT COSTS, AND WHO PAYS. ``brokeradmin`` needs ``+acl|getuser``. That is
-read-only, and it sits on the observer side of the observer/changer split that
-keeps ``+acl`` off it - the split is about *changing*. Not ``acladmin``:
-nothing runs as that user by design, its password is in
-``/etc/redis/broker-acl-passwords`` and in no env file, so a test using it
-would need either sudo or that password copied somewhere it must not go. The
-grant does expose each user's password *hash* to the probe's credential;
-those are unsalted sha256 of 40-character random secrets, and that credential
-already reads every key and every stream on the instance.
+WHO ASKS. ``acladmin``, since CannObserv/broker#52 - the operator, whose
+``+acl`` reads the ACL and changes it, and whose password the fixture decrypts
+from the node's credential store through ``sudo -n``. Until #52 this module ran
+as the probe's ``brokeradmin`` with ``+acl|getuser`` alone, because
+``acladmin``'s password was plaintext in a root-only file and reading it meant
+copying it somewhere it must not go. That put every user's digest behind the
+one credential ``exedev`` could read without sudo.
 
-**WHAT THIS CANNOT SEE: a user the tracked file never declared.**
-``+acl|getuser`` permits ``ACL GETUSER`` and nothing else - ``ACL USERS``,
-``ACL LIST``, ``ACL WHOAMI`` and ``ACL CAT`` are each denied separately,
-verified on 7.0.15 - so there is no way to enumerate. Every user named in the
-file is compared, and one that is *missing* live is caught by the nil reply,
-but an extra identity added live is invisible to a per-name lookup. Two tests
-close the halves of that which matter. One *in use* has a connection, and
-``CLIENT LIST`` reports the ``user=`` on each -
-``test_no_connection_authenticates_as_an_undeclared_user``. One *saved* is in
-the file the next restart loads, which the node can read -
-``test_the_saved_acl_declares_no_user_the_tracked_file_does_not``. What is left
-is an untracked user idle and never saved, and the next restart removes it.
+**AND IT CAN ENUMERATE, which the probe never could.** ``+acl|getuser`` permits
+``ACL GETUSER`` alone - ``ACL USERS`` and ``ACL LIST`` were each denied, verified
+on 7.0.15 - so an identity added live was invisible to a per-name lookup, and
+three tests covered what they could: one in use (``CLIENT LIST``'s ``user=``),
+one saved (the saved file), and one idle and never saved left to the next
+restart. ``test_the_live_acl_declares_no_user_the_tracked_file_does_not`` now
+asks ``ACL USERS`` directly; the other two stay, because each says something the
+enumeration does not - who is connected, and what a restart would load.
 
 **Nor does the in-memory comparison verify that ``ACL SAVE`` ran**: an
 ``ACL SETUSER`` mirrored into the tracked file but never saved passes it, then
@@ -69,6 +63,7 @@ the broker node, source the env first - and as
 ``set -a; . /etc/broker/.env; set +a``, never ``export $(cat ... | xargs)``.
 """
 
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -76,12 +71,14 @@ from pathlib import Path
 import pytest
 import redis as redis_pkg
 
+from src.broker.bus_health import BROKER_CREDENTIAL
 from tests.deploy.conftest import (
     ACL_FILE,
+    OPERATOR_CREDENTIAL,
     PASSWORD,
     RENDER_SCRIPT,
-    SERVICE_USERS,
     acl_server,
+    node_credential,
     parse_users,
 )
 from tests.deploy.test_installed_redis_config_matches_repo import (
@@ -116,20 +113,33 @@ NOT_COMPARED = "passwords"
 # and only ever by the render, which emits digests (CannObserv/broker#49).
 NODE_PASSWORDS = Path("/etc/redis/broker-acl-passwords")
 
-# Held on the node by digest alone: each one's plaintext belongs to its service
-# (or, for `citest`, to whatever CI target CannObserv/broker#53 settles on), and
-# nothing on this node authenticates as any of them (CannObserv/broker#49).
-# `observo` joined on 2026-09-24, once Observo held its credential
-# (CannObserv/broker#62); a service minted later is exempt here only for the
-# interval docs/ACL-CUTOVER.md step 1 describes, and by name.
-DIGEST_ONLY_USERS = (*SERVICE_USERS, "citest")
+# Every user, by digest alone. The services since CannObserv/broker#49 - each
+# one's plaintext belongs to its service, or for `citest` to whatever CI target
+# CannObserv/broker#53 settles on - and the operator users since
+# CannObserv/broker#52: `acladmin` and `brokeradmin` are authenticated from
+# encrypted credentials (NODE_CREDENTIALS), and `default`'s digest is of a value
+# nobody kept. A service minted later is exempt here only for the interval
+# docs/ACL-CUTOVER.md step 1 describes, and by name.
+DIGEST_ONLY_USERS = TRACKED_USERS
+
+# The users something on this node authenticates as, and the encrypted
+# credential each is authenticated from (CannObserv/broker#52).
+NODE_CREDENTIALS = {
+    "acladmin": OPERATOR_CREDENTIAL,
+    "brokeradmin": Path("/etc/credstore.encrypted") / BROKER_CREDENTIAL,
+}
+
+# `default`'s password until CannObserv/broker#52 - the one the aclfile-commented
+# -out recovery path substituted into redis.conf. Retired with the plaintext.
+RETIRED_REQUIREPASS_FILE = Path("/etc/redis/broker-password")
 
 # The grant this module needs, named here so the failure message can say it.
-REQUIRED_GRANT = "+acl|getuser"
+REQUIRED_GRANT = "+acl"
 
 # Appended to the throwaway copy of the node's saved ACL, the one user there
-# whose password is known: every saved user carries its real digest, and nothing
-# in this suite holds `acladmin`'s plaintext or should (CannObserv/broker#54).
+# whose password is known: every saved user carries its real digest
+# (CannObserv/broker#54). Kept though the suite can now decrypt `acladmin`: a
+# reader of its own leaves the throwaway server's `acladmin` exactly as saved.
 SAVED_READER = "pytest-saved-acl-reader"
 
 
@@ -239,9 +249,8 @@ def _getuser(client, user: str):
         # stops running when its grant is withdrawn is worth less than no test,
         # because the absence reads as a pass.
         pytest.fail(
-            f"the probe's credential cannot read the live ACL ({e}) - "
-            f"`ACL SETUSER brokeradmin {REQUIRED_GRANT}` as acladmin, then `ACL SAVE`, "
-            f"then mirror it into {ACL_FILE.name}"
+            f"acladmin cannot read the live ACL ({e}) - it has lost {REQUIRED_GRANT}, "
+            f"which only a restart onto {ACL_FILE.name} can give back"
         )
 
 
@@ -261,39 +270,6 @@ def live_rules(live_client) -> dict[str, dict | None]:
     contradict each other about the same broker.
     """
     return {user: _getuser(live_client, user) for user in TRACKED_USERS}
-
-
-# What an open restart window moves on a retired identity, and all it moves.
-# Measured: `ACL SETUSER default on` against the tracked file reports exactly
-# `default.enabled` and `default.flags`.
-_WINDOW_FIELDS = ("enabled", "flags")
-
-
-def _window_note(mismatches: list[str]) -> str:
-    """An open window is not drift, and mid-window is when this gets run.
-
-    ``docs/RESTART-WINDOW.md`` step 1d runs ``uv run pytest tests/deploy`` with
-    the window still open, and a window is opened by ``ACL SETUSER default on`` -
-    a deliberate, temporary divergence from a tracked file that says ``off``.
-    Left unexplained that reads as a finding at the worst moment, with the broker
-    just restarted and someone deciding whether to roll back.
-
-    The inverse is the valuable half: if it is still reported once the window is
-    closed, **the window was never closed**, and a broker left reachable by the
-    shared password is exactly what step 4 exists to prevent.
-    """
-    if not mismatches:
-        return ""
-    window_shaped = tuple(f"{user}.{field}" for user in RETIRED_USERS for field in _WINDOW_FIELDS)
-    if not all(m.startswith(window_shaped) for m in mismatches):
-        return ""
-    return (
-        "\nNOTE: that is the shape of an OPEN RESTART WINDOW and nothing else - a retired "
-        "identity is live `on`. docs/RESTART-WINDOW.md step 1d runs this suite with the "
-        "window still open, so mid-window this is expected. Close it "
-        "(`ACL SETUSER default off` then `ACL SAVE`, as acladmin) and re-run. If it "
-        "SURVIVES the close, the window was never closed - which is the finding, not this."
-    )
 
 
 def _version_note(throwaway: str, live_client) -> str:
@@ -332,8 +308,8 @@ def test_every_tracked_user_has_the_same_rules_on_the_live_broker(
         f"the running ACL differs from {ACL_FILE.name}:\n  "
         + "\n  ".join(mismatches)
         + "\nFix live as acladmin and mirror it here, in that order - the live broker is "
-        "what the services are actually talking to."
-        + _window_note(mismatches)
+        "what the services are actually talking to. A restart window no longer flips "
+        "`default` (CannObserv/broker#52), so a retired user live `on` is a finding."
         + _version_note(
             tracked_acl_broker("brokeradmin").info("server")["redis_version"], live_client
         )
@@ -352,9 +328,8 @@ def test_every_tracked_user_still_carries_a_password(live_rules, tracked_rules) 
     ``deploy/redis-acl.conf`` exists to prevent.
 
     ``default`` is included deliberately. It is ``off``, and ``off`` is a flag
-    that leaves the password intact precisely so the rollback
-    (``ACL SETUSER default on``) lands somewhere safe rather than enabling a
-    ``nopass`` user holding ``+@all``.
+    that leaves the password intact precisely so a flip to ``on`` lands
+    somewhere safe rather than enabling a ``nopass`` user.
 
     Over the *tracked* names, not the live ones - ``+acl|getuser`` cannot
     enumerate, so there is no such thing here as every live user.
@@ -524,14 +499,14 @@ def test_a_commented_plaintext_line_counts_as_plaintext(tmp_path, line, is_plain
     assert status == (0 if is_plaintext else 1)
 
 
-def test_the_node_holds_no_plaintext_for_a_service_user(node_passwords) -> None:
-    """The digest-only state #49 set up, pinned - by exit status, so no line is read.
+def test_the_node_holds_no_plaintext_for_any_user(node_passwords) -> None:
+    """The digest-only state #49 and #52 set up, pinned - by exit status, so no line is read.
 
     The comparison above cannot see it: a plaintext line renders the same digest
-    as the digest line it replaced, so a service's plaintext could come back -
-    by the mint recipe in ``docs/ACL-CUTOVER.md`` step 1, which writes all six,
-    or by re-minting ``citest`` for CannObserv/broker#53 - and every other test
-    would stay green.
+    as the digest line it replaced, so a plaintext could come back - by an old
+    mint recipe that writes one, by re-minting ``citest`` for
+    CannObserv/broker#53, or by an operator credential "kept handy" beside its
+    encrypted copy - and every other test would stay green.
     """
     found = []
     for user in DIGEST_ONLY_USERS:
@@ -540,10 +515,90 @@ def test_the_node_holds_no_plaintext_for_a_service_user(node_passwords) -> None:
         if status == 0:
             found.append(user)
     assert not found, (
-        f"{node_passwords} holds plaintext for {found}, live or commented out. Nothing on "
-        "this node authenticates as them, and a commented secret is not a rollback; "
-        "replace each line with __<USER>_PW_SHA256__=<its digest> "
-        '(deploy/README.md, "Changing a grant").'
+        f"{node_passwords} holds plaintext for {found}, live or commented out. The operator "
+        "users authenticate from /etc/credstore.encrypted/ and the rest from off the node, "
+        "and a commented secret is not a rollback; replace each line with "
+        '__<USER>_PW_SHA256__=<its digest> (deploy/README.md, "Changing a grant").'
+    )
+
+
+def test_the_retired_requirepass_file_is_gone(live_client) -> None:
+    """``/etc/redis/broker-password`` held ``default``'s plaintext for the
+    aclfile-commented-out recovery path (CannObserv/broker#52). That path mints
+    its own ``requirepass`` now, so the file has no reader."""
+    if _sudo("true").returncode:
+        pytest.skip("no passwordless sudo - not the broker node")
+    assert _sudo("test", "-e", str(RETIRED_REQUIREPASS_FILE)).returncode == 1, (
+        f"{RETIRED_REQUIREPASS_FILE} is back. Nothing reads it; `sudo shred -u` it."
+    )
+
+
+def _digest_of(value: str | None) -> str | None:
+    """sha256 of ``value``, in a frame of its own, so a plaintext is never a test's local."""
+    return None if value is None else hashlib.sha256(value.encode()).hexdigest()
+
+
+def test_each_node_credential_authenticates_its_user(live_client, live_rules) -> None:
+    """The encrypted credentials and the live ACL agree (CannObserv/broker#52).
+
+    ``test_the_nodes_passwords_file_renders_the_credentials_that_are_live``
+    holds the passwords file to the broker; nothing held the credentials the
+    node actually authenticates FROM, so a rotation that updated the ACL and not
+    the credential - or the other way round - would surface only as a probe
+    that cannot connect, or an operator who cannot. Compared by digest: the
+    plaintext is hashed where it is decrypted and goes no further.
+    """
+    findings = []
+    for user, path in sorted(NODE_CREDENTIALS.items()):
+        digest = _digest_of(node_credential(path))
+        if digest is None:
+            findings.append(f"{user}: {path} cannot be decrypted")
+        elif digest not in (live_rules[user] or {}).get("passwords", []):
+            findings.append(f"{user}: {path} is not a password the live user accepts")
+    assert not findings, "node credentials: " + "; ".join(findings)
+
+
+def test_requirepass_is_nobodys_password(live_client, live_rules) -> None:
+    """The value ``CONFIG GET requirepass`` returns authenticates no user.
+
+    Until CannObserv/broker#52 it was ``default``'s password, in three plaintext
+    places, and readable through the probe's ``+config|get`` (broker#50). Now it
+    is a random value minted for redis.conf and belonging to no one - both the
+    running value and the one in the file, which the next restart loads.
+    Compared by digest, the file's hashed inside ``sudo`` so its value never
+    crosses into pytest at all.
+    """
+    live_digests = {h for rules in live_rules.values() if rules for h in rules["passwords"]}
+    running = _digest_of(live_client.config_get("requirepass").get("requirepass"))
+    on_disk = _sudo(
+        "sh",
+        "-c",
+        "sed -n 's/^requirepass //p' /etc/redis/redis.conf | tr -d '\\n' | sha256sum",
+        text=True,
+    )
+    assert on_disk.returncode == 0, "cannot read /etc/redis/redis.conf through sudo -n"
+    findings = [
+        f"the {where} requirepass is a live user's password"
+        for where, digest in (("running", running), ("redis.conf", on_disk.stdout.split()[0]))
+        if digest in live_digests
+    ]
+    assert not findings, (
+        "; ".join(findings) + " - it is readable through CONFIG GET, so it must belong to "
+        'nobody. docs/ACL-CUTOVER.md, "requirepass belongs to no user".'
+    )
+
+
+def test_the_live_acl_declares_no_user_the_tracked_file_does_not(live_client) -> None:
+    """The enumeration the probe's ``+acl|getuser`` could never make.
+
+    ``ACL USERS`` lists every user in memory, idle or connected, saved or not -
+    the gap the ``CLIENT LIST`` and saved-file tests below each closed half of.
+    """
+    extra = sorted(set(live_client.acl_users()) - set(TRACKED_USERS))
+    assert not extra, (
+        f"the live broker has users {extra} that {ACL_FILE.name} does not declare - "
+        "added live, never mirrored. Mirror it with its reason, or `ACL DELUSER` it "
+        "as acladmin and `ACL SAVE`."
     )
 
 
@@ -656,18 +711,15 @@ def test_the_saved_acl_declares_no_user_the_tracked_file_does_not(node_saved_acl
 
 
 def test_no_connection_authenticates_as_an_undeclared_user(live_client) -> None:
-    """The half of "an untracked user" that a per-name lookup cannot reach.
+    """An untracked or retired identity that is *connected*.
 
-    ``+acl|getuser`` cannot enumerate, so a user added live and saved is
-    invisible to the comparison above. What it cannot hide is being *used*:
-    ``CLIENT LIST`` reports the ``user=`` on every connection, and
-    ``brokeradmin`` already holds ``+client|list`` - granted during the cutover
-    because ``flags=b`` is the only reliable way to tell a blocked consumer
-    from a client that merely ran a read once.
-
-    So this catches the untracked identity that is doing something, which is
-    the one that matters, and leaves the idle one to ``+acl|users`` if that is
-    ever granted.
+    ``ACL USERS`` above catches an untracked user whether or not it is used;
+    this catches the one doing something, which is the one that matters, and
+    it is the only check here that sees a retired identity still in use.
+    ``CLIENT LIST`` reports the ``user=`` on every connection - ``acladmin``
+    holds ``+client|list``, granted during the cutover because ``flags=b`` is
+    the only reliable way to tell a blocked consumer from a client that merely
+    ran a read once.
 
     **A retired identity counts as undeclared here**, and that is not a detail:
     ``default`` *is* declared - it has to be, or an aclfile makes it ``nopass``

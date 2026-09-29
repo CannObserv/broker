@@ -43,10 +43,10 @@ reads ``maxmemory`` at its own service start, warn-only; and the bus-health
 probe reports ``maxmemory 0`` as a finding every tick.
 
 ``/etc/redis/redis.conf`` itself is deliberately **not** compared here: it is
-``0640 redis:redis`` and holds the credential, so a test that could read it
-would need either root or a group membership that widens who can see the
-password. The live-config test asserts the same content through ``CONFIG GET``
-instead, which needs no privilege and catches more.
+``0640 redis:redis`` and holds ``requirepass``, which the install mints and
+which is nobody's password since CannObserv/broker#52 - but a value a test
+reads is a value a failure can print. The live-config test asserts the same
+content through ``CONFIG GET`` instead, which catches more.
 """
 
 import re
@@ -63,7 +63,8 @@ REPO_WAIT_SCRIPT = DEPLOY / "wait-for-tailnet-addr.sh"
 INSTALLED_DROPIN = Path("/etc/systemd/system/redis-server.service.d/broker.conf")
 INSTALLED_WAIT_SCRIPT = Path("/usr/local/sbin/wait-for-tailnet-addr.sh")
 
-# The placeholder the install substitutes from /etc/redis/broker-password.
+# The placeholder the install substitutes with a value minted on the spot and
+# kept nowhere else (CannObserv/broker#52; deploy/README.md).
 REQUIREPASS_PLACEHOLDER = "__REQUIREPASS__"
 
 _SIZE_UNITS = {
@@ -129,10 +130,11 @@ def test_tracked_config_sets_an_explicit_nonzero_maxmemory() -> None:
 
 
 def test_tracked_config_carries_no_secret() -> None:
-    """The tracked copy is templated; the value comes from
-    /etc/redis/broker-password at install time. A real password committed here
-    would be readable by everyone with repo access, which is a strictly larger
-    set than everyone with root on the broker."""
+    """The tracked copy is templated; the value is minted at install time. It is
+    nobody's password since CannObserv/broker#52, but it is still what governs
+    the last-resort restart with ``aclfile`` commented out - so a value
+    committed here would be that path's password for everyone with repo access,
+    a strictly larger set than everyone with root on the broker."""
     assert parse_directives(REPO_REDIS_CONF.read_text())["requirepass"] == REQUIREPASS_PLACEHOLDER
 
 

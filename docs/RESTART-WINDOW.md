@@ -18,24 +18,27 @@ The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
 > before-snapshot, `default off`. Zero `DB index is out of range` on the
 > restart, every group at its position, 2 seconds of downtime.
 >
-> Consequence for every command below: `default` was the identity of the first
-> window and **no longer authenticates between windows**. Read as `brokeradmin`,
-> change ACLs as `acladmin`, and for anything needing
-> `CONFIG SET`, `BGREWRITEAOF` or a shutdown, open the window by re-enabling
-> `default` and close it by disabling it again - step 4 of [ACL-CUTOVER.md](ACL-CUTOVER.md), both directions.
+> `default` was the identity of the first window. Since CannObserv/broker#52
+> it is a tombstone - `off`, no grants, a password nobody holds - and **every
+> command below runs as `acladmin`**, which holds the window's commands by name
+> (`SAVE`, `BGREWRITEAOF`, `INFO`, `CONFIG SET`, `SELECT`) beside `+acl`. There
+> is no window to open or close; a restart is just a restart.
 >
 > ```bash
-> pw() { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
-> # $1 is the ACL user. The password reaches redis-cli's ENVIRONMENT and never
-> # its argv - CannObserv/broker#47, and the reason no line here says `-u`.
+> # $1 is the ACL user: acladmin, or brokeradmin (the probe's, INFO/SCAN/EXISTS/
+> # XINFO/XRANGE only). Each password is a systemd-creds credential encrypted to
+> # this node, decrypted by root on demand - no prompt, and no plaintext at rest
+> # (CannObserv/broker#52). It reaches redis-cli's ENVIRONMENT and never its
+> # argv - CannObserv/broker#47, and the reason no line here says `-u`.
+> cred() { sudo systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
 > rcli() { local u=$1; shift
->          REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+>          REDISCLI_AUTH="$(cred "$u")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
 > ```
 >
-> `rcli brokeradmin` reads, sweeps and diagnoses; `rcli acladmin` changes ACLs
-> and nothing else; `rcli default` is window-only and is refused while `default`
-> is off. `REDISCLI_AUTH` emits no "may not be safe" warning, so
-> `--no-auth-warning` comes off with the URL - verified on a scratch 7.0.15.
+> `rcli acladmin` is the operator: reads, diagnoses, sweeps a dead-letter queue,
+> changes ACLs, runs a window. `REDISCLI_AUTH` emits no "may not be safe"
+> warning, so `--no-auth-warning` comes off with the URL - verified on a scratch
+> 7.0.15.
 
 Restarting `redis-server` on `co-broker` disconnects every participant, so
 it is a cohort-wide event rather than a maintenance detail. This window carries
@@ -129,35 +132,32 @@ done on 2026-09-08, and `FLUSHDB` is now sitting in the AOF.** Under
 is gone. Only entries appended *after* the flush survive.
 
 So the two halves of R4's fix are hostile in this order and safe in the other.
-Purge the history first. `BGREWRITEAOF` belongs to no user but `default`, so
-this is where the window is opened - `ACL SETUSER default on` as `acladmin`,
-step 4's rollback in [ACL-CUTOVER.md](ACL-CUTOVER.md) - and that step is repeated to close it once the verification in
-1d is done.
+Purge the history first. On 2026-09-10 `BGREWRITEAOF` belonged to no user but
+`default`, so this is where that window was opened - `ACL SETUSER default on` as
+`acladmin` - and closed again after 1d. Since CannObserv/broker#52 `acladmin`
+holds it, and `default` is a tombstone that an `on` would not help.
 
-**What that `on` enables is a rotatable credential, and rotating it is four
-writes.** `default` holds every command no other user does, so opening a window
-is the same act as making the cluster's break-glass live again - and that
-credential is the one thing here that must be assumed to leak, because every
-service held it before the 2026-09-10 cutover. It did leak, into another host's
-journald (CannObserv/archiver#251), and CannObserv/broker#46 rotated it on
-2026-09-23. **There is no schedule; the trigger is exposure.** The four writes -
-the live ACL by digest, `/etc/redis/broker-acl-passwords`,
-`/etc/redis/broker-password` and `redis.conf`'s `requirepass` - and why missing
-any one of them lets a restart silently revert part of the rotation, are
-[ACL-CUTOVER.md](ACL-CUTOVER.md), *Rotating `__DEFAULT_PW__`*. Rotate **before**
-opening a window whose reason is that something leaked, not after.
+**Opening a window used to be the same act as making the cluster's break-glass
+live again**, and that credential - `default`'s, the one every service held
+before the cutover - leaked into another host's journald
+(CannObserv/archiver#251) and was rotated in four writes by
+CannObserv/broker#46. #52 retired it instead: the window's commands moved to
+`acladmin`, whose password is an encrypted credential on this node and nowhere
+in plaintext, and `default`'s became the digest of a value nobody kept. If
+`acladmin`'s is exposed, rotate it before the window, not after:
+[ACL-CUTOVER.md](ACL-CUTOVER.md), *Node credentials*.
 
 The rewrite destroys the AOF history, which is what recovered the incident
 recorded there. That is acceptable now that broker#4 ships an hourly snapshot to
 `co-gcs-broker-backup`, with one step first. The backup job ships whatever
 `dump.rdb` is, and only a save point rewrites that file, so a snapshot shipped
-by hand is up to an hour old unless you take the save yourself - `default` is
-on at this point, and `SAVE` is synchronous and sub-second on this dataset.
+by hand is up to an hour old unless you take the save yourself - `acladmin`
+holds `SAVE`, and it is synchronous and sub-second on this dataset.
 The object is named by the save's own time, so the run reports `uploaded` and
 the journal line's `snapshot_at` is the minute just gone:
 
 ```bash
-rcli default SAVE                                          # -> OK
+rcli acladmin SAVE                                         # -> OK
 sudo systemctl start broker-backup.service
 journalctl -u broker-backup -n 1 -o cat --no-pager         # THIS run's line, not the state file:
 #   "message": "Backup uploaded: gs://co-gcs-broker-backup/co-broker/<now>.rdb.gz", ..., "snapshot_at": "<now>"
@@ -175,10 +175,10 @@ Now the rewrite:
 
 ```bash
 sudo ls /var/lib/redis/appendonlydir/                      # note the base number, <n>
-rcli default BGREWRITEAOF                                  # -> Background append only file rewriting started
-while rcli default INFO persistence | tr -d '\r' \
+rcli acladmin BGREWRITEAOF                                 # -> Background append only file rewriting started
+while rcli acladmin INFO persistence | tr -d '\r' \
       | grep -E '^aof_rewrite_(in_progress|scheduled):' | grep -qv ':0$'; do sleep 1; done
-rcli default INFO persistence \
+rcli acladmin INFO persistence \
     | grep -E '^aof_(rewrites|rewrite_scheduled|rewrite_in_progress|last_bgrewrite_status):'
 #   aof_rewrites:1                  <- a counter, up by one from what it was
 #   aof_rewrite_scheduled:0
@@ -198,8 +198,9 @@ than the flush.
 **Do not skip the verification.** If `aof_rewrites` did not go up by one, or the
 base file's number did not advance, the landmine is still armed and the next
 step is the one that steps on it. A `NOPERM` or `WRONGPASS` on the
-`BGREWRITEAOF` line means the window was never opened - `default` is still
-off - and everything after it printed the never-ran defaults.
+`BGREWRITEAOF` line means the rewrite never ran - `acladmin` has lost the grant,
+or `cred` decrypted nothing - and everything after it printed the never-ran
+defaults.
 
 **As executed, 2026-09-10 20:06 UTC.** The AOF held **61 `SELECT` commands
 naming db 0, 14 and 15** plus one `FLUSHDB` - db14 as well as the db15 this
@@ -291,10 +292,10 @@ journalctl -u redis-server --no-pager | grep -i 'tailnet address'   # only after
 # Anonymous must still be refused.
 redis-cli PING                                   # -> NOAUTH
 
-# `pw` and `rcli` as defined at the top of this file; `default` is on at this point.
-rcli default SELECT 15                           # -> ERR DB index is out of range
-rcli default SELECT 1                            # -> ERR too: `databases 1` means db0 alone
-rcli default SELECT 0                            # -> OK
+# `cred` and `rcli` as defined at the top of this file.
+rcli acladmin SELECT 15                          # -> ERR DB index is out of range
+rcli acladmin SELECT 1                           # -> ERR too: `databases 1` means db0 alone
+rcli acladmin SELECT 0                           # -> OK
 
 # The data, against the snapshot taken before the window. Lengths alone are not
 # enough - entries-added is the counter that tells a trim from a wipe.
@@ -302,24 +303,21 @@ for s in info.changes info.registry info.watch-status content.fetch \
          content.fetch-policy content.blobs content.revisions \
          content.artifacts content.replicate content.fetch.dlq; do
     printf '%-22s XLEN=%s entries-added=%s\n' "$s" \
-        "$(rcli brokeradmin XLEN $s)" \
-        "$(rcli brokeradmin XINFO STREAM $s 2>/dev/null | grep -A1 entries-added | tail -1)"
+        "$(rcli acladmin XLEN $s)" \
+        "$(rcli acladmin XINFO STREAM $s 2>/dev/null | grep -A1 entries-added | tail -1)"
 done
 for s in content.fetch content.blobs content.revisions content.artifacts content.replicate; do
-    echo "== $s"; rcli brokeradmin XINFO GROUPS $s
+    echo "== $s"; rcli acladmin XINFO GROUPS $s
 done
 
 set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy -q                    # the live-config test now covers both new directives
 ```
 
-**Two failures are expected here and only here.** The window is open, which
-means `default` is live `on` against a tracked file that says `off`, so
-`test_every_tracked_user_has_the_same_rules_on_the_live_broker` reports
-`default.enabled` and `default.flags` - exactly those two lines, on no other
-user, and the failure message says so itself. Re-run the suite after the window
-closes; **if those two survive the close, the window was never closed**, and
-that is a real finding rather than noise.
+**No failure is expected.** Until CannObserv/broker#52 two were - `default`
+was live `on` for the window against a tracked file that says `off` - and they
+were the finding if they survived the close. There is no window state now, so
+`default` live `on` is drift, whenever it is seen.
 
 **Read the diff, do not eyeball the numbers.** The two LWW streams move on their
 own - `info.watch-status` grows on the `*/5` republish and
@@ -380,7 +378,7 @@ data*).
 | `check_redis_floor.sh` says `could not read redis_version` | missing `+info`; warn-only, so nothing else reports it | `ACL SETUSER <user> +info` |
 | `AuthenticationError` on connect | the service's own credential is wrong | check the URL's username half, not just the password |
 | `ERR DB index is out of range` from a test suite | `databases 1` working as intended | fix the test's URL; do not widen `databases` |
-| `rcli default -n 15 PING` prints that error **and then `PONG`** | redis-cli falls back to db0 and carries on; redis-py raises instead | not a fault - but never verify `databases 1` by selecting the database at connect time, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
+| `rcli acladmin -n 15 PING` prints that error **and then `PONG`** | redis-cli falls back to db0 and carries on; redis-py raises instead | not a fault - but never verify `databases 1` by selecting the database at connect time, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
 | Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u redis-server` |
 | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
 | `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
@@ -404,10 +402,10 @@ data*).
 - **Do not do step 4 before steps 2 and 3.** `user default off` with any client
   still on `default:` locks that client out. `CLIENT LIST` grouped by `user=`
   is the check, and it showed zero `default` connections before the flip.
-- **Do not start a restart window with `default` still `off`.** Nothing else
-  can `CONFIG SET save ""` when a restart comes up wrong, and the on-disk copies
-  are being overwritten by the minute while someone finds `acladmin`'s
-  password. Re-enable before the restart, disable after the verification.
+- **Do not re-enable `default` for a window.** Until CannObserv/broker#52 that
+  was the opening move, because nothing else could `CONFIG SET save ""` when a
+  restart came up wrong. `acladmin` can, and `default` grants nothing: `on`
+  only makes an identity nobody can use.
 - **Do not schedule this window alongside any service's own VM move.** R6
   generalised: one moving part at a time.
 

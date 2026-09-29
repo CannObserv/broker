@@ -129,12 +129,19 @@ anywhere.
 
 | Secret | Path on the node | Mode | Why the value matters |
 |---|---|---|---|
-| the Redis `requirepass` | `/etc/redis/broker-password` | 0400 root | also `default`'s ACL password; the window-only identity |
-| the ACL credentials - plaintext for the operator users, digest-only for the five service users (broker#49; `observo` since broker#62) | `/etc/redis/broker-acl-passwords` | 0400 root | **the services carry the plaintext in their own env files** - the digest is enough to re-admit them, so a rebuild must reuse the same lines or update four services on four hosts |
-| the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`brokeradmin`); `GOOGLE_APPLICATION_CREDENTIALS` (the wheelhouse reader) is the operator's, for the sync, and the probe's unit unsets it |
+| the ACL digests - every line a digest since broker#52 (the services' since broker#49; `observo` since broker#62) | `/etc/redis/broker-acl-passwords` | 0400 root | **not secret, but not reproducible**: the services carry the plaintext in their own env files, and their digests are what re-admits them - so a rebuild must reuse these lines or update four services on four hosts. The `acladmin`, `brokeradmin` and `default` lines are replaced on a rebuild, below |
+| the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`redis://brokeradmin@...`, the user alone); `GOOGLE_APPLICATION_CREDENTIALS` (the wheelhouse reader) is the operator's, for the sync, and the probe's unit unsets it |
 | the wheelhouse reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | the wheelhouse sync needs it; `uv sync` needs the wheelhouse |
 | the co-status check-in | `/etc/broker/status.env` | 0400 root | the monitor id is node-agnostic; the same monitor continues |
 | the backup writer | `/etc/broker/backup.env` + `/etc/broker/co-broker-backup.json` | 0400 root | also what the **restore** reads with - `objectViewer` lists and downloads |
+
+**Not on the list, deliberately** (CannObserv/broker#52): `requirepass`, which the
+install mints and which authenticates nobody; `default`'s password, which is the
+digest of a value nobody kept; and the node credentials in
+`/etc/credstore.encrypted/`, which are encrypted to the old node's host key and
+could not be decrypted here. A rebuild mints `acladmin` and `brokeradmin` fresh
+and a new tombstone digest for `default` - [ACL-CUTOVER.md](ACL-CUTOVER.md),
+*Node credentials* - because nothing off the node authenticates as any of them.
 
 Plus the tailnet: the services connect to `broker` by name, so the new node
 has to join as `broker` under `tag:broker`, and the old one has to be removed
@@ -155,9 +162,11 @@ sudo ls -la /var/lib/redis        # a default-config dump.rdb is fine; no append
 ### 2. The repo, the config, the secrets
 
 Everything in `deploy/README.md`'s *Install* section, in order: restore the
-secrets at the paths and modes above, append `redis.conf.broker` with the
-password substituted, render and install the ACL file, the drop-in and the
-wait script, the units, then the memory protection (broker#21). Then:
+secrets at the paths and modes above, mint the two node credentials and their
+digest lines (ACL-CUTOVER.md, *Node credentials*), append `redis.conf.broker`
+with a freshly minted `requirepass`, render and install the ACL file, the
+drop-in and the wait script, the units, then the memory protection (broker#21).
+Then:
 
 ```bash
 set -a; . /etc/broker/.env; set +a
@@ -190,25 +199,25 @@ sudo systemctl start redis-server
 ### 4. Verify the positions, not the key count
 
 ```bash
-pw()   { sudo sed -n "s/^__${1}_PW__=//p" /etc/redis/broker-acl-passwords; }
+cred() { sudo systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
 rcli() { local u=$1; shift
-         REDISCLI_AUTH="$(pw "${u^^}")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+         REDISCLI_AUTH="$(cred "$u")" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
 
 journalctl -u redis-server -n 20 -o cat --no-pager | grep -E 'loaded from base file|DB index'
-rcli brokeradmin INFO keyspace                      # db0:keys=N,expires=M - the rule is below
+rcli acladmin INFO keyspace                         # db0:keys=N,expires=M - the rule is below
 
 for s in info.changes info.registry info.watch-status content.fetch content.fetch-policy \
          content.blobs content.revisions content.artifacts content.replicate; do
-    printf '%-22s %s\n' "$s" "$(rcli brokeradmin XLEN "$s")"
+    printf '%-22s %s\n' "$s" "$(rcli acladmin XLEN "$s")"
 done
 for s in content.fetch content.revisions content.artifacts content.replicate content.blobs; do
-    echo "== $s"; rcli brokeradmin XINFO GROUPS "$s"    # last-delivered-id, pending, lag
+    echo "== $s"; rcli acladmin XINFO GROUPS "$s"       # last-delivered-id, pending, lag
 done
 
 # Only where a `pending` count above is non-zero and does not fall - any stream
 # and group from that loop. Per entry: who holds it, its idle time, and how many
 # times it has been delivered, which no XINFO reply carries (CannObserv/broker#32):
-rcli brokeradmin XPENDING content.fetch replicator.fetch - + 10
+rcli acladmin XPENDING content.fetch replicator.fetch - + 10
 ```
 
 `DB loaded from base file appendonly.aof.1.base.rdb` in the journal is the
@@ -223,7 +232,7 @@ second after start the count can read higher than it will settle at. After an
 outage longer than a guard's TTL, `expires` is 0, and that is correct:
 replicator refetches those commands unguarded, which is what a guard expiring
 means. The checks that must be exact are the `XLEN` and `XINFO GROUPS` lines.
-(`DBSIZE` is not granted to `brokeradmin`, and is not needed.)
+(`DBSIZE` is granted to no user, and is not needed.)
 
 ### 5. What the participants see
 

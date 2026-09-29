@@ -51,8 +51,9 @@ the deltas since" - a consumer contract, not operator housekeeping. It is
 capped on every publish via `BusPublish.maxlen` (`ARCHIVER_REGISTRY_STREAM_MAXLEN`,
 default 50k, sized from key count × sets retained - never from the
 `info.changes` number) and **`XTRIM`med by nobody** - not archiver's drain loop,
-and not a person at a `redis-cli`: `brokeradmin` trims `*.dlq` keys only
-(CannObserv/broker#34). Snapshot period: `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL`,
+and not a person at a `redis-cli`: the operator's `acladmin` trims `*.dlq`
+keys only (CannObserv/broker#34, #52), and the probe's `brokeradmin` trims
+nothing. Snapshot period: `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL`,
 default 3600s; operator republish-now: `POST
 /api/v1/tools/republish-registry-announcements`.
 

@@ -68,17 +68,26 @@ silently corrupts values.
   are pinned by `tests/deploy/test_bus_health_units.py`. `XINFO GROUPS` is
   read-only introspection; joining a group would silently swallow another
   service's messages.
-- **A `brokeradmin` grant nothing issues names its caller.** That credential is
-  three callers - the probe, an operator at a `redis-cli`, and the deploy tests
-  - so a command `src/broker/` never issues is not residue by default: `+xlen`
-  (broker#13) and `+xpending` (broker#32, after #29) are both kept deliberately.
-  The stanza above the rule in `deploy/redis-acl.conf` has to say which caller,
-  and `tests/deploy/test_redis_acl.py` fails when one does not. Record it or cut
-  it; do not leave it to read as residue. Archiver's DLQ `+xdel` names its
-  caller the same way (archiver#238's triage). The inverse is withheld on
-  purpose: `brokeradmin`'s `+xtrim` stops at `~*.dlq`, the only thing keeping an
-  operator off a **Never XTRIMmed** stream (broker#34). Do not widen it in an
-  incident.
+- **`brokeradmin` is the probe's, and holds only what `src/broker/` issues.**
+  Since broker#52 the operator and the deploy tests are `acladmin`, so the probe
+  is `brokeradmin`'s one caller and `tests/deploy/test_redis_acl.py` fails any
+  grant the source does not issue - cut it, or give it to `acladmin`. The
+  probe's credential is the likeliest to leak, so it is the one that can change
+  nothing. Archiver's DLQ `+xdel` still names its caller in its stanza
+  (archiver#238's triage). The inverse is withheld on purpose: `acladmin`'s
+  `+xtrim` stops at `~*.dlq`, the only thing keeping an operator off a **Never
+  XTRIMmed** stream (broker#34). Do not widen it in an incident; `+acl` lets it,
+  which is why the rule is here.
+- **No Redis password in plaintext at rest on this node** (broker#52). Every
+  line of `/etc/redis/broker-acl-passwords` is a digest; `acladmin` and
+  `brokeradmin` authenticate from `systemd-creds` credentials under
+  `/etc/credstore.encrypted/` (`cred`/`rcli` in `docs/RESTART-WINDOW.md`, no
+  operator prompt); `default` is a tombstone - `off`, `-@all`, the digest of a
+  value nobody kept - and a window never re-enables it; `requirepass` belongs
+  to no user. Mint and rotate: `docs/ACL-CUTOVER.md`, *Node credentials*.
+  `tests/deploy/test_live_acl_matches_tracked_acl.py` pins each on the node.
+  Root can still decrypt, and `exedev` has sudo: the rule keeps secrets out of
+  files that get copied or read into context, not away from root.
 - **`ACL LOG` is evidence: never reset it, and name every denial you cause.**
   Check a live read against the user's line first. A denial you or a peer
   cause gets a row in `deploy/redis-acl.conf`'s *Denials that are not faults*,
@@ -211,10 +220,15 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
   guarded by `tests/deploy/test_runbook_credentials.py`) and #46 (the `default`
-  credential rotated, `docs/ACL-CUTOVER.md`,
-  *Rotating `__DEFAULT_PW__`*). Neither is a tracked-file change; both live
-  files are templated and the value is `NOT_COMPARED` in
-  `tests/deploy/test_live_*.py`.
+  credential rotated). Neither is a tracked-file change; both live files are
+  templated and the value is `NOT_COMPARED` in `tests/deploy/test_live_*.py`.
+- CannObserv/broker#52 - the operator credentials off the node's disk,
+  2026-09-29, with no operator prompt: `default` a tombstone and its window
+  commands `acladmin`'s; `brokeradmin` probe-only; `citest` off (#53 decides
+  its fate); `acladmin`/`brokeradmin` rotated into encrypted credentials; every
+  passwords-file line a digest; `/etc/redis/broker-password` shredded;
+  `requirepass` nobody's. Left open on purpose: root and `exedev`'s sudo, and
+  the probe's decrypted copy readable by `exedev` for the second a tick runs.
 - CannObserv/watcher#319 - the notice for the other end of #44's mirror:
   `RETAINED_FULL_SETS` and the `*/5` republish period are copied into
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*

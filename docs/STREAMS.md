@@ -187,9 +187,9 @@ Measured on this broker 2026-09-10: **37 keys on `db0`, 27 of them dedupe keys
 with TTLs and 10 streams without**, average TTL remaining ~13.5 h; every dedupe
 key under the `fetch` segment, the `replicate` segment empty. Replicator's own
 audit the day before found the same 27 with TTLs spanning 534 s to 84,713 s.
-The counts come from `INFO keyspace` and `SCAN MATCH`, which is all `brokeradmin`
-holds - it has no `+ttl` and no `+type`, deliberately, and the average is the
-one `INFO` reports.
+The counts come from `INFO keyspace` and `SCAN MATCH`, which is all the probe's
+`brokeradmin` and the operator's `acladmin` hold for this - neither has `+ttl`
+or `+type`, deliberately, and the average is the one `INFO` reports.
 
 ## Who drains a DLQ
 
@@ -283,9 +283,11 @@ removes is in the dump. The same hazard is why archiver's triage disposes by
 
 **For `*.dlq` keys only.** Two rows above say **Never XTRIMmed** -
 `content.replicate` and `info.registry` - and this procedure pointed at either
-is refused: `brokeradmin`, the credential it runs as, holds `+xtrim` on
-`~*.dlq` and nothing else (CannObserv/broker#34). The refusal is the backstop;
-the reasons are in the rows.
+is refused: `acladmin`, the credential it runs as since CannObserv/broker#52,
+holds `+xtrim` on `~*.dlq` and nothing else (CannObserv/broker#34; it was
+`brokeradmin`'s until #52). The refusal is the backstop against the incident
+reflex - `acladmin` could lift it with its own `+acl`, and must not; the reasons
+are in the rows.
 
 Worked example, the CannObserv/archiver#162 drain (2026-08-19): 110 entries, every one a
 `content_fetch` command against `example.com`, all inside one 18-minute window on
