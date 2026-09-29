@@ -274,6 +274,9 @@ sudo sh -c 'R=$(LC_ALL=C tr -dc "A-Za-z0-9" < /dev/urandom | head -c 40); export
     awk "/^requirepass / { sub(/__REQUIREPASS__/, ENVIRON[\"R\"]) } 1" deploy/redis.conf.broker >> /etc/redis/redis.conf'
 sudo grep -c '^requirepass [A-Za-z0-9]\{40\}$' /etc/redis/redis.conf   # -> 1
 
+# On a rebuild, the passwords file comes first, from the bucket: docs/RECOVERY.md
+# step 2 (`restore --digests`, broker#72). It refuses a file that exists, and the
+# mint below appends, so the mint must not run before it.
 # The two node credentials, minted into systemd's store, and their digest lines
 # in the passwords file - before the ACL render: docs/NODE-CREDENTIALS.md,
 # "On a new or rebuilt node". /etc/broker/.env's BROKER_REDIS_URL names the user alone.
