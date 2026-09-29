@@ -36,10 +36,15 @@ ProtectHome=read-only
 PrivateTmp=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
-# Reads /etc/redis/broker-acl-passwords on purpose (CannObserv/broker#72), so the
-# two places a usable credential lives are taken away: the node users'
-# encrypted credentials and the probe's env. '-': absent is no failure.
-InaccessiblePaths=-/etc/credstore.encrypted -/etc/broker/.env
+# Reads /etc/redis/broker-acl-passwords on purpose (CannObserv/broker#72), so
+# what it has no use for is taken away. /etc/broker is an allowlist: an empty
+# read-only tmpfs with the writer key bound back in, so the probe's env, the
+# wheelhouse reader, the co-status check-in and any file added later are
+# hidden. backup.env is read by systemd before the namespace exists. The node
+# users' encrypted credentials are hidden too; '-': absent is no failure.
+TemporaryFileSystem=/etc/broker:ro
+BindReadOnlyPaths=/etc/broker/co-broker-backup.json
+InaccessiblePaths=-/etc/credstore.encrypted
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

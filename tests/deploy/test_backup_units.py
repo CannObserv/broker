@@ -63,13 +63,25 @@ def test_service_ships_the_acl_digests_from_the_passwords_file() -> None:
     assert "--acl-passwords /etc/redis/broker-acl-passwords" in exec_start
 
 
-def test_service_cannot_read_the_credentials_it_has_no_use_for() -> None:
+def test_service_sees_only_its_own_key_under_etc_broker() -> None:
     """Root with ``CAP_DAC_READ_SEARCH`` reads anything, and since broker#72 it
-    reads /etc/redis on purpose. The two places a usable credential lives are
-    taken away: the node users' encrypted credentials and the probe's env.
-    ``-``: absent is no failure, only unreadable is the point."""
-    (line,) = _directive(REPO_SERVICE.read_text(), "InaccessiblePaths")
-    assert set(line.split()) == {"-/etc/credstore.encrypted", "-/etc/broker/.env"}
+    reads /etc/redis on purpose. /etc/broker holds other identities' keys - the
+    probe's env, the wheelhouse reader, the co-status check-in - so it is an
+    allowlist, not a blocklist: an empty read-only tmpfs over the directory with
+    the writer key bound back in, and any file added later is hidden by default.
+    backup.env is read by systemd before the namespace exists, so it needs no bind.
+    """
+    text = REPO_SERVICE.read_text()
+    assert _directive(text, "TemporaryFileSystem") == ["/etc/broker:ro"]
+    assert _directive(text, "BindReadOnlyPaths") == ["/etc/broker/co-broker-backup.json"]
+
+
+def test_service_cannot_read_the_node_credentials() -> None:
+    """The node users' encrypted credentials. ``-``: absent is no failure,
+    only unreadable is the point."""
+    assert _directive(REPO_SERVICE.read_text(), "InaccessiblePaths") == [
+        "-/etc/credstore.encrypted"
+    ]
 
 
 def test_service_config_is_required_not_optional() -> None:
