@@ -154,3 +154,5 @@ AGENTS.md :: tighten :: docs/SKILLS.md   vendored agent skills: inventory, selec
 AGENTS.md :: tighten :: docs/SOCRATICODE.md
 AGENTS.md :: tighten :: semantic search: tools, prefetch, graph health, index scope
 docs/STREAMS.md :: retarget :: answered under *Who drains a DLQ* below.
+docs/STREAMS.md :: disproven :: once its persist loop is enabled (CannObserv/broker#64), Observo will write
+docs/STREAMS.md :: disproven :: deletion grant, and for five of the six queues below the named drainer could

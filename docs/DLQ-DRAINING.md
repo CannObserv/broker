@@ -15,7 +15,7 @@ Three roles, and no two of them are reliably the same service:
   on that topic; the `DLQ` column of [STREAMS.md](STREAMS.md) names it per stream. Archiver writes
   `content.revisions.dlq` and `content.artifacts.dlq`, Replicator writes
   `content.fetch.dlq` and `content.replicate.dlq`, and `content.persist.dlq`
-  once its persist loop is enabled (CannObserv/broker#64), Observo will write
+  since its persist loop went live (CannObserv/broker#64), Observo will write
   `content.process.dlq` and Watcher `content.derived.dlq` once the processing
   pair's consumers ship (CannObserv/broker#62), and the groupless config/state
   streams can write none at all.
@@ -34,7 +34,7 @@ Three roles, and no two of them are reliably the same service:
   `content.blobs`. The consumer-drains rule needs a far smaller grant: every
   service already holds `~<its own topic>.dlq`. **It is not "no extra grant",
   which is what this said until CannObserv/broker#12** - a key pattern is not a
-  deletion grant, and for five of the six queues below the named drainer could
+  deletion grant, and for five of the six queues then assigned the named drainer could
   write its queue and not empty it. Each drainer now holds a **selector**,
   `(+xdel ~<its own>.dlq)`, which is the only ACL grammar that scopes a command
   to a pattern; the root permission set never holds `+xdel`, so the grant cannot

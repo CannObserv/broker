@@ -454,7 +454,7 @@ def documented_never_xtrimmed() -> frozenset[str]:
 
     Read off ../docs/STREAMS.md for the reason the producer column is: that
     table is where an operator looks before reaching for the `XTRIM MINID`
-    runbook printed below it, so it is the copy that has to be right. Two
+    runbook in ../docs/DLQ-DRAINING.md, so it is the copy that has to be right. Two
     reasons put a stream here, and they are different in kind. `content.replicate`
     is a command stream, and a cap deletes commands its group has not been
     delivered. `info.registry` is capped - on every publish, by its producer -
