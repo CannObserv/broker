@@ -659,6 +659,11 @@ and only then is it enabled.
 a snapshot. It holds **no Redis credential**: the server rewrites `dump.rdb`
 atomically at its `save` points, so the file is the interface.
 
+Each run also ships the service users' ACL digests, `<run time>.digests`, so a
+rebuilt node re-admits every service without reissuing a password (broker#72).
+A plaintext line in the passwords file fails the run; a digest is not a
+credential. [`../docs/RECOVERY.md`](../docs/RECOVERY.md), *The backup*.
+
 The probe reads the job's state file (`/var/lib/broker-backup/state.json`)
 every tick and reports, in order of precedence: never completed a run; the last
 attempt failed (with the error); the last success older than three hours. The
