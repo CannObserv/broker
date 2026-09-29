@@ -264,12 +264,14 @@ re-dumping itself every ten minutes. Read those before the `XRANGE` below;
 re-dump only if you want the entries in `redis-cli`'s own framing.
 
 ```bash
-redis-cli XLEN content.fetch.dlq                    # what you are about to delete
-redis-cli XINFO STREAM content.fetch.dlq | grep -A1 last-generated-id   # the boundary, FIRST
-redis-cli --no-raw XRANGE content.fetch.dlq - <last-generated-id> > /var/tmp/fetch-dlq-$(date +%F).txt
+# `cred` and `rcli` as defined at the top of RESTART-WINDOW.md - the operator,
+# acladmin; bare redis-cli is NOAUTH, and a password on its argv is the wrong fix.
+rcli acladmin XLEN content.fetch.dlq                # what you are about to delete
+rcli acladmin XINFO STREAM content.fetch.dlq | grep -A1 last-generated-id   # the boundary, FIRST
+rcli acladmin --no-raw XRANGE content.fetch.dlq - <last-generated-id> > /var/tmp/fetch-dlq-$(date +%F).txt
 # read it: every payload residue, or is a real permanent failure hiding in there?
-redis-cli XTRIM content.fetch.dlq MINID <last-generated-id, +1ms>
-redis-cli XLEN content.fetch.dlq                    # -> 0, or what landed since the boundary
+rcli acladmin XTRIM content.fetch.dlq MINID <last-generated-id, +1ms>
+rcli acladmin XLEN content.fetch.dlq                # -> 0, or what landed since the boundary
 ```
 
 `XTRIM MINID`, not `DEL`: the boundary confines the deletion to the entries you
@@ -281,9 +283,9 @@ first, a later entry carries a higher id and survives, and everything the trim
 removes is in the dump. The same hazard is why archiver's triage disposes by
 `XDEL` of named ids (CannObserv/archiver#238).
 
-**For `*.dlq` keys only.** Two rows above say **Never XTRIMmed** -
-`content.replicate` and `info.registry` - and this procedure pointed at either
-is refused: `acladmin`, the credential it runs as since CannObserv/broker#52,
+**For `*.dlq` keys only.** Four rows above say **Never XTRIMmed** -
+`content.replicate`, `content.process`, `content.persist` and `info.registry` -
+and this procedure pointed at any of them is refused: `acladmin`, the credential it runs as since CannObserv/broker#52,
 holds `+xtrim` on `~*.dlq` and nothing else (CannObserv/broker#34; it was
 `brokeradmin`'s until #52). The refusal is the backstop against the incident
 reflex - `acladmin` could lift it with its own `+acl`, and must not; the reasons
