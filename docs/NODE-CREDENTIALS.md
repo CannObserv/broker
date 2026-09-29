@@ -77,8 +77,12 @@ counts two against one - and after 4 it holds all three places to each other:
 **On a new or rebuilt node, mint rather than restore.** No copy of either
 password exists off the node, and none needs to: nothing off the node
 authenticates as either user, and a rebuilt node has a new host key that could
-not decrypt the old credential anyway (RECOVERY.md). Run this **after** [ACL-CUTOVER.md](ACL-CUTOVER.md) step 1's
-`install` of the passwords file, which truncates it, and before the first render:
+not decrypt the old credential anyway (RECOVERY.md). Run this **after** the
+passwords file exists - on a rebuild, `restore --digests` from the bucket
+(RECOVERY.md step 2, broker#72); on a new cluster, [ACL-CUTOVER.md](ACL-CUTOVER.md)
+step 1's `install`, which truncates it - and before the first render. It
+appends, so neither source may carry these lines already; the backup never
+ships them:
 
 ```bash
 set -euo pipefail

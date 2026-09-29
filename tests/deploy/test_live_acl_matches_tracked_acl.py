@@ -71,6 +71,7 @@ from pathlib import Path
 import pytest
 import redis as redis_pkg
 
+from src.broker import backup
 from src.broker.bus_health import BROKER_CREDENTIAL, _unit_credential
 from tests.deploy import conftest
 from tests.deploy.conftest import (
@@ -522,6 +523,14 @@ def test_the_node_holds_no_plaintext_for_any_user(node_passwords) -> None:
         "and a commented secret is not a rollback; replace each line with "
         '__<USER>_PW_SHA256__=<its digest> (deploy/README.md, "Changing a grant").'
     )
+
+
+def test_the_backup_withholds_exactly_the_users_a_rebuild_mints() -> None:
+    """The backup ships every digest line but these (CannObserv/broker#72); a
+    rebuild mints them - the node credentials and ``default``'s tombstone. A
+    node user added here without joining ``NODE_USERS`` would ship, and the
+    rebuild's append would then give render-acl.sh the same line twice."""
+    assert set(backup.NODE_USERS) == {*NODE_CREDENTIALS, "default"}
 
 
 def test_the_retired_requirepass_file_is_gone(live_client) -> None:

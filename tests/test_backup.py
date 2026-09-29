@@ -13,6 +13,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import re
 import shutil
 import stat
 from datetime import UTC, datetime, timedelta
@@ -24,13 +25,17 @@ import pytest
 
 from src.broker import backup, bus_health
 from src.broker.backup import (
+    DIGESTS_SUFFIX,
+    NODE_USERS,
     OBJECT_SUFFIX,
     BackupError,
     check_rdb,
+    digests_key,
     gzip_file,
     object_key,
     parse_check_report,
     parse_rdb_header,
+    project_digests,
     run_backup,
     snapshot_time,
     take_snapshot,
@@ -62,6 +67,36 @@ CHECK_REPORT = """\
 SNAPSHOT_AT = datetime.fromtimestamp(1789054988, tz=UTC)
 NOW = SNAPSHOT_AT + timedelta(minutes=10)
 
+TRACKED_ACL = Path(__file__).resolve().parents[1] / "deploy" / "redis-acl.conf"
+
+
+def _hex(seed: str) -> str:
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+
+# The node's passwords file as broker#52 left it: a digest per user, the three
+# node users among them, and the prose an operator leaves behind.
+PASSWORDS = f"""\
+# rotated 2026-09-23 (archiver#251)
+__ARCHIVER_PW_SHA256__={_hex("archiver")}
+__WATCHER_PW_SHA256__={_hex("watcher")}
+
+__REPLICATOR_PW_SHA256__={_hex("replicator")}
+__OBSERVO_PW_SHA256__={_hex("observo")}
+__CITEST_PW_SHA256__={_hex("citest")}
+__DEFAULT_PW_SHA256__={_hex("default")}
+__ACLADMIN_PW_SHA256__={_hex("acladmin")}
+__BROKERADMIN_PW_SHA256__={_hex("brokeradmin")}
+"""
+
+# What ships: the service lines alone, sorted.
+SHIPPED = "".join(
+    f"__{u.upper()}_PW_SHA256__={_hex(u)}\n"
+    for u in ("archiver", "citest", "observo", "replicator", "watcher")
+)
+SHIPPED_SHA = hashlib.sha256(SHIPPED.encode()).hexdigest()
+DIGESTS_KEY = f"co-broker/20260910T154308Z.{SHIPPED_SHA[:8]}{DIGESTS_SUFFIX}"
+
 
 def _fake_checker(report: str = CHECK_REPORT) -> MagicMock:
     return MagicMock(return_value=report)
@@ -71,6 +106,13 @@ def _fake_checker(report: str = CHECK_REPORT) -> MagicMock:
 def rdb(tmp_path) -> Path:
     path = tmp_path / "dump.rdb"
     path.write_bytes(FAKE_RDB)
+    return path
+
+
+@pytest.fixture
+def passwords(tmp_path) -> Path:
+    path = tmp_path / "broker-acl-passwords"
+    path.write_text(PASSWORDS)
     return path
 
 
@@ -97,6 +139,10 @@ def _run(rdb: Path, client: FakeClient, tmp_path: Path, **overrides) -> dict:
         now=NOW,
     )
     kwargs.update(overrides)
+    if "acl_passwords" not in kwargs:
+        kwargs["acl_passwords"] = tmp_path / "broker-acl-passwords"
+        if not kwargs["acl_passwords"].exists():
+            kwargs["acl_passwords"].write_text(PASSWORDS)
     kwargs["state_path"].parent.mkdir(exist_ok=True)
     return run_backup(**kwargs)
 
@@ -208,13 +254,13 @@ def test_run_backup_uploads_a_new_snapshot_as_a_create(rdb, client, bucket, tmp_
     state = _run(rdb, client, tmp_path)
 
     key = "co-broker/20260910T154308Z.rdb.gz"
-    assert list(bucket.objects) == [key]
+    assert set(bucket.objects) == {key, DIGESTS_KEY}
     assert gzip.decompress(bucket.objects[key]) == FAKE_RDB
     # A create, never a put. The identity holds no delete, so this is also the
     # only shape the bucket would accept; the precondition says so in code.
-    assert bucket.preconditions == [0]
+    assert bucket.preconditions == [0, 0]
     assert bucket.content_types[key] == "application/gzip"
-    assert bucket.timeouts == [backup.UPLOAD_TIMEOUT_SECONDS]
+    assert bucket.timeouts == [backup.UPLOAD_TIMEOUT_SECONDS] * 2
     assert state["outcome"] == "uploaded"
     assert state["object"] == f"gs://a-backup-bucket/{key}"
 
@@ -225,7 +271,7 @@ def test_run_backup_describes_the_snapshot_in_object_metadata(
     """The restore side reads these without downloading anything: which server
     wrote it, when, how many keys, and the digest to verify the download."""
     _run(rdb, client, tmp_path)
-    (meta,) = bucket.metadata.values()
+    meta = bucket.metadata["co-broker/20260910T154308Z.rdb.gz"]
     assert meta["snapshot_at"] == "2026-09-10T15:43:08Z"
     assert meta["sha256"] == hashlib.sha256(FAKE_RDB).hexdigest()
     assert meta["redis_version"] == "7.0.15"
@@ -253,8 +299,9 @@ def test_run_backup_reports_unchanged_when_this_snapshot_is_already_there(
     first = _run(rdb, client, tmp_path)
     second = _run(rdb, client, tmp_path, now=NOW + timedelta(hours=1))
 
-    assert len(bucket.objects) == 1
+    assert len(bucket.objects) == 2  # the snapshot and its digests, once each
     assert second["outcome"] == "unchanged"
+    assert second["digests_outcome"] == "unchanged"
     assert second["object"] == first["object"]
     assert second["snapshot_at"] == first["snapshot_at"]
     assert second["last_success_at"] > first["last_success_at"]
@@ -316,6 +363,148 @@ def test_run_backup_refuses_to_upload_a_corrupt_snapshot(client, bucket, tmp_pat
     assert "last_error" in _state(tmp_path)
 
 
+# --- the ACL digests (CannObserv/broker#72) ---
+
+
+def test_project_digests_ships_every_service_line_sorted_and_nothing_else() -> None:
+    """The object is what a rebuild consumes and no more: prose, blank lines and
+    the three node users stay on the node. Sorted, so an unchanged file is an
+    unchanged object and the hourly run is a 412 rather than a new copy."""
+    assert project_digests(PASSWORDS) == SHIPPED
+
+
+def test_node_users_are_the_ones_a_rebuild_mints() -> None:
+    """A rebuild appends fresh ``acladmin``/``brokeradmin`` lines and a new
+    ``default`` tombstone (docs/RECOVERY.md step 2). A restored file still
+    carrying the old ones would hold each twice, and render-acl.sh refuses
+    that - so they never ship. Each must be a user the tracked file declares, or
+    this list has drifted from the ACL it filters."""
+    declared = set(re.findall(r"^user (\S+) ", TRACKED_ACL.read_text(), flags=re.M))
+    assert set(NODE_USERS) == {"acladmin", "brokeradmin", "default"}
+    assert set(NODE_USERS) <= declared
+
+
+SECRET = "s3cretValueNobodyMayEcho40charsXXXXXXXXX"
+
+
+@pytest.mark.parametrize(
+    ("line", "why"),
+    [
+        (f"__WATCHER_PW__={SECRET}", "plaintext"),
+        (f"#__WATCHER_PW__={SECRET}", "plaintext"),  # archiver#251's "rollback path"
+        (f"  # __WATCHER_PW__={SECRET}", "plaintext"),
+        (f"__ACLADMIN_PW__={SECRET}", "plaintext"),  # a node user is no exemption
+        (SECRET, "not a digest line"),  # a bare paste
+        (f"__WATCHER_PW_SHA256__={SECRET}", "not a digest line"),
+        (f"__WATCHER_PW_SHA256__={_hex('watcher').upper()}", "not a digest line"),
+        (f"__WATCHER_PW_SHA256__={_hex('other')}", "given twice"),
+    ],
+    ids=[
+        "live",
+        "commented",
+        "commented-indented",
+        "node-user",
+        "bare",
+        "digest-key-plaintext-value",
+        "uppercase-hex",
+        "duplicate",
+    ],
+)
+def test_project_digests_refuses_without_echoing_a_value(line: str, why: str) -> None:
+    """The job refuses a passwords file that is not digests-only rather than
+    trust that ``test_the_node_holds_no_plaintext_for_any_user`` ran. The error
+    names a line number, never a value: a malformed line is as likely to be a
+    bare password, and the error lands in the journal and the state file."""
+    with pytest.raises(BackupError, match=why) as caught:
+        project_digests(PASSWORDS + line + "\n")
+    assert SECRET not in str(caught.value)
+    assert _hex("watcher") not in str(caught.value)
+    assert "line 11" in str(caught.value)
+
+
+def test_project_digests_keeps_prose_that_only_names_a_placeholder() -> None:
+    """The ``=`` straight after the placeholder is what makes a plaintext line;
+    a comment that merely names one is prose (the live suite's rule, #49)."""
+    assert project_digests(PASSWORDS + "# __WATCHER_PW__ was rotated 2026-09-23\n") == SHIPPED
+
+
+def test_project_digests_refuses_a_file_with_no_service_line() -> None:
+    """Shipping only nothing is the silent backup: an object that restores
+    to a file admitting no service."""
+    node_only = "".join(f"__{u.upper()}_PW_SHA256__={_hex(u)}\n" for u in NODE_USERS)
+    with pytest.raises(BackupError, match="no service digest"):
+        project_digests(node_only)
+
+
+def test_digests_key_pairs_with_the_snapshot_and_names_its_content() -> None:
+    """The snapshot stamp pairs it with its RDB and renews it under the
+    bucket's 30-day age rule every time the RDB moves; the content prefix means
+    an ACL change still ships in an hour whose RDB is unchanged, where the
+    stamp alone would 412."""
+    assert digests_key("co-broker", SNAPSHOT_AT, SHIPPED_SHA) == DIGESTS_KEY
+    assert not DIGESTS_KEY.endswith(OBJECT_SUFFIX)  # restore's snapshot listing skips it
+
+
+def test_run_backup_ships_the_digests_beside_the_snapshot(rdb, client, bucket, tmp_path) -> None:
+    state = _run(rdb, client, tmp_path)
+    assert bucket.objects[DIGESTS_KEY] == SHIPPED.encode()
+    assert bucket.content_types[DIGESTS_KEY] == "text/plain"
+    meta = bucket.metadata[DIGESTS_KEY]
+    assert meta["taken_at"] == "2026-09-10T15:53:08Z"
+    assert meta["sha256"] == SHIPPED_SHA
+    assert meta["users"] == "archiver,citest,observo,replicator,watcher"
+    assert meta["source_host"] == "co-broker"
+    assert state["digests_object"] == f"gs://a-backup-bucket/{DIGESTS_KEY}"
+    assert state["digests_outcome"] == "uploaded"
+    assert state["digests_sha256"] == SHIPPED_SHA
+    assert state["digests_users"] == ["archiver", "citest", "observo", "replicator", "watcher"]
+    assert _state(tmp_path)["digests_sha256"] == SHIPPED_SHA
+
+
+def test_an_acl_change_ships_in_an_hour_whose_snapshot_is_unchanged(
+    rdb, client, bucket, tmp_path
+) -> None:
+    """observo was minted on 2026-09-24 with no data write required; its line
+    must not wait for the next save point."""
+    _run(rdb, client, tmp_path)
+    passwords = tmp_path / "broker-acl-passwords"
+    passwords.write_text(PASSWORDS + f"__NEWSVC_PW_SHA256__={_hex('newsvc')}\n")
+    second = _run(rdb, client, tmp_path, now=NOW + timedelta(hours=1))
+
+    assert second["outcome"] == "unchanged"
+    assert second["digests_outcome"] == "uploaded"
+    digests = sorted(k for k in bucket.objects if k.endswith(DIGESTS_SUFFIX))
+    assert len(digests) == 2
+    assert "newsvc" in second["digests_users"]
+
+
+def test_a_refused_passwords_file_fails_the_run_after_the_snapshot_ships(
+    rdb, client, bucket, tmp_path
+) -> None:
+    """The data backup is never withheld over the digests - but a refusal is a
+    failed run the probe reports, because a silent gap in the digests is the
+    stale password-manager copy again."""
+    passwords = tmp_path / "broker-acl-passwords"
+    passwords.write_text(PASSWORDS + f"#__WATCHER_PW__={SECRET}\n")
+    with pytest.raises(BackupError, match="plaintext"):
+        _run(rdb, client, tmp_path)
+
+    assert list(bucket.objects) == ["co-broker/20260910T154308Z.rdb.gz"]
+    state = _state(tmp_path)
+    assert state["outcome"] == "failed"
+    assert "last_success_at" not in state
+    assert SECRET not in state["last_error"]
+    assert "line 11" in state["last_error"]
+    # The operator reading it learns the data half is safe.
+    assert "gs://a-backup-bucket/co-broker/20260910T154308Z.rdb.gz" in state["last_error"]
+
+
+def test_a_missing_passwords_file_fails_the_run_and_is_recorded(rdb, client, tmp_path) -> None:
+    with pytest.raises(BackupError):
+        _run(rdb, client, tmp_path, acl_passwords=tmp_path / "absent")
+    assert _state(tmp_path)["outcome"] == "failed"
+
+
 # --- the entrypoint ---
 
 
@@ -354,6 +543,12 @@ def test_main_exits_zero_on_success_and_prefixes_by_host(stub_main, monkeypatch)
     assert kwargs["bucket"] == "a-backup-bucket"
     assert kwargs["prefix"] == "co-broker"
     assert kwargs["host"] == "co-broker"
+    assert kwargs["acl_passwords"] == Path("/etc/redis/broker-acl-passwords")
+
+
+def test_main_reads_the_passwords_file_it_is_given(stub_main) -> None:
+    assert backup.main([*stub_main.argv, "--acl-passwords", "/elsewhere"]) == 0
+    assert stub_main.run.call_args.kwargs["acl_passwords"] == Path("/elsewhere")
 
 
 def test_main_exits_nonzero_when_the_backup_fails(stub_main) -> None:

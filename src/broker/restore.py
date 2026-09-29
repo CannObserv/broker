@@ -12,12 +12,17 @@ proves it against a real server on every run, positions and PEL included.
 
 ``python -m src.broker.restore --latest --into /var/lib/redis`` is the whole
 data half of a rebuild; docs/RECOVERY.md is the runbook around it.
+
+``--digests /etc/redis/broker-acl-passwords`` is the admission half
+(CannObserv/broker#72): the newest ACL digests the backup shipped, whichever
+snapshot is staged. Rolling data back is not rolling back who is admitted.
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import os
 import shutil
 import socket
@@ -29,11 +34,13 @@ from google.api_core.exceptions import GoogleAPICallError
 from google.cloud import storage
 
 from src.broker.backup import (
+    DIGESTS_SUFFIX,
     LIST_TIMEOUT_SECONDS,
     OBJECT_SUFFIX,
     UPLOAD_TIMEOUT_SECONDS,
     BackupError,
     parse_rdb_header,
+    project_digests,
 )
 from src.broker.logging import configure_logging, get_logger
 
@@ -48,6 +55,8 @@ MANIFEST_FILE = "appendonly.aof.manifest"
 # manifest parser is strict about both.
 MANIFEST = f"file {BASE_FILE} seq 1 type b\nfile {INCR_FILE} seq 1 type i\n"
 DEFAULT_REDIS_DIR = Path("/var/lib/redis")
+# The passwords file render-acl.sh reads: root's alone, as the install makes it.
+DIGESTS_FILE_MODE = 0o400
 # What `--list` prints beside each name, in this order.
 _LISTED_METADATA = ("snapshot_at", "keys", "size_bytes", "redis_version", "sha256")
 
@@ -99,6 +108,46 @@ def newest_object(client: storage.Client, bucket: str, prefix: str) -> str | Non
     return names[0] if names else None
 
 
+def newest_digests(client: storage.Client, bucket: str, prefix: str) -> tuple[str, dict] | None:
+    """The last run's digests object under ``prefix``, with its metadata.
+
+    Ordered by ``taken_at``, the run time, not by name: two runs over one
+    unchanged snapshot share its stamp, and the content prefix after it sorts
+    them at random.
+    """
+    blobs = client.list_blobs(bucket, prefix=f"{prefix.strip('/')}/", timeout=LIST_TIMEOUT_SECONDS)
+    described = [(b.name, dict(b.metadata or {})) for b in blobs if b.name.endswith(DIGESTS_SUFFIX)]
+    if not described:
+        return None
+    return max(described, key=lambda pair: (pair[1].get("taken_at", ""), pair[0]))
+
+
+def write_digests(body: bytes, dest: Path, *, expected_sha256: str | None) -> None:
+    """Create ``dest`` 0400 holding ``body``, or refuse and write nothing.
+
+    Refused: an existing file (it may be the better copy - appendonlydir's
+    rule), bytes that are not what the object's metadata says was shipped, and
+    anything the backup itself would not ship. The bucket is not trusted to
+    have been written by this job alone, so a plaintext or a node user's line
+    stops here rather than in ``/etc/redis``.
+    """
+    if expected_sha256 and hashlib.sha256(body).hexdigest() != expected_sha256:
+        raise RestoreError("download does not match the sha256 the backup recorded")
+    try:
+        text = body.decode()
+        if project_digests(text) != text:
+            raise RestoreError("not service digest lines alone, as the backup ships them")
+    except (UnicodeDecodeError, BackupError) as exc:
+        raise RestoreError(f"not a digests file the backup ships: {exc}") from exc
+    try:
+        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, DIGESTS_FILE_MODE)
+    except FileExistsError as exc:
+        raise RestoreError(f"{dest} exists; refusing to overwrite it") from exc
+    with os.fdopen(fd, "wb") as out:
+        out.write(body)
+    os.chmod(dest, DIGESTS_FILE_MODE)
+
+
 def download(client: storage.Client, bucket: str, name: str, dest: Path) -> Path:
     client.bucket(bucket).blob(name).download_to_filename(str(dest), timeout=UPLOAD_TIMEOUT_SECONDS)
     return dest
@@ -120,6 +169,32 @@ def _next_steps(redis_dir: Path, source: str) -> str:
         "  systemctl start redis-server\n"
         "then verify the positions, not just the key count - docs/RECOVERY.md\n"
     )
+
+
+def _digests_next_steps(dest: Path, source: str, users: str) -> str:
+    return (
+        f"wrote {source}\n"
+        f"  to {dest} - {users or 'users not recorded'}\n"
+        "next, as root, before the first render - the lines a rebuild mints, not restores:\n"
+        "  default's tombstone, the digest of a value nobody keeps:\n"
+        "    printf '__DEFAULT_PW_SHA256__=%s\\n' \"$(LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom"
+        f" | head -c 40 | sha256sum | cut -d' ' -f1)\" >> {dest}\n"
+        "  acladmin and brokeradmin: docs/NODE-CREDENTIALS.md, 'On a new or rebuilt node'\n"
+        "then render and install users.acl - deploy/README.md, 'Installing the ACL users'\n"
+    )
+
+
+def _restore_digests(client: storage.Client, bucket: str, prefix: str, dest: Path) -> int:
+    found = newest_digests(client, bucket, prefix)
+    if found is None:
+        logger.error(f"no ACL digests under gs://{bucket}/{prefix.strip('/')}/")
+        return 1
+    name, meta = found
+    with tempfile.TemporaryDirectory(prefix="broker-restore-") as work:
+        body = download(client, bucket, name, Path(work) / "acl.digests").read_bytes()
+    write_digests(body, dest, expected_sha256=meta.get("sha256"))
+    print(_digests_next_steps(dest, f"gs://{bucket}/{name}", meta.get("users", "")))
+    return 0
 
 
 def _stage(rdb: Path, into: Path, source: str) -> int:
@@ -146,6 +221,12 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--object", help="one object name under the bucket")
     source.add_argument("--file", type=Path, help="a local .rdb or .rdb.gz")
     source.add_argument("--list", action="store_true", help="print the snapshots, newest first")
+    source.add_argument(
+        "--digests",
+        type=Path,
+        metavar="PATH",
+        help="write the newest ACL digests to PATH (the passwords file); never overwrites",
+    )
     parser.add_argument("--into", type=Path, default=DEFAULT_REDIS_DIR, help="Redis's `dir`")
     parser.add_argument("--bucket", default=os.environ.get("BROKER_BACKUP_BUCKET"))
     parser.add_argument(
@@ -162,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("no bucket: pass --bucket or set BROKER_BACKUP_BUCKET")
             return 2
         client = storage.Client()
+        if args.digests is not None:
+            return _restore_digests(client, args.bucket, args.prefix, args.digests)
         if args.list:
             for name, meta in describe_objects(client, args.bucket, args.prefix):
                 described = "  ".join(f"{k}={meta[k]}" for k in _LISTED_METADATA if meta.get(k))

@@ -42,17 +42,50 @@ was recovered by replaying that history; that was margin, not design.
 |---|---|
 | **What** | the server's own `dump.rdb` - rewritten atomically at its `save` points (`3600 1`, `300 100`, `60 10000`), so a copy at any moment is a consistent point in time |
 | **When** | hourly - `broker-backup.timer`, `OnCalendar=hourly`, five minutes of jitter, `Persistent=true` so a reboot's missed tick still runs |
-| **Where** | `gs://co-gcs-broker-backup/co-broker/<snapshot time>.rdb.gz` - the prefix is the hostname |
+| **Where** | `gs://co-gcs-broker-backup/co-broker/<snapshot time>.rdb.gz` - the prefix is the hostname - and the ACL digests beside it as `<snapshot time>.<sha256[:8]>.digests` (below) |
 | **Named by** | the snapshot's own `ctime`, the aux field the save writes into the file, as `20260910T153511Z`. A listing reads as a timeline and the newest name is the newest data |
 | **Verified** | `redis-check-rdb` on the private copy before anything is uploaded - the format, every record, the CRC64 trailer. A file that fails is refused |
 | **Described** | object metadata: `snapshot_at`, `sha256`, `size_bytes`, `redis_version`, `rdb_version`, `keys`, `source_host` - readable without downloading |
 | **Retained** | 30 days, by the **bucket's lifecycle rule**. The node's identity cannot delete |
 | **RPO** | the backup interval plus the save interval: under two hours worst case, about an hour typically |
-| **Credential** | `/etc/broker/co-broker-backup.json` (0400 root:root), `roles/storage.objectCreator` + `roles/storage.objectViewer` on that one bucket. **No Redis credential** - the job reads a file |
+| **Credential** | `/etc/broker/co-broker-backup.json` (0400 root:root), `roles/storage.objectCreator` + `roles/storage.objectViewer` on that one bucket. **No Redis credential** - the job reads files, and a digest is not one (below) |
 | **Watched by** | the probe: `backup` findings (never completed, last attempt failed, last success too old) and `persistence` findings (`rdb_last_bgsave_status` and friends, and changes left unsaved for over three hours - the case where every hourly backup is the same stale file, judged from the server because only it can tell idle from broken), both reaching notifier |
 
 It holds no opinion on the AOF (never shipped - point in time is the contract),
-on configuration (this repo is the copy), or on secrets (below).
+on configuration (this repo is the copy), or on secrets (step 0).
+
+**The ACL digests ship beside each snapshot** (CannObserv/broker#72). A lost
+node takes `/etc/redis/broker-acl-passwords` with it, and the service lines
+cannot be reproduced: each service holds its plaintext on its own host, and
+the digest is what re-admits it. So every run ships a projection of that file
+after the snapshot. It holds the `__<SERVICE>_PW_SHA256__` lines alone, sorted,
+with object metadata `taken_at`, `sha256`, `users` and `source_host`:
+
+- **The node users never ship.** A rebuild mints `acladmin`, `brokeradmin` and
+  `default` fresh (step 0) and *appends* their lines, and `render-acl.sh` refuses a
+  user given twice. Prose and comments never ship either: the object is built
+  from what matched, not copied.
+- **A plaintext line fails the run, commented or not** (#49's leak was
+  `#__ARCHIVER_PW__=<value>`), and the error names the line number, never a value.
+  The snapshot has already shipped by then and the error says so. But the run
+  is failed, and the probe's `backup` finding reports it: a gap in the digests
+  that nothing reports is the stale password-manager copy again.
+- **Named by the snapshot stamp, then the content.** The stamp renews the
+  object under the 30-day age rule whenever the RDB moves; an object named by
+  content alone would age out while still current. The content prefix ships an
+  ACL change in an hour whose snapshot is `unchanged`. `--list` and `--latest`
+  never offer a `.digests` object.
+- **A digest is not a credential.** `AUTH` takes the plaintext, which is why
+  "no Redis credential" survives. That holds because each plaintext is
+  high-entropy: 40 alphanumerics from urandom, about 238 bits
+  ([ACL-CUTOVER.md](ACL-CUTOVER.md), step 1). An unsalted SHA-256 of a guessable
+  password would be a credential by another name. A hash-only handoff minted
+  on the service's side (CannObserv/archiver#251) has whatever strength that
+  service chose. Whoever can read the bucket can read the digests.
+- **The unit cannot read what it does not ship.** It is root with
+  `CAP_DAC_READ_SEARCH` and reads `/etc/redis` on purpose, so
+  `InaccessiblePaths=` takes away `/etc/credstore.encrypted` and
+  `/etc/broker/.env`.
 
 **Why the file, and not `BGSAVE` or `redis-cli --rdb`.** Both would need a
 grant on the broker and both fork the server; the file needs neither, is
@@ -123,13 +156,20 @@ may be the better copy.
 
 ### 0. What must exist outside the node
 
-None of these are in the backup, and the runbook stops without them. Keep
+**The ACL digests are in the backup** since CannObserv/broker#72, and step 2
+restores them from the bucket. They are **not secret, but not reproducible**:
+the services carry the plaintext in their own env files, and their digests are
+what re-admits them, so without them a rebuild updates four services on four
+hosts. A copy in the operator's password manager is now optional. Nothing
+checks it is current: it went stale once already, when `observo` was minted
+on 2026-09-24.
+
+None of the rest are in the backup, and the runbook stops without them. Keep
 them in the operator's password manager; nothing in this repo ships them
 anywhere.
 
 | Secret | Path on the node | Mode | Why the value matters |
 |---|---|---|---|
-| the ACL digests - every line a digest since broker#52 (the services' since broker#49; `observo` since broker#62) | `/etc/redis/broker-acl-passwords` | 0400 root | **not secret, but not reproducible**: the services carry the plaintext in their own env files, and their digests are what re-admits them - so a rebuild must reuse these lines or update four services on four hosts. The `acladmin`, `brokeradmin` and `default` lines are replaced on a rebuild, below |
 | the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`redis://brokeradmin@...`, the user alone); `GOOGLE_APPLICATION_CREDENTIALS` (the wheelhouse reader) is the operator's, for the sync, and the probe's unit unsets it |
 | the wheelhouse reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | the wheelhouse sync needs it; `uv sync` needs the wheelhouse |
 | the co-status check-in | `/etc/broker/status.env` | 0400 root | the monitor id is node-agnostic; the same monitor continues |
@@ -162,18 +202,30 @@ sudo ls -la /var/lib/redis        # a default-config dump.rdb is fine; no append
 ### 2. The repo, the config, the secrets
 
 Everything in `deploy/README.md`'s *Install* section, in order: restore the
-secrets at the paths and modes above, mint the two node credentials and append
-their digest lines ([NODE-CREDENTIALS.md](NODE-CREDENTIALS.md), "On a new or rebuilt
-node" - after the passwords file is in place, since its `install` truncates), append `redis.conf.broker`
-with a freshly minted `requirepass`, render and install the ACL file, the
-drop-in and the wait script, the units, then the memory protection (broker#21).
-Then:
+secrets at the paths and modes above, then the repo and its venv:
 
 ```bash
 set -a; . /etc/broker/.env; set +a
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 uv sync --group dev
 ```
+
+Then the passwords file from the bucket. The newest digests are what you want,
+whichever snapshot step 3 stages: rolling data back is not rolling back who is
+admitted. The file is created 0400 and never overwritten:
+
+```bash
+sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
+  /home/exedev/broker/.venv/bin/python -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
+```
+
+It prints the object and the users it restored, then the lines a rebuild
+mints rather than restores. That is `default`'s tombstone (the one line it
+prints), then the two node credentials ([NODE-CREDENTIALS.md](NODE-CREDENTIALS.md),
+"On a new or rebuilt node"), which append to the file rather than truncate it.
+Then append `redis.conf.broker` with a freshly minted `requirepass`, and render
+and install the ACL file. After that come the drop-in and the wait script, the
+units, and then the memory protection (broker#21).
 
 Do not start `redis-server` yet. `appendonly yes` is now in its config, and
 started empty it would create the fresh base the trap above describes.
@@ -387,6 +439,11 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
   `stage_appendonlydir`; starts a second server under `appendonly yes` and
   asserts the length, `last-delivered-id`, `entries-read`, the PEL and the TTL.
   The control case, the same snapshot with no staging, comes up with `DBSIZE 0`.
+  The admission half (broker#72): the digests shipped with that snapshot are
+  restored by `restore --digests`'s path onto a "rebuilt" node, the node users
+  are appended fresh, and the result is rendered through `render-acl.sh` and
+  loaded. Every service authenticates with the plaintext only it holds;
+  `acladmin` authenticates with the new password and is refused with the old.
 - **2026-09-10, by hand** on `co-broker`, throwaway servers, Redis 7.0.15:
   positions intact; the control confirmed the trap.
 - **2026-09-10 16:03 UTC, before the key existed.** The unit was started once
@@ -420,9 +477,9 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
 
 - Anything written after the newest snapshot: the RPO above.
 - The AOF's history. Point in time is the contract.
-- The secrets, the tailnet identity, and the policy that admits the node -
-  the operator's, listed in step 0 so they are a checklist rather than a
-  discovery.
+- The secrets other than the ACL digests, the tailnet identity, and the
+  policy that admits the node - the operator's, listed in step 0 so they are a
+  checklist rather than a discovery.
 - The participants' own state. Their databases and stores are theirs.
 - Losing the *path* to the node rather than the node. The tailnet relay (DERP)
   is a third-party dependency, measured as a boot-time transient and accepted:

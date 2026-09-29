@@ -1,5 +1,5 @@
 [Unit]
-Description=Broker RDB snapshot to GCS - hourly, create-only, holds no Redis credential (CannObserv/broker#4)
+Description=Broker RDB snapshot and ACL digests to GCS - hourly, create-only, holds no Redis credential (CannObserv/broker#4, #72)
 # Deliberately NOT ordered after or bound to redis-server.service. The artifact
 # is a file: a stopped broker still has a dump.rdb worth shipping, and binding
 # to its unit would skip exactly that backup.
@@ -36,6 +36,10 @@ ProtectHome=read-only
 PrivateTmp=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+# Reads /etc/redis/broker-acl-passwords on purpose (CannObserv/broker#72), so the
+# two places a usable credential lives are taken away: the node users'
+# encrypted credentials and the probe's env. '-': absent is no failure.
+InaccessiblePaths=-/etc/credstore.encrypted -/etc/broker/.env
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
@@ -53,4 +57,7 @@ TimeoutStartSec=600
 # The venv's interpreter directly rather than `uv run`: uv wants a writable
 # cache and may sync the environment, both refused by the sandbox. Dependency
 # sync is a deploy step, not a service-start side effect.
-ExecStart=/home/exedev/broker/.venv/bin/python -m src.broker.backup --rdb /var/lib/redis/dump.rdb --state-file ${STATE_DIRECTORY}/state.json
+# --acl-passwords: the service users' digests ship beside each snapshot, as a
+# projection that refuses any plaintext line (CannObserv/broker#72). A digest is
+# not a credential; see src/broker/backup.py.
+ExecStart=/home/exedev/broker/.venv/bin/python -m src.broker.backup --rdb /var/lib/redis/dump.rdb --acl-passwords /etc/redis/broker-acl-passwords --state-file ${STATE_DIRECTORY}/state.json

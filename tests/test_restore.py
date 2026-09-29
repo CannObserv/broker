@@ -9,6 +9,8 @@ object is newest - and need no server to be wrong.
 from __future__ import annotations
 
 import gzip
+import hashlib
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -25,12 +27,30 @@ from src.broker.restore import (
     RestoreError,
     download,
     gunzip_file,
+    newest_digests,
     newest_object,
     stage_appendonlydir,
+    write_digests,
 )
 from tests.gcs_fakes import FakeBucket, FakeClient
 
 RDB = b"REDIS0010" + b"\xfa\x09redis-ver\x066.2.99\xff" + b"\x01" * 8
+
+# What the backup ships (CannObserv/broker#72): service digest lines only.
+DIGESTS = b"".join(
+    f"__{u.upper()}_PW_SHA256__={hashlib.sha256(u.encode()).hexdigest()}\n".encode()
+    for u in ("archiver", "watcher")
+)
+DIGESTS_SHA = hashlib.sha256(DIGESTS).hexdigest()
+
+
+def _put_digests(bucket: FakeBucket, name: str, body: bytes, taken_at: str) -> None:
+    bucket.objects[name] = body
+    bucket.metadata[name] = {
+        "taken_at": taken_at,
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "users": "archiver,watcher",
+    }
 
 
 @pytest.fixture
@@ -112,6 +132,76 @@ def test_download_and_gunzip_round_trip(tmp_path) -> None:
     assert out.read_bytes() == RDB
 
 
+def test_the_snapshot_listing_never_offers_a_digests_object() -> None:
+    """Both live under the prefix, and a digests object sorts after its
+    snapshot's name; ``--latest`` staging one as an RDB would be refused by the
+    header check, but it must not be offered at all."""
+    bucket = FakeBucket("a-backup-bucket")
+    bucket.objects["co-broker/20260910T153511Z.rdb.gz"] = b"x"
+    _put_digests(
+        bucket, "co-broker/20260910T153511Z.0123abcd.digests", DIGESTS, "2026-09-10T15:40:00Z"
+    )
+    client = FakeClient(bucket)
+    assert newest_object(client, "a-backup-bucket", "co-broker") == (
+        "co-broker/20260910T153511Z.rdb.gz"
+    )
+
+
+def test_newest_digests_is_the_last_run_not_the_greatest_name() -> None:
+    """Two runs over one unchanged snapshot share its stamp, and the content
+    prefix orders them at random. The run time in the metadata is the order."""
+    bucket = FakeBucket("a-backup-bucket")
+    _put_digests(
+        bucket, "co-broker/20260910T153511Z.ffffffff.digests", b"old", "2026-09-10T15:40:00Z"
+    )
+    _put_digests(
+        bucket, "co-broker/20260910T153511Z.00000000.digests", DIGESTS, "2026-09-10T16:40:00Z"
+    )
+    bucket.objects["co-broker/20260910T163511Z.rdb.gz"] = b"x"
+    name, meta = newest_digests(FakeClient(bucket), "a-backup-bucket", "co-broker")
+    assert name == "co-broker/20260910T153511Z.00000000.digests"
+    assert meta["sha256"] == DIGESTS_SHA
+
+
+def test_newest_digests_is_none_when_none_were_shipped() -> None:
+    bucket = FakeBucket("a-backup-bucket")
+    bucket.objects["co-broker/20260910T163511Z.rdb.gz"] = b"x"
+    assert newest_digests(FakeClient(bucket), "a-backup-bucket", "co-broker") is None
+
+
+def test_write_digests_creates_the_passwords_file_root_only(tmp_path) -> None:
+    dest = tmp_path / "broker-acl-passwords"
+    write_digests(DIGESTS, dest, expected_sha256=DIGESTS_SHA)
+    assert dest.read_bytes() == DIGESTS
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o400
+
+
+def test_write_digests_refuses_to_overwrite(tmp_path) -> None:
+    """The file already there may be the better copy - appendonlydir's rule."""
+    dest = tmp_path / "broker-acl-passwords"
+    dest.write_text("kept\n")
+    with pytest.raises(RestoreError, match="exists"):
+        write_digests(DIGESTS, dest, expected_sha256=DIGESTS_SHA)
+    assert dest.read_text() == "kept\n"
+
+
+def test_write_digests_refuses_a_download_that_is_not_what_was_shipped(tmp_path) -> None:
+    dest = tmp_path / "broker-acl-passwords"
+    with pytest.raises(RestoreError, match="sha256"):
+        write_digests(DIGESTS, dest, expected_sha256="0" * 64)
+    assert not dest.exists()
+
+
+def test_write_digests_refuses_anything_but_service_digest_lines(tmp_path) -> None:
+    """The bucket is not trusted to have been written by this job alone. A
+    plaintext or a node user's line is refused before it reaches /etc/redis."""
+    dest = tmp_path / "broker-acl-passwords"
+    body = DIGESTS + b"__ACLADMIN_PW_SHA256__=" + b"a" * 64 + b"\n"
+    with pytest.raises(RestoreError):
+        write_digests(body, dest, expected_sha256=hashlib.sha256(body).hexdigest())
+    assert not dest.exists()
+
+
 # --- the entrypoint ---
 
 
@@ -181,3 +271,39 @@ def test_main_file_accepts_a_gzipped_snapshot(stub_main, tmp_path) -> None:
     gz.write_bytes(gzip.compress(RDB))
     assert restore.main(["--file", str(gz), "--into", str(stub_main.redis_dir)]) == 0
     assert (stub_main.redis_dir / APPENDONLY_DIRNAME / BASE_FILE).read_bytes() == RDB
+
+
+def test_main_digests_writes_the_newest_whatever_snapshot_is_staged(
+    stub_main, tmp_path, capsys
+) -> None:
+    """Rolling the data back is not rolling back who is admitted: observo was
+    minted on 2026-09-24, and an older snapshot's paired digests would lock it
+    out. So ``--digests`` takes no snapshot argument at all."""
+    _put_digests(
+        stub_main.bucket,
+        "co-broker/20260910T153511Z.aaaaaaaa.digests",
+        b"old",
+        "2026-09-10T15:40:00Z",
+    )
+    _put_digests(
+        stub_main.bucket,
+        "co-broker/20260910T163511Z.bbbbbbbb.digests",
+        DIGESTS,
+        "2026-09-10T16:40:00Z",
+    )
+    dest = tmp_path / "broker-acl-passwords"
+
+    assert restore.main(["--digests", str(dest)]) == 0
+
+    assert dest.read_bytes() == DIGESTS
+    out = capsys.readouterr().out
+    assert "20260910T163511Z.bbbbbbbb.digests" in out
+    assert "archiver,watcher" in out
+    # The node lines a rebuild appends next are named, not remembered.
+    assert "NODE-CREDENTIALS.md" in out and "__DEFAULT_PW_SHA256__" in out
+
+
+def test_main_digests_fails_when_none_were_shipped(stub_main, tmp_path) -> None:
+    dest = tmp_path / "broker-acl-passwords"
+    assert restore.main(["--digests", str(dest)]) == 1
+    assert not dest.exists()

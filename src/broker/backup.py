@@ -23,6 +23,17 @@ ways that keep a backup honest:
   is the bucket's lifecycle rule, so a compromised node cannot destroy its own
   history. The same property as replicator's replicate writer, for the same
   reason.
+- **It ships the ACL digests beside the snapshot** (CannObserv/broker#72).
+  The service users' digests are not reproducible - each service holds its
+  plaintext on its own host - and they are what re-admits it on a rebuilt node.
+  The object is a projection of ``/etc/redis/broker-acl-passwords``: service
+  digest lines only, sorted. Prose stays on the node, and so do the three node
+  users a rebuild mints fresh. A digest is not a credential - ``AUTH`` takes
+  the plaintext - which is why "holds no Redis credential" survives it. That
+  holds because each plaintext is high-entropy (40 alphanumerics, ~238 bits,
+  docs/ACL-CUTOVER.md): an unsalted SHA-256 of a guessable password would be
+  one. A file carrying any plaintext line, commented or not, is refused. The
+  snapshot ships first and is never withheld over it, but the run fails.
 - **Failure is loud.** A oneshot that exits 0 after shipping nothing is the
   silent backup every incident write-up warns about. A failed run is a failed
   unit *and* a line in the state file the probe reads
@@ -65,6 +76,17 @@ KEY_TIME_FORMAT = "%Y%m%dT%H%M%SZ"
 CONTENT_TYPE = "application/gzip"
 DEFAULT_RDB = Path("/var/lib/redis/dump.rdb")
 
+# The ACL digests (CannObserv/broker#72). Not ``.rdb.gz``, so the restore's
+# snapshot listing never offers one.
+DIGESTS_SUFFIX = ".digests"
+DIGESTS_CONTENT_TYPE = "text/plain"
+DEFAULT_ACL_PASSWORDS = Path("/etc/redis/broker-acl-passwords")
+# The users a rebuild mints rather than restores (docs/RECOVERY.md step 0):
+# acladmin and brokeradmin into credentials encrypted to the new host key, and
+# default a fresh tombstone. Shipping their lines would make a rebuild's append
+# a second line for each, which render-acl.sh refuses as "given twice".
+NODE_USERS = ("acladmin", "brokeradmin", "default")
+
 # Bounds on the two network calls. A snapshot is under a megabyte today and
 # the maxmemory cap bounds it at a few hundred; two minutes is generous for the
 # upload and short enough that a wedged one is a failed unit rather than a hang.
@@ -81,9 +103,16 @@ STATE_FILE_MODE = 0o644
 _AUX_RE = re.compile(r"AUX FIELD (\S+) = '([^']*)'")
 _KEYS_RE = re.compile(r"\[info\] (\d+) keys read")
 
+# The passwords file's two line shapes (deploy/render-acl.sh). A plaintext
+# line counts commented out too: #49 found archiver's leaked secret kept as
+# ``#__ARCHIVER_PW__=<value>``, "the rollback path". The ``=`` straight after
+# the placeholder is what spares prose that merely names one.
+_DIGEST_LINE_RE = re.compile(r"__([A-Z]+)_PW_SHA256__=([0-9a-f]{64})")
+_PLAINTEXT_LINE_RE = re.compile(r"\s*#?\s*__[A-Z]+_PW__=")
+
 
 class BackupError(Exception):
-    """Anything that means the snapshot was not shipped."""
+    """Anything that means the run did not ship both the snapshot and its digests."""
 
 
 @dataclass(frozen=True)
@@ -135,6 +164,50 @@ def snapshot_time(report: dict[str, str], *, mtime: float) -> datetime:
 def object_key(prefix: str, snapshot_at: datetime) -> str:
     stamp = snapshot_at.astimezone(UTC).strftime(KEY_TIME_FORMAT)
     return f"{prefix.strip('/')}/{stamp}{OBJECT_SUFFIX}"
+
+
+def digests_key(prefix: str, snapshot_at: datetime, sha256: str) -> str:
+    """Beside the snapshot's own object, and named by content too.
+
+    The stamp pairs it with its RDB, so the bucket's 30-day age rule renews it
+    whenever the RDB moves; an object named by content alone would be written
+    once and aged out while still current. The content prefix is what ships an
+    ACL change in an hour whose snapshot is unchanged, where the stamp alone
+    would 412.
+    """
+    stamp = snapshot_at.astimezone(UTC).strftime(KEY_TIME_FORMAT)
+    return f"{prefix.strip('/')}/{stamp}.{sha256[:8]}{DIGESTS_SUFFIX}"
+
+
+def project_digests(text: str) -> str:
+    """The service digest lines of a passwords file, sorted; or a refusal.
+
+    What ships is built from what matched, never copied, so a comment cannot
+    leave the node. Refused: any plaintext line, commented or not; any line
+    that is neither a digest nor a comment; a user given twice; and a file with
+    no service line at all. Errors name line numbers and never values - a
+    malformed line is as likely to be a bare password, and the error lands in
+    the journal and the state file (render-acl.sh's rule).
+    """
+    kept: dict[str, str] = {}
+    seen: set[str] = set()
+    for number, line in enumerate(text.splitlines(), start=1):
+        if _PLAINTEXT_LINE_RE.match(line):
+            raise BackupError(f"line {number}: a plaintext password, refusing to ship any")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = _DIGEST_LINE_RE.fullmatch(line)
+        if match is None:
+            raise BackupError(f"line {number}: not a digest line (__X_PW_SHA256__=<64-hex>)")
+        user = match.group(1).lower()
+        if user in seen:
+            raise BackupError(f"line {number}: {user} given twice")
+        seen.add(user)
+        if user not in NODE_USERS:
+            kept[user] = line
+    if not kept:
+        raise BackupError("no service digest line, nothing a rebuild could re-admit")
+    return "".join(f"{kept[user]}\n" for user in sorted(kept))
 
 
 def iso(at: datetime) -> str:
@@ -264,6 +337,42 @@ def upload(
     return "uploaded"
 
 
+def upload_digests(
+    client: storage.Client,
+    bucket: str,
+    key: str,
+    path: Path,
+    *,
+    sha256: str,
+    users: list[str],
+    taken_at: datetime,
+    host: str,
+) -> str:
+    """Create the digests object; ``unchanged`` on the 412, as ``upload``.
+
+    ``taken_at`` is the run's time, and what the restore orders by: two runs
+    over one unchanged snapshot share its stamp, and the content prefix sorts
+    them at random.
+    """
+    blob = client.bucket(bucket).blob(key)
+    blob.metadata = {
+        "taken_at": iso(taken_at),
+        "sha256": sha256,
+        "users": ",".join(users),
+        "source_host": host,
+    }
+    try:
+        blob.upload_from_filename(
+            str(path),
+            content_type=DIGESTS_CONTENT_TYPE,
+            if_generation_match=0,
+            timeout=UPLOAD_TIMEOUT_SECONDS,
+        )
+    except PreconditionFailed:
+        return "unchanged"
+    return "uploaded"
+
+
 # --- state file (read by the probe) ---
 
 
@@ -302,6 +411,7 @@ def record_failure(state_path: Path, error: str, *, at: datetime) -> None:
 def run_backup(
     *,
     rdb: Path,
+    acl_passwords: Path,
     bucket: str,
     prefix: str,
     client: storage.Client,
@@ -311,13 +421,17 @@ def run_backup(
     host: str | None = None,
     now: datetime | None = None,
 ) -> dict:
-    """One run: snapshot, verify, compress, preflight, create; record the result.
+    """One run: snapshot, verify, compress, preflight, create; then the ACL
+    digests beside it; record the result.
 
     Returns the state written. Raises ``BackupError`` after recording a
-    failure, so the unit fails and the probe can say why.
+    failure, so the unit fails and the probe can say why. The snapshot ships
+    before the digests are read, so a refused passwords file never withholds
+    the data - but it fails the run, and the error says the snapshot is safe.
     """
     host = host or socket.gethostname()
     at = now or datetime.now(UTC)
+    shipped: str | None = None
     try:
         snapshot = take_snapshot(rdb, workdir, checker=checker)
         key = object_key(prefix, snapshot.snapshot_at)
@@ -325,6 +439,27 @@ def run_backup(
         gzip_bytes = gzip_file(snapshot.path, gz)
         preflight(client, bucket, prefix)
         outcome = upload(client, bucket, key, gz, snapshot, host=host)
+        shipped = f"the snapshot was {outcome}: gs://{bucket}/{key}"
+
+        try:
+            digests = project_digests(acl_passwords.read_text())
+        except BackupError as exc:
+            raise BackupError(f"{acl_passwords}: {exc}") from exc
+        digests_sha = hashlib.sha256(digests.encode()).hexdigest()
+        digests_users = [m.group(1).lower() for m in _DIGEST_LINE_RE.finditer(digests)]
+        digests_path = workdir / "acl.digests"
+        digests_path.write_text(digests)
+        digests_obj = digests_key(prefix, snapshot.snapshot_at, digests_sha)
+        digests_outcome = upload_digests(
+            client,
+            bucket,
+            digests_obj,
+            digests_path,
+            sha256=digests_sha,
+            users=digests_users,
+            taken_at=at,
+            host=host,
+        )
     except Exception as exc:
         # Broad on purpose. A revoked key surfaces from google.auth as a
         # RefreshError and a transport fault as a TransportError - neither a
@@ -334,6 +469,8 @@ def run_backup(
         # by a narrower door. Recorded, then re-raised as the one type main()
         # maps to a failed unit.
         error = f"{type(exc).__name__}: {exc}"
+        if shipped:
+            error = f"{error} ({shipped})"
         record_failure(state_path, error, at=at)
         logger.error(f"Backup failed: {error}", extra={"rdb": str(rdb), "bucket": bucket})
         raise BackupError(error) from exc
@@ -352,6 +489,10 @@ def run_backup(
             "redis_version": snapshot.redis_version,
             "keys": snapshot.keys,
             "source_host": host,
+            "digests_object": f"gs://{bucket}/{digests_obj}",
+            "digests_outcome": digests_outcome,
+            "digests_sha256": digests_sha,
+            "digests_users": digests_users,
         }
     )
     save_backup_state(state_path, state)
@@ -363,6 +504,8 @@ def run_backup(
             "size_bytes": snapshot.size_bytes,
             "gzip_bytes": gzip_bytes,
             "keys": snapshot.keys,
+            "digests_outcome": digests_outcome,
+            "digests_users": digests_users,
         },
     )
     return state
@@ -374,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="broker RDB snapshot to GCS")
     parser.add_argument("--rdb", type=Path, default=DEFAULT_RDB)
     parser.add_argument("--state-file", type=Path, required=True)
+    parser.add_argument("--acl-passwords", type=Path, default=DEFAULT_ACL_PASSWORDS)
     args = parser.parse_args(argv)
 
     configure_logging()
@@ -400,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             run_backup(
                 rdb=args.rdb,
+                acl_passwords=args.acl_passwords,
                 bucket=bucket,
                 prefix=prefix,
                 client=client,

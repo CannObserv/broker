@@ -97,8 +97,10 @@ silently corrupts values.
 - **The backup holds no Redis credential, and its identity cannot delete.**
   `broker-backup.service` reads `dump.rdb` - the server's own atomic snapshot -
   and creates objects under `objectCreator` + `objectViewer`; retention is the
-  bucket's lifecycle rule. Do not add a Redis URL to that unit or `delete` to
-  that grant for convenience; `tests/deploy/test_backup_units.py` and
+  bucket's lifecycle rule. Since broker#72 it also ships the service users' ACL
+  digests: not a credential (`AUTH` takes the plaintext, and each is ~238 bits),
+  a plaintext line fails the run, and the node users never ship. Do not add a
+  Redis URL to that unit or `delete` to that grant for convenience; `tests/deploy/test_backup_units.py` and
   `tests/test_backup.py` pin both. A restored snapshot is **ignored** under
   `appendonly yes` unless staged as the AOF base: `src/broker/restore.py`,
   `docs/RECOVERY.md`.

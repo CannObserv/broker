@@ -7,6 +7,12 @@ group is at the position it was at, the PEL still names what was delivered and
 not acked, and a TTL survived. The group positions are the whole point of the
 backup - they are recoverable from nowhere else.
 
+And it rehearses the admission half (CannObserv/broker#72): the ACL digests
+shipped beside the snapshot, restored onto a rebuilt node, the node users
+minted fresh the way the runbook appends them, rendered, and loaded - every
+service authenticates with the plaintext only it holds, and the old node's
+operator credential does not.
+
 It also pins the trap CannObserv/broker#4 stated backwards: under
 ``appendonly yes``, a ``dump.rdb`` with no ``appendonlydir`` beside it is not
 loaded. The server starts empty and creates a fresh base, silently.
@@ -17,6 +23,8 @@ reads BROKER_REDIS_URL, so it cannot touch ``co-broker``.
 
 from __future__ import annotations
 
+import hashlib
+import re
 import shutil
 import socket
 import subprocess
@@ -27,7 +35,14 @@ import pytest
 import redis as redis_pkg
 
 from src.broker import backup, restore
-from tests.deploy.conftest import _free_port
+from tests.deploy.conftest import (
+    ACL_FILE,
+    PASSWORD,
+    RENDER_SCRIPT,
+    SERVICE_USERS,
+    _free_port,
+    acl_server,
+)
 from tests.gcs_fakes import FakeBucket, FakeClient
 
 pytestmark = pytest.mark.skipif(
@@ -124,8 +139,11 @@ def test_a_snapshot_backed_up_by_the_job_restores_with_every_position_intact(
     before, dump = _snapshot_from(scratch, tmp_path)
 
     bucket = FakeBucket("a-backup-bucket")
+    passwords = tmp_path / "broker-acl-passwords"
+    passwords.write_text(_node_passwords())
     state = backup.run_backup(
         rdb=dump,
+        acl_passwords=passwords,
         bucket="a-backup-bucket",
         prefix="co-broker",
         client=FakeClient(bucket),
@@ -160,6 +178,82 @@ def test_a_snapshot_backed_up_by_the_job_restores_with_every_position_intact(
     restored.xadd("s1", {"k": "v3"})
     time.sleep(0.3)
     assert (target / restore.APPENDONLY_DIRNAME / restore.INCR_FILE).stat().st_size > 0
+
+
+def _sha(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+# What only the old node could decrypt, and what a rebuild mints instead.
+OLD_NODE_PASSWORD = "the-lost-nodes-operator-password"
+MINTED_PASSWORD = "minted-fresh-on-the-rebuilt-node"
+
+
+def _node_passwords() -> str:
+    """The node's passwords file as broker#52 left it: every line a digest.
+    Each service's is of the plaintext only it holds (``PASSWORD`` here);
+    the node users' are of values that die with the node."""
+    placeholders = sorted(set(re.findall(r"__([A-Z]+)_PW__", ACL_FILE.read_text())))
+    return "".join(
+        f"__{p}_PW_SHA256__="
+        f"{_sha(OLD_NODE_PASSWORD if p.lower() in backup.NODE_USERS else PASSWORD)}\n"
+        for p in placeholders
+    )
+
+
+def test_the_shipped_digests_readmit_every_service_on_a_rebuilt_node(scratch, tmp_path) -> None:
+    _before, dump = _snapshot_from(scratch, tmp_path)
+    passwords = tmp_path / "old-node-passwords"
+    passwords.write_text("# prose an operator left\n" + _node_passwords())
+
+    bucket = FakeBucket("a-backup-bucket")
+    backup.run_backup(
+        rdb=dump,
+        acl_passwords=passwords,
+        bucket="a-backup-bucket",
+        prefix="co-broker",
+        client=FakeClient(bucket),
+        state_path=tmp_path / "state.json",
+        workdir=tmp_path / "work",
+        host="rehearsal",
+    )
+
+    # The rebuild, in docs/RECOVERY.md's order: restore, then append the node
+    # users' fresh lines - which render-acl.sh would refuse as "given twice"
+    # had the old ones shipped.
+    rebuilt = tmp_path / "rebuilt"
+    rebuilt.mkdir()
+    restored = rebuilt / "broker-acl-passwords"
+    client = FakeClient(bucket)
+    assert restore._restore_digests(client, "a-backup-bucket", "co-broker", restored) == 0
+    # 0400, as restored; root appends through that and this test is not root.
+    restored.chmod(0o600)
+    with restored.open("a") as out:
+        for user in backup.NODE_USERS:
+            out.write(f"__{user.upper()}_PW_SHA256__={_sha(MINTED_PASSWORD)}\n")
+    acl = rebuilt / "users.acl"
+    acl.write_text(
+        subprocess.run(
+            [str(RENDER_SCRIPT), str(restored)], capture_output=True, text=True, check=True
+        ).stdout
+    )
+
+    with acl_server(acl, rebuilt) as connect:
+        for user in SERVICE_USERS:
+            assert connect(user).ping(), user
+
+        def auth(password: str) -> redis_pkg.Redis:
+            return redis_pkg.Redis(
+                host="127.0.0.1",
+                port=connect.port,
+                username="acladmin",
+                password=password,
+                socket_timeout=2,
+            )
+
+        assert auth(MINTED_PASSWORD).ping()
+        with pytest.raises(redis_pkg.AuthenticationError):
+            auth(OLD_NODE_PASSWORD).ping()
 
 
 def test_without_staging_redis_ignores_the_snapshot_and_starts_empty(scratch, tmp_path) -> None:

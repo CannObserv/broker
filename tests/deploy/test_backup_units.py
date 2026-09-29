@@ -41,11 +41,35 @@ def test_service_is_a_oneshot_running_the_backup_module() -> None:
 def test_service_holds_no_redis_credential() -> None:
     """The job reads a file. It has no reason to hold a Redis URL, and the file
     that carries one (/etc/broker/.env) also carries the operator's read-only
-    wheelhouse key - two things this unit must not inherit."""
+    wheelhouse key - two things this unit must not inherit.
+
+    It ships the ACL digests since CannObserv/broker#72, and this still holds:
+    a digest is not a credential, because ``AUTH`` takes the plaintext. That
+    rests on each plaintext being high-entropy (40 alphanumerics from urandom,
+    docs/ACL-CUTOVER.md) - an unsalted SHA-256 of a guessable one would be a
+    credential by another name. The job refuses a passwords file carrying any
+    plaintext line (``project_digests``), and the node users' lines never ship.
+    """
     text = REPO_SERVICE.read_text()
     assert "EnvironmentFile=/etc/broker/.env" not in text
     assert "EnvironmentFile=-/etc/broker/.env" not in text
     assert "Environment=BROKER_REDIS_URL" not in text
+
+
+def test_service_ships_the_acl_digests_from_the_passwords_file() -> None:
+    """Named on the command line rather than left to the default, so the path
+    the unit reads is the one this test and docs/RECOVERY.md say it reads."""
+    (exec_start,) = _directive(REPO_SERVICE.read_text(), "ExecStart")
+    assert "--acl-passwords /etc/redis/broker-acl-passwords" in exec_start
+
+
+def test_service_cannot_read_the_credentials_it_has_no_use_for() -> None:
+    """Root with ``CAP_DAC_READ_SEARCH`` reads anything, and since broker#72 it
+    reads /etc/redis on purpose. The two places a usable credential lives are
+    taken away: the node users' encrypted credentials and the probe's env.
+    ``-``: absent is no failure, only unreadable is the point."""
+    (line,) = _directive(REPO_SERVICE.read_text(), "InaccessiblePaths")
+    assert set(line.split()) == {"-/etc/credstore.encrypted", "-/etc/broker/.env"}
 
 
 def test_service_config_is_required_not_optional() -> None:
