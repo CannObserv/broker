@@ -225,7 +225,7 @@ def test_the_shipped_digests_readmit_every_service_on_a_rebuilt_node(scratch, tm
     rebuilt.mkdir()
     restored = rebuilt / "broker-acl-passwords"
     client = FakeClient(bucket)
-    assert restore._restore_digests(client, "a-backup-bucket", "co-broker", restored) == 0
+    assert restore.restore_digests(client, "a-backup-bucket", "co-broker", restored) == 0
     # 0400, as restored; root appends through that and this test is not root.
     restored.chmod(0o600)
     with restored.open("a") as out:

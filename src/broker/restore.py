@@ -178,7 +178,9 @@ def _digests_next_steps(dest: Path, source: str, users: str) -> str:
     )
 
 
-def _restore_digests(client: storage.Client, bucket: str, prefix: str, dest: Path) -> int:
+def restore_digests(client: storage.Client, bucket: str, prefix: str, dest: Path) -> int:
+    """``--digests``: the newest shipped set into ``dest``, then the next steps.
+    What the rehearsal runs, so the runbook's path is the tested one."""
     found = newest_digests(client, bucket, prefix)
     if found is None:
         logger.error(f"no ACL digests under gs://{bucket}/{prefix.strip('/')}/")
@@ -238,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         client = storage.Client()
         if args.digests is not None:
-            return _restore_digests(client, args.bucket, args.prefix, args.digests)
+            return restore_digests(client, args.bucket, args.prefix, args.digests)
         if args.list:
             for name, meta in describe_objects(client, args.bucket, args.prefix):
                 described = "  ".join(f"{k}={meta[k]}" for k in _LISTED_METADATA if meta.get(k))
