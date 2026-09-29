@@ -332,8 +332,9 @@ def test_every_tracked_user_still_carries_a_password(live_rules, tracked_rules) 
     that leaves the password intact precisely so a flip to ``on`` lands
     somewhere safe rather than enabling a ``nopass`` user.
 
-    Over the *tracked* names, not the live ones - ``+acl|getuser`` cannot
-    enumerate, so there is no such thing here as every live user.
+    Over the *tracked* names: an untracked live user is
+    ``test_the_live_acl_declares_no_user_the_tracked_file_does_not``'s finding,
+    and this one compares against the tracked file's password counts.
     """
     findings = []
     for user in TRACKED_USERS:
@@ -693,8 +694,8 @@ def test_every_tracked_user_is_saved_as_it_is_live(saved_rules, live_rules, live
     The rule comparison above reads the broker's *memory*, so a change made
     live and mirrored into the tracked file, but never saved, passes it - and
     then reverts at a restart, which on this instance is a cohort-wide event.
-    Over the tracked names, since that is all ``+acl|getuser`` can ask for live;
-    the saved file's own extras are the next test's.
+    Over the tracked names; the saved file's own extras are the next test's,
+    and the live ACL's are ``test_the_live_acl_declares_no_user_the_tracked_file_does_not``'s.
     """
     saved, version = saved_rules
     mismatches = _saved_mismatches(saved, live_rules)
@@ -708,12 +709,11 @@ def test_every_tracked_user_is_saved_as_it_is_live(saved_rules, live_rules, live
 
 
 def test_the_saved_acl_declares_no_user_the_tracked_file_does_not(node_saved_acl) -> None:
-    """The saved half of an untracked user, which ``+acl|getuser`` cannot enumerate.
+    """The saved half of an untracked user: the one the next restart loads.
 
-    Live, only a user in use is visible (the ``CLIENT LIST`` test below). The
-    saved file lists every user it holds, and a saved one is the one that
-    matters: it survives every restart. One added live and never saved is gone
-    at the next.
+    ``ACL USERS`` above sees every live user, saved or not; this sees what a
+    restart would bring back, which is the one that survives - including a
+    user deleted live but still in the saved file.
     """
     extra = sorted(set(parse_users(node_saved_acl)) - set(TRACKED_USERS))
     assert not extra, (

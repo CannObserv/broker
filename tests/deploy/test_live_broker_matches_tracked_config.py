@@ -140,10 +140,11 @@ def test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance(live_client)
     and the sentence in ``docs/MEMORY-PROTECTION.md`` becomes false. This is what
     goes red.
 
-    Counted rather than checked per key, because ``brokeradmin`` holds no
-    ``+ttl`` and no ``+type`` and should not: ``INFO keyspace``'s ``expires`` is
+    Counted rather than checked per key, because no operator-side user holds
+    ``+ttl`` or ``+type`` and none should: ``INFO keyspace``'s ``expires`` is
     the number of volatile keys, and ``SCAN MATCH`` gives the number of dedupe
-    keys, both from what the probe's own credential already grants. The
+    keys, both from what ``acladmin`` - this suite's credential since
+    CannObserv/broker#52 - already grants. The
     equality can in principle be reached by two offsetting changes; a second
     tenant's volatile key arriving on its own is the case worth catching, and
     it fails this.
@@ -224,7 +225,8 @@ def test_every_connected_participant_is_where_the_docs_say(live_client) -> None:
     compared it with anything.
 
     ``CLIENT LIST`` reports each connection's peer address and ``user=``, and
-    ``brokeradmin`` already holds ``+client|list``. So a participant that moves
+    ``acladmin`` holds ``+client|list`` (``brokeradmin`` did until
+    CannObserv/broker#52). So a participant that moves
     reconnects from a new address and this goes red until the table follows.
     It asserts only on participants that ARE connected: a service restarting
     during a run is not a topology fact.

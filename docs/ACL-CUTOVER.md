@@ -254,7 +254,7 @@ sudo grep '^user default' /etc/redis/users.acl             # -> user default off
 **The skip in that loop is the general case, not an archiver exception.** Any
 verification that authenticates *as* a service stops working the moment that
 service's credential is rotated by a hash-only handoff: this node then holds a
-digest and no plaintext, `pw` returns empty, and what used to print `PONG`
+digest and no plaintext, the old `pw` helper returned empty, and what used to print `PONG`
 prints `WRONGPASS` - which also writes an `AUTH` / `reason: auth` entry into
 `ACL LOG` naming the service whose credential was just rotated, the most
 alarming thing that log can say about a node where nothing is wrong. That is

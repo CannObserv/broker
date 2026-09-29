@@ -198,7 +198,7 @@ sudo grep -c '^__<USER>_PW_SHA256__=<new-sha256>$' \
 
 The two **node** users - `acladmin`, `brokeradmin` - have a digest line too
 since broker#52, and one more place their password lives: the encrypted
-credential `rcli` and the probe authenticate from. Rotating one is three writes,
+credential `rcli` and the probe authenticate from. Rotating one is four checked steps,
 [docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md), *Node credentials*. `default`'s
 line is the digest of a value nobody kept, and there is nothing to rotate.
 

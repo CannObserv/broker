@@ -165,7 +165,7 @@ def test_memory_reports_the_policy_and_the_absent_cap_together() -> None:
 def test_memory_finding_names_the_largest_streams_by_length() -> None:
     """Since #60 nothing else names the seven ``content.*`` streams, so the 75%
     finding says which streams are longest, and the operator starts there rather
-    than at an ``XLEN`` sweep as ``brokeradmin`` (CannObserv/broker#61)."""
+    than at an ``XLEN`` sweep as ``acladmin`` (CannObserv/broker#61, #52)."""
     (finding,) = evaluate_memory(
         used_memory=750,
         maxmemory=1000,
