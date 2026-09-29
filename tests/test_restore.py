@@ -297,6 +297,11 @@ def test_main_digests_writes_the_newest_whatever_snapshot_is_staged(
     assert "archiver,watcher" in out
     # The node lines a rebuild appends next are named, not remembered.
     assert "NODE-CREDENTIALS.md" in out and "__DEFAULT_PW_SHA256__" in out
+    # Runnable as the operator: the file is 0400 root, and a `>>` under `sudo`
+    # is the caller's shell redirecting, not root's.
+    (tombstone,) = [ln for ln in out.splitlines() if "__DEFAULT_PW_SHA256__" in ln]
+    assert tombstone.rstrip().endswith(f"| sudo tee -a {dest} >/dev/null")
+    assert ">>" not in tombstone
 
 
 def test_main_digests_fails_when_none_were_shipped(stub_main, tmp_path) -> None:

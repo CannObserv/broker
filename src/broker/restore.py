@@ -169,10 +169,10 @@ def _digests_next_steps(dest: Path, source: str, users: str) -> str:
     return (
         f"wrote {source}\n"
         f"  to {dest} - {users or 'users not recorded'}\n"
-        "next, as root, before the first render - the lines a rebuild mints, not restores:\n"
+        "next, before the first render - the lines a rebuild mints, not restores:\n"
         "  default's tombstone, the digest of a value nobody keeps:\n"
         "    printf '__DEFAULT_PW_SHA256__=%s\\n' \"$(LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom"
-        f" | head -c 40 | sha256sum | cut -d' ' -f1)\" >> {dest}\n"
+        f" | head -c 40 | sha256sum | cut -d' ' -f1)\" | sudo tee -a {dest} >/dev/null\n"
         "  acladmin and brokeradmin: docs/NODE-CREDENTIALS.md, 'On a new or rebuilt node'\n"
         "then render and install users.acl - deploy/README.md, 'Installing the ACL users'\n"
     )
