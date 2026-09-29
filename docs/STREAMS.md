@@ -22,7 +22,7 @@ what* - is [BUS-HEALTH.md](BUS-HEALTH.md). The `noeviction` contract is
 
 Cells marked *(target)* describe an arrangement not yet running. The `DLQ`
 column names who **writes** each one; who **drains** it is a separate question,
-answered under *Who drains a DLQ* below.
+answered in [DLQ-DRAINING.md](DLQ-DRAINING.md).
 
 **`Health primitive` says `XPENDING` + undelivered age, and no longer group
 lag.** `lag` is `entries-added` minus a group's `entries-read`, and that input
@@ -197,7 +197,7 @@ Moved to [DLQ-DRAINING.md](DLQ-DRAINING.md) when this file passed its context
 budget (2026-09-29): the writer / drainer / backstop roles, the capture, and the
 `XTRIM MINID` drain procedure with its worked example.
 
-
+## Consumer registrations
 
 The one-time reap of orphaned consumer registrations, and why it cannot
 recur: [CONSUMER-REGISTRATIONS.md](CONSUMER-REGISTRATIONS.md).

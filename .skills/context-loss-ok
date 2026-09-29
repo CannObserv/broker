@@ -153,3 +153,4 @@ AGENTS.md :: tighten :: acladmin/brokeradmin as encrypted credentials; requirepa
 AGENTS.md :: tighten :: docs/SKILLS.md   vendored agent skills: inventory, selection, refresh
 AGENTS.md :: tighten :: docs/SOCRATICODE.md
 AGENTS.md :: tighten :: semantic search: tools, prefetch, graph health, index scope
+docs/STREAMS.md :: retarget :: answered under *Who drains a DLQ* below.
