@@ -46,6 +46,16 @@
       "description": "How the cluster moved onto per-service Redis ACL users, the order a new credential repeats, and which user each service holds."
     },
     {
+      "name": "node-credentials",
+      "path": "./docs/NODE-CREDENTIALS.md",
+      "description": "The two Redis users this node authenticates as (acladmin, brokeradmin) as systemd-creds encrypted credentials: minting, rotating with checked steps, what that does not protect; why requirepass belongs to no user; default's retired rotation."
+    },
+    {
+      "name": "dlq-draining",
+      "path": "./docs/DLQ-DRAINING.md",
+      "description": "Who writes, triages and backstops each dead-letter queue, the probe's evidence capture, and the operator's XTRIM MINID drain procedure with its worked example; refused on the never-XTRIMmed streams."
+    },
+    {
       "name": "skills-doc",
       "path": "./docs/SKILLS.md",
       "description": "The vendored agent skills: inventory, selection, the daily refresh hook and the weekly context measurement cadence."
