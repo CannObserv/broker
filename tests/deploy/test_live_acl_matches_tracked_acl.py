@@ -533,6 +533,9 @@ def test_the_retired_requirepass_file_is_gone(live_client) -> None:
     )
 
 
+EMPTY_DIGEST = hashlib.sha256(b"").hexdigest()
+
+
 def _digest_of(value: str | None) -> str | None:
     """sha256 of ``value``, in a frame of its own, so a plaintext is never a test's local."""
     return None if value is None else hashlib.sha256(value.encode()).hexdigest()
@@ -566,20 +569,29 @@ def test_requirepass_is_nobodys_password(live_client, live_rules) -> None:
     is a random value minted for redis.conf and belonging to no one - both the
     running value and the one in the file, which the next restart loads.
     Compared by digest, the file's hashed inside ``sudo`` so its value never
-    crosses into pytest at all.
+    crosses into pytest at all - only the line count and the last line's digest,
+    which is the one Redis honours. An absent or empty value would hash to the
+    empty string's digest and match nobody, which is a pass that read nothing,
+    so it is refused first.
     """
     live_digests = {h for rules in live_rules.values() if rules for h in rules["passwords"]}
-    running = _digest_of(live_client.config_get("requirepass").get("requirepass"))
+    running = _digest_of(live_client.config_get("requirepass").get("requirepass", ""))
     on_disk = _sudo(
         "sh",
         "-c",
-        "sed -n 's/^requirepass //p' /etc/redis/redis.conf | tr -d '\\n' | sha256sum",
+        "c=/etc/redis/redis.conf; grep -c '^requirepass ' $c; "
+        "sed -n 's/^requirepass //p' $c | tail -n1 | tr -d '\\n' | sha256sum",
         text=True,
     )
     assert on_disk.returncode == 0, "cannot read /etc/redis/redis.conf through sudo -n"
+    count, file_digest = on_disk.stdout.split()[:2]
+    assert count == "1", f"/etc/redis/redis.conf has {count} requirepass lines, want 1"
+    assert EMPTY_DIGEST not in (running, file_digest), (
+        "a requirepass is empty - nopass by another door"
+    )
     findings = [
         f"the {where} requirepass is a live user's password"
-        for where, digest in (("running", running), ("redis.conf", on_disk.stdout.split()[0]))
+        for where, digest in (("running", running), ("redis.conf", file_digest))
         if digest in live_digests
     ]
     assert not findings, (
