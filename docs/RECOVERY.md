@@ -453,6 +453,12 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
   shut down and the directory removed.
 - **Minutes later, the probe.** Its next tick with the state file present
   raised no `backup` finding: `finding_count: 0`.
+- **2026-09-29, the ACL digests (broker#72), by hand on `co-broker`.**
+  `restore --digests` ran twice to a scratch path, first on the pre-CR-1 name
+  and then on `co-broker/20260929T210440Z.digests`. Each came out 0400 root
+  with the five service users, and its sha256 matched the node file's service
+  lines and the state file. A second write to the first path was refused. The unit's namespace under `/etc/broker` showed
+  `co-broker-backup.json` alone.
 
 ---
 
