@@ -207,10 +207,11 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # A consumer that ever moves to a schedule rather than a blocking read needs its
 # own value on its row: that schedule's period plus margin, with the source
 # named the way a mirrored constant names its owner. The two groups declared
-# ahead of their consumers by CannObserv/broker#62 - `observo.process` and
+# ahead of their consumers by CannObserv/broker#62 - `processor.process` (the
+# worker pool #62 gave observo, re-homed by CannObserv/broker#75) and
 # `watcher.derived` - take this value on the same assumption, a blocking read
-# through co-core-aio's driver; observo#629 and watcher#325 are where a
-# different loop would be stated.
+# through co-core-aio's driver; CannObserv/processor#1 and watcher#325 are where
+# a different loop would be stated.
 #
 # **Sized against the slowest handler on the node, not only the fastest**
 # (CannObserv/broker#30). A blocking reader is not reading while it is inside a
@@ -326,12 +327,14 @@ BLOBS_GROUP = group_name(CONTENT_BLOBS, "watcher")
 FETCH_GROUP = group_name(CONTENT_FETCH, "replicator")
 REPLICATE_GROUP = group_name(CONTENT_REPLICATE, "replicator")
 # The processing pair (CannObserv/broker#62, the cannobserv#486 contract): the
-# command stream's one worker pool is Observo's, the fact stream's first group
-# is Watcher's. Both are declared here ahead of their consumers - cannobserv
-# v0.19.4 marks them *pending broker#62* under the #384 rule that a documented
-# group exists on the broker - which is what lets the probe watch for them from
+# command stream's one worker pool is Processor's - Observo's until
+# CannObserv/broker#75 moved it to a service of its own - and the fact stream's
+# first group is Watcher's. Both are declared here ahead of their consumers -
+# cannobserv v0.19.4 marks them *pending broker#62* under the #384 rule that a
+# documented group exists on the broker, still naming `observo.process` until
+# CannObserv/cannobserv#503 - which is what lets the probe watch for them from
 # the first entry either stream ever carries.
-PROCESS_GROUP = group_name(CONTENT_PROCESS, "observo")
+PROCESS_GROUP = group_name(CONTENT_PROCESS, "processor")
 DERIVED_GROUP = group_name(CONTENT_DERIVED, "watcher")
 # The persist command (CannObserv/broker#64, the cannobserv#493 contract):
 # Replicator's third worker pool, declared ahead of the loop it names
@@ -372,9 +375,9 @@ DLQ_DRAINERS: dict[str, str] = {
     dlq_name(CONTENT_REPLICATE): "replicator",
     dlq_name(CONTENT_BLOBS): "watcher",
     # The processing pair (CannObserv/broker#62): the driver's ``dead_letter``
-    # parks an undecodable command here on Observo's behalf and an undecodable
+    # parks an undecodable command here on Processor's behalf and an undecodable
     # fact on Watcher's, and each is the one party that can read its own.
-    dlq_name(CONTENT_PROCESS): "observo",
+    dlq_name(CONTENT_PROCESS): "processor",
     dlq_name(CONTENT_DERIVED): "watcher",
     # The persist command (CannObserv/broker#64): replicator's loop dead-letters
     # an undecodable persist here, as it does for its other two streams.
@@ -717,12 +720,12 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # fault and there is no cap for a length threshold to mirror.
     # content.derived takes content.blobs's: one group per consuming service,
     # watcher.derived first, and no opinion on its length or its age, since a
-    # cap there is Observo's call and would ride its publish.
+    # cap there is Processor's call and would ride its publish.
     #
     # Both groups are declared ahead of their consumers. While nothing has
     # written a stream its row is dormant; once watcher writes content.process
-    # and observo's group is not on it, the finding is group-missing every tick
-    # - which for this stream IS "Observo is down", the state the design
+    # and processor's group is not on it, the finding is group-missing every tick
+    # - which for this stream IS "Processor is down", the state the design
     # surfaces on the watcher side as processing_timeout. The undelivered
     # threshold is the shared one on the shared assumption (see its comment).
     StreamCheck(

@@ -80,9 +80,10 @@ def probed_consumer(topic: str) -> str | None:
 # The command streams replicator is the worker pool for, which is what makes
 # its dedupe keyspace plural. Until CannObserv/broker#62 this was every command
 # stream, because replicator consumed every one; `content.process` is the
-# third and observo's, so the set is now derived from who the probe says
-# consumes each rather than from the kind alone - a fourth command stream
-# still cannot arrive without a grant or a red test, whoever consumes it.
+# third and processor's (observo's until CannObserv/broker#75), so the set is
+# now derived from who the probe says consumes each rather than from the kind
+# alone - a fourth command stream still cannot arrive without a grant or a red
+# test, whoever consumes it.
 REPLICATOR_COMMAND_STREAMS = tuple(
     topic for topic in COMMAND_STREAMS if probed_consumer(topic) == "replicator"
 )
@@ -310,8 +311,8 @@ def test_replicator_can_name_every_dedupe_namespace(users) -> None:
     Asserted over the streams the probe says replicator consumes rather than
     over the two names, so a command stream given to replicator cannot arrive
     without either a grant or a red test. The third command stream did arrive -
-    `content.process`, CannObserv/broker#62 - and its worker pool is observo,
-    which keeps no dedupe keys: its writes are content-addressed and
+    `content.process`, CannObserv/broker#62 - and its worker pool is processor
+    (CannObserv/broker#75), which keeps no dedupe keys: its writes are content-addressed and
     write-if-absent, so a redelivery is idempotent by construction and needs no
     key here (../docs/STREAMS.md, *Non-stream keys on `db0`*). Over every
     command stream this would demand a namespace nothing writes. The fourth,
@@ -762,43 +763,45 @@ def test_replicator_holds_the_xpending_its_delivery_ceiling_reads(users) -> None
 
 # --- the processing pair (CannObserv/broker#62) ---
 #
-# `content.process` (watcher -> observo, one worker pool) and `content.derived`
-# (observo -> watcher, broadcast), the contract of cannobserv#486. Neither
-# consumer is built, so nothing on these two lines was captured under MONITOR:
-# observo's whole line is read off co-core-aio's group-consumer driver and the
-# contract, and its stanza has to say so - the header's "observed, not guessed"
+# `content.process` (watcher -> processor, one worker pool) and `content.derived`
+# (processor -> watcher, broadcast), the contract of cannobserv#486. The worker
+# pool was observo's until CannObserv/broker#75 re-homed it on its own service,
+# with the line unchanged. Neither consumer is built, so nothing on these two
+# lines was captured under MONITOR: processor's whole line is read off
+# co-core-aio's group-consumer driver and the contract, and its stanza has to
+# say so - the header's "observed, not guessed"
 # is a claim about provenance, and a line read off source is a different
 # provenance, not a lesser one.
 
-#: Every key observo may name, by any route. The issue's "nothing else".
-OBSERVO_KEYS = frozenset({CONTENT_PROCESS, dlq_name(CONTENT_PROCESS), CONTENT_DERIVED})
+#: Every key processor may name, by any route. The issue's "nothing else".
+PROCESSOR_KEYS = frozenset({CONTENT_PROCESS, dlq_name(CONTENT_PROCESS), CONTENT_DERIVED})
 
 #: What the driver never issues and the issue grants only to a probe or ops
-#: tooling running as this user - which nothing does - plus what observo has no
+#: tooling running as this user - which nothing does - plus what processor has no
 #: use for: no config/state stream to tail (`+xread`), no dedupe keys
 #: (`+exists`, `+set`), and no cap of its own on either stream (`+xtrim`).
-OBSERVO_WITHHELD = frozenset({"+xpending", "+xclaim", "+xread", "+exists", "+set", "+xtrim"})
+PROCESSOR_WITHHELD = frozenset({"+xpending", "+xclaim", "+xread", "+exists", "+set", "+xtrim"})
 
 
-def test_observo_can_name_the_processing_pair_and_nothing_else(users) -> None:
+def test_processor_can_name_the_processing_pair_and_nothing_else(users) -> None:
     """The scope's "nothing else" as an exact set, so the pattern list cannot
     grow for a plausible-sounding reason: it neither reads `content.blobs` nor
     writes `content.revisions`, the two boundaries the issue names, and it can
     name no command stream but its own."""
-    patterns = key_patterns(users["observo"])
-    assert patterns == OBSERVO_KEYS, f"observo names {sorted(patterns - OBSERVO_KEYS)} too"
+    patterns = key_patterns(users["processor"])
+    assert patterns == PROCESSOR_KEYS, f"processor names {sorted(patterns - PROCESSOR_KEYS)} too"
     for topic in (CONTENT_BLOBS, CONTENT_REVISIONS, CONTENT_FETCH, CONTENT_REPLICATE):
-        assert not admits(patterns, topic), f"observo can name {topic}"
+        assert not admits(patterns, topic), f"processor can name {topic}"
 
 
-def test_observo_holds_the_driver_inventory_and_no_more(users) -> None:
+def test_processor_holds_the_driver_inventory_and_no_more(users) -> None:
     """Root: what `AsyncBusConsumer` issues on `content.process`, plus the
     reads a DLQ drainer needs (`test_a_dlq_writer_can_also_drain_it`), plus
     `+info` and `+ping`. Selectors: the fact it publishes and the queue it
     dead-letters into, and the disposal of that queue - never `XADD` on the
     command stream it consumes, which is the forged-work shape broker#14 closed.
     """
-    rules = users["observo"]
+    rules = users["processor"]
     root, _ = split_rules(rules)
     assert set(GROUP_CONSUMER_COMMANDS) <= set(root), "the driver's group commands"
     assert {"+xlen", "+xrange", "+xinfo|stream"} <= set(root), "the drainer's reads"
@@ -807,19 +810,28 @@ def test_observo_holds_the_driver_inventory_and_no_more(users) -> None:
     assert selector_patterns(rules, "+xadd") == {CONTENT_DERIVED, dlq_name(CONTENT_PROCESS)}
     assert selector_patterns(rules, "+xdel") == {dlq_name(CONTENT_PROCESS)}
     assert not admits(selector_patterns(rules, "+xadd"), CONTENT_PROCESS)
-    withheld = granted_commands(rules) & OBSERVO_WITHHELD
-    assert not withheld, f"observo holds {sorted(withheld)}, which nothing of its issues"
+    withheld = granted_commands(rules) & PROCESSOR_WITHHELD
+    assert not withheld, f"processor holds {sorted(withheld)}, which nothing of its issues"
 
 
-def test_observo_stanza_names_the_source_its_inventory_was_read_off(users) -> None:
+def test_processor_stanza_names_the_source_its_inventory_was_read_off(users) -> None:
     """The header says the command lists are observed. This one is not - the
     consumer is not built - so the stanza says what stands in for a capture:
     the driver the list was read off, and the issue whose consumer will be the
     first to exercise it. The next reader can then tell a grant read off source
     from one seen on the wire, which is the distinction the header exists for."""
-    prose = stanza("observo")
-    for needle in ("co-core-aio", "CannObserv/observo#629", "CannObserv/broker#62"):
-        assert needle in prose, f"observo's stanza does not name {needle}"
+    prose = stanza("processor")
+    for needle in ("co-core-aio", "CannObserv/processor#1", "CannObserv/broker#75"):
+        assert needle in prose, f"processor's stanza does not name {needle}"
+
+
+def test_observo_is_deleted_rather_than_retired(users) -> None:
+    """`content.process`'s worker pool moved to processor (CannObserv/broker#75),
+    and `observo` went with `ACL DELUSER`, not `off`: it never connected, and
+    the issuer grants Observo will ask for are a different shape - an `+xadd`
+    selector on the command stream alone - so they come as a fresh mint rather
+    than as a dormant user behind a credential another host still holds."""
+    assert "observo" not in users, "observo is back in the tracked ACL"
 
 
 def test_a_command_stream_has_one_probed_group_and_its_consumer_holds_the_group_commands(
@@ -1872,18 +1884,18 @@ def test_the_operator_can_dispose_of_one_dlq_entry_and_nothing_else(tracked_acl_
         operator.xdel(orphan, kept)
 
 
-def test_observo_serves_the_processing_pair_and_is_refused_the_rest(tracked_acl_broker) -> None:
-    """The observo line exercised the way co-core-aio's driver will exercise it
-    (CannObserv/broker#62), on redis's own matcher.
+def test_processor_serves_the_processing_pair_and_is_refused_the_rest(tracked_acl_broker) -> None:
+    """The processor line exercised the way co-core-aio's driver will exercise it
+    (CannObserv/broker#62, #75), on redis's own matcher.
 
-    The group is created at `$` by observo itself - it holds `+xgroup|create`,
+    The group is created at `$` by processor itself - it holds `+xgroup|create`,
     and `MKSTREAM` is what the driver's `ensure_group` sends - so only the entry
     seeded here is delivered. Then the read, the reclaim, the ack, the fact it
     publishes, and the dead-letter queue it writes and empties. Every refusal
     below is a boundary the issue names or a grant the driver has no use for.
     """
-    client = tracked_acl_broker("observo")
-    group = group_name(CONTENT_PROCESS, "observo")
+    client = tracked_acl_broker("processor")
+    group = group_name(CONTENT_PROCESS, "processor")
     client.xgroup_create(CONTENT_PROCESS, group, id="$", mkstream=True)
     with _seeder(tracked_acl_broker) as seeder:
         command = seeder.xadd(CONTENT_PROCESS, {"k": "v"})
@@ -1893,12 +1905,12 @@ def test_observo_serves_the_processing_pair_and_is_refused_the_rest(tracked_acl_
     assert delivered == command, f"{group} was delivered {delivered}, not the entry seeded here"
     client.xautoclaim(CONTENT_PROCESS, group, "worker", min_idle_time=0)
     assert client.xack(CONTENT_PROCESS, group, command) == 1
-    assert client.xadd(CONTENT_DERIVED, {"k": "v"}), "observo cannot publish the fact"
+    assert client.xadd(CONTENT_DERIVED, {"k": "v"}), "processor cannot publish the fact"
 
     queue = dlq_name(CONTENT_PROCESS)
     parked = client.xadd(queue, {"k": "poison"})
     assert client.xlen(queue) >= 1 and client.xrange(queue, min=parked, max=parked)
-    assert client.xdel(queue, parked) == 1, "observo can fill its queue and not empty it"
+    assert client.xdel(queue, parked) == 1, "processor can fill its queue and not empty it"
 
     for refused in (
         lambda: client.xadd(CONTENT_PROCESS, {"k": "forged"}),
@@ -1907,7 +1919,7 @@ def test_observo_serves_the_processing_pair_and_is_refused_the_rest(tracked_acl_
         lambda: client.xrange(CONTENT_BLOBS),
         lambda: client.xadd(CONTENT_REVISIONS, {"k": "v"}),
         lambda: client.xrange(CONTENT_DERIVED),
-        lambda: client.xreadgroup("observo.derived", "worker", {CONTENT_DERIVED: ">"}),
+        lambda: client.xreadgroup("processor.derived", "worker", {CONTENT_DERIVED: ">"}),
     ):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             refused()

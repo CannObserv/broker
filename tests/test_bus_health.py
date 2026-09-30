@@ -599,7 +599,7 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
     group exists on the broker - and the probe asks for them the way it asks
     for the rest: a stream nothing has written is dormant and says nothing,
     and a stream its producer has written without the group is `group-missing`
-    every tick, which for `content.process` is the "Observo is down" the
+    every tick, which for `content.process` is the "Processor is down" the
     design surfaces on the watcher side.
 
     Pinned as an exact set rather than a subset, so a group silently dropped
@@ -614,7 +614,7 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
         "replicator.fetch",
         "replicator.replicate",
         "replicator.persist",
-        "observo.process",
+        "processor.process",
     }
 
 
@@ -623,8 +623,9 @@ def test_the_processing_pair_carries_its_groups_and_no_retention_opinion() -> No
     stream it is shaped like.
 
     `content.process` is a command stream like `content.replicate`: one worker
-    pool, `observo.process`, and **never trimmed** - a cap deletes commands the
-    group has not been delivered and orphans the PEL entries naming them, so no
+    pool, `processor.process` (CannObserv/broker#75), and **never trimmed** - a
+    cap deletes commands the group has not been delivered and orphans the PEL
+    entries naming them, so no
     `+xtrim` selector in deploy/redis-acl.conf names it and any decrease in its
     length is a fault. Not like `content.fetch`, whose producer still holds an
     unissued `+xtrim` from the observed-inventory era.
@@ -635,7 +636,7 @@ def test_the_processing_pair_carries_its_groups_and_no_retention_opinion() -> No
     not claim nothing shortens it.
     """
     process = _check_for(CONTENT_PROCESS)
-    assert process.pending_group == "observo.process"
+    assert process.pending_group == "processor.process"
     assert process.never_trimmed is True
     assert process.warn_length is None
     assert process.warn_last_entry_age_seconds is None
@@ -650,10 +651,10 @@ def test_the_processing_pair_carries_its_groups_and_no_retention_opinion() -> No
 
 
 def test_the_processing_pairs_queues_are_owed_to_their_consumers() -> None:
-    """Writer and drainer are one role: observo dead-letters an undecodable
+    """Writer and drainer are one role: processor dead-letters an undecodable
     `content.process` frame and is the one party that can read it; watcher the
     same for `content.derived` (CannObserv/broker#62)."""
-    assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_PROCESS)] == "observo"
+    assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_PROCESS)] == "processor"
     assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_DERIVED)] == "watcher"
 
 

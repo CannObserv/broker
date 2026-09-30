@@ -2,7 +2,7 @@
 
 Operational code for the Cannabis Observer **change-bus broker** - the Redis
 Streams instance the cluster's services publish to and consume from: three
-live, and a fourth, Observo, onboarded ahead of its consumer (broker#62).
+live, and a fourth, Processor, onboarded ahead of its consumer (broker#62, #75).
 
 This repo owns the broker's *tuning*, its *monitoring*, and the *cluster stream
 inventory*. It owns no application logic and no data model. Nothing here is
@@ -66,8 +66,14 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   `content.derived` rows, two probed groups cannobserv v0.19.4 marks *pending
   broker#62*, and the co-core pin at `>=0.19.4`. The tailnet rule and the
   credential handoff (`CO_OBSERVO_BROKER_TOKEN` in `/etc/observo/.env`, the
-  node's line a digest) were done the same day. Open: observo#629's consumer,
-  then telling cannobserv both groups are live.
+  node's line a digest) were done the same day. Superseded by #75.
+- CannObserv/broker#75 - the `content.process` consumer moved to a service of
+  its own, Processor (`co-processor`), 2026-09-30: ACL user `processor` with
+  #62's line unchanged, minted hash-only because #72's backup refuses a
+  plaintext line; `observo` deleted, never having connected; the probe on
+  `processor.process`. co-core still names `observo.process` until
+  CannObserv/cannobserv#503. Open: CannObserv/processor#1's consumer, then
+  telling cannobserv both groups are live.
 - CannObserv/broker#64 - `content.persist` (archiver -> replicator, cannobserv
   #493), provisioned 2026-09-26 ahead of both ends: archiver's `+xadd` in a
   selector only, replicator's third worker pool, `replicator.persist` probed,

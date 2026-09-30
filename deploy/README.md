@@ -207,10 +207,10 @@ the node's file under `sudo -n` and compares every user's digest with
 `ACL GETUSER`, so a forgotten line fails the suite rather than waiting for a
 rebuild (CannObserv/broker#49). The four service users - `archiver`, `watcher`,
 `replicator`, `citest` - are held by digest alone since 2026-09-23; nothing on
-this node needs their plaintext. `observo` joined them on 2026-09-24, once
-Observo held its credential (CannObserv/broker#62) - the handoff order is in
-[docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md), step 1 - and the three operator
-lines on 2026-09-29 (broker#52).
+this node needs their plaintext. `processor` never had a plaintext here: its
+handoff was hash-only (CannObserv/broker#75), the shape a service minted since
+the backup refuses plaintext lines takes - [docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md),
+step 1. The three operator lines joined on 2026-09-29 (broker#52).
 
 **The third line is the one that gets skipped.** Until broker#11 nothing
 checked it, and it rested on someone remembering four times: eleven corrections

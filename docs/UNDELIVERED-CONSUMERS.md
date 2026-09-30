@@ -78,9 +78,10 @@ blob ceiling (CannObserv/replicator#96, broker#30). A consumer that ever moves
 to a schedule rather than a blocking read needs its own value on its row: that
 schedule's period plus margin, with the source named the way a mirrored constant
 names its owner. The two groups declared ahead of their consumers by
-CannObserv/broker#62, `observo.process` and `watcher.derived`, take the value
-on the same assumption - a blocking read through co-core-aio's driver - and
-observo#629 and watcher#325 are where a different loop would be stated.
+CannObserv/broker#62, `processor.process` (re-homed from Observo by #75) and
+`watcher.derived`, take the value on the same assumption - a blocking read
+through co-core-aio's driver - and CannObserv/processor#1 and watcher#325 are
+where a different loop would be stated.
 `replicator.persist` (CannObserv/broker#64) took it on `content.replicate`'s
 measurement and keeps it on its own (CannObserv/broker#76). Replicator timed
 the first three persists once CannObserv/archiver#283 switched issuance on:

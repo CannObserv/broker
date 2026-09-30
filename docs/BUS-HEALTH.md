@@ -111,7 +111,7 @@ Per tick it probes:
 - the `pending` count of **all eight** consumer groups on the node -
   `archiver.revisions`, `archiver.artifacts`, `watcher.blobs`,
   `replicator.fetch`, `replicator.replicate`, the processing pair's
-  `observo.process` and `watcher.derived` (CannObserv/broker#62), and
+  `processor.process` and `watcher.derived` (CannObserv/broker#62, #75), and
   `replicator.persist` (CannObserv/broker#64), the last three declared ahead
   of their consumers - WARN on non-zero across two consecutive ticks, with
   the count carried in `StateDirectory=broker-bus-health`. Widened from
@@ -144,9 +144,9 @@ Per tick it probes:
 
   Only a stream that exists is checked - one nothing has written yet is
   dormant, not a fault, which is the state of both #62 streams until
-  watcher#325 issues its first command; from then until observo#629's consumer
-  creates `observo.process`, this finding on `content.process` is "Observo is
-  down" from the broker's side - and a stream the probe reads without a group
+  watcher#325 issues its first command; from then until CannObserv/processor#1's
+  consumer creates `processor.process`, this finding on `content.process` is
+  "Processor is down" from the broker's side - and a stream the probe reads without a group
   cannot trip it: `info.changes` until its consumer exists, and the config/state
   streams, where `StreamCheck` refuses a group at import time. A missing group
   records no pending count, so when it comes back its two-tick rule starts

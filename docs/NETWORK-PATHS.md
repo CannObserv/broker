@@ -20,7 +20,7 @@ Client-side, from each participant's own host, as its own ACL user:
 | `replicator` -> broker | **4.05 ms** (n 6, 3.96-10.48) | **0.47 ms** (n 30, 0.44-0.56) | direct | 2026-09-11, `co-replicator` (CannObserv/replicator#88) |
 | `watcher` -> broker | **7.31 ms** (n 6, 5.17-9.94) | **1.55 ms** (n 30, 0.57-2.09) | direct | 2026-09-15, `co-watcher` (CannObserv/watcher#296) |
 | `archiver` -> broker | not taken | not taken | direct | - |
-| `observo` -> broker | not taken | not taken | direct | - (a `PING` as `observo` succeeded at the handoff, 2026-09-24; unmeasured) |
+| `processor` -> broker | not taken | not taken | DERP (sea) - `tailscale ping broker`, 16-17 ms, 2026-10-01 | - (CannObserv/processor#1's to take, from `co-processor` as `processor`) |
 
 Network-side, one vantage point and one method for all three, so the rows are
 comparable with each other rather than only with themselves - `tailscale ping`
@@ -31,20 +31,30 @@ x20 from `co-broker`, 2026-09-15 21:01Z:
 | to `archiver` | 1 ms | **1 ms** | 4 ms | direct, 20 of 20 |
 | to `replicator` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 |
 | to `watcher` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 |
-| to `observo-primary` | 1 ms | **1 ms** | 15 ms | direct, 17 of 20 - 2026-09-24 21:39Z, the rest DERP (sea) |
+| to `co-processor` | 16 ms | **17 ms** | 18 ms | **DERP (sea), 20 of 20** - 2026-10-01 22:04Z, and 20 of 20 at 2026-09-30 00:09Z |
 
 Archiver's client-side cold and warm cells were never taken with the method the
 other two used; its network path is confirmed direct above, and a Redis `PING`
 adds microseconds to it. Only archiver's host can fill those cells.
 
-Observo's row is a day old (CannObserv/broker#62). Before the policy rule on
-2026-09-24 the two nodes were not in each other's netmap; minutes after it the
-first pings rode DERP (sea) at 17 ms and the direct path then formed at 1 ms -
-the boot-time shape below, on a new peer. The 20-ping row was taken with this
-table's method but on its own day, and 3 of its 20 still went through DERP, so
-it is worth re-taking once the path has settled. Its client-side cells are
-observo#629's to fill, from `observo-primary` as `observo`, once a consumer
-connects.
+**`co-processor` is relayed, not booting** (CannObserv/broker#75). It joined
+the tailnet at 2026-09-29T22:52Z. Every ping since has gone through DERP
+(sea) at 16-18 ms, in both directions: 20 of 20 from here on 2026-09-30 and
+again on 2026-10-01, and `tailscale ping broker` from `co-processor` the same.
+That is the case the risk below says to revisit, not the boot-time transient
+it accepts.
+
+**Both ends look able to go direct.** `tailscale netcheck` is clean on both:
+UDP works and the mapping does not vary by destination (this node 2026-10-01,
+`co-processor` 2026-09-30, where the node also advertises a public and a LAN
+endpoint). Yet this node's `tailscale status --json` shows the peer with no
+current address (`CurAddr` empty, relay `sea`), where `watcher` shows its
+public one. The cause is not visible from either end's own diagnostics, and it
+is CannObserv/processor#1's to chase before the consumer carries traffic. Its
+client-side cells are processor#1's to fill too, as `processor`, once a
+consumer connects.
+The row it replaces was `observo-primary`'s, the host #62 declared for the
+role: direct at 1 ms, 17 of 20, on 2026-09-24.
 
 **History, kept for the comparison.** Before 2026-09-12 watcher and replicator
 shared a VM in `lax`, and that path went through DERP (sea) at 36-40 ms and never
@@ -61,7 +71,9 @@ A path through DERP is a second single point of failure beside this node
 (broker#1 R7), operated by a third party, and the epic's risk list did not carry
 it. Measured, it is **a boot-time transient, not a steady-state dependency**:
 
-- **Steady state is direct for all three**, confirmed from both ends.
+- **Steady state is direct for all three**, confirmed from both ends - the
+  three live participants. `co-processor`, declared ahead of its consumer, is
+  relayed today and is the exception this risk is revisited for (above).
 - **DERP appears only in the first seconds after a participant boots.**
   Replicator's first `tailscale ping` after a boot went through DERP (sea) at
   17-18 ms before the direct path formed at 1 ms, and the path was direct again
