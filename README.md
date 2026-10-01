@@ -73,10 +73,12 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   selector only, replicator's third worker pool, `replicator.persist` probed,
   co-core `>=0.19.6`. The canonical stream set in tests is now read off
   co-core (`tests/canonical.py`), because the hand list let this stream past
-  a green suite. Replicator's loop is live (2026-09-26T21:38Z); open: archiver
-  issuing (archiver#276), the second half of the go-live order.
-  *(archiver#276 closed 2026-09-27 with issuance shipped off; switching it on
-  is archiver#283.)*
+  a green suite. Replicator's loop is live (2026-09-26T21:38Z). Archiver's
+  issuance, the second half of the go-live order, shipped off under
+  archiver#276 and went on under archiver#283 (2026-10-01T15:35:09Z; first
+  command on the stream 16:01:01Z). #76 then moved the undelivered threshold
+  onto Replicator's own timing of the handler, and confirmed the probe clean
+  over the first three commands.
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,

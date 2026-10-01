@@ -221,7 +221,9 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # CannObserv/replicator#96: ~0.25 s at both p50 and p95 on today's corpus, and
 # 5.4 s for a blob at the 64 MiB `REPLICATOR_MAX_BLOB_BYTES` ceiling. Five
 # minutes is ~55x that worst case, so the replicate row keeps the shared value
-# on a measurement rather than by default.
+# on a measurement rather than by default. The persist row keeps it the same
+# way, on replicator's timing of that handler, stated at its row
+# (CannObserv/broker#76).
 #
 # What no duration sizes is a consumer alive and not reading. Replicator names
 # two: one stalled-provider attempt (a 30 s download and a 120 s create timeout,
@@ -332,8 +334,9 @@ REPLICATE_GROUP = group_name(CONTENT_REPLICATE, "replicator")
 PROCESS_GROUP = group_name(CONTENT_PROCESS, "observo")
 DERIVED_GROUP = group_name(CONTENT_DERIVED, "watcher")
 # The persist command (CannObserv/broker#64, the cannobserv#493 contract):
-# Replicator's third worker pool, declared ahead of the loop it names, which
-# ships disabled behind REPLICATOR_PERSIST_ENABLED (CannObserv/replicator#114).
+# Replicator's third worker pool, declared ahead of the loop it names
+# (CannObserv/replicator#114), and carrying commands since archiver switched
+# issuance on, 2026-10-01 (CannObserv/archiver#283).
 PERSIST_GROUP = group_name(CONTENT_PERSIST, "replicator")
 
 
@@ -742,11 +745,17 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # The undelivered threshold is the shared one, and here it matters beyond
     # latency: every persist races the temp tier's 7-day TTL (MUST-7), so a
     # stopped reader is revisions aging toward a blob_expired, and the position
-    # check is what sees it - a reader that stopped holds nothing pending. Sized
-    # against content.replicate's measured worst handler, since a persist moves
-    # the same bytes between the same kind of stores; replicator has not timed
-    # its own. Dormant until the stream exists; once archiver writes it without
-    # the group, group-missing every tick, which is the go-live order inverted.
+    # check is what sees it - a reader that stopped holds nothing pending.
+    #
+    # Sized on replicator's own timing since CannObserv/broker#76: 265-571 ms
+    # for the first three persists, pages of ~130 KB, over the whole handler -
+    # digest check, source lookup, temp-tier read, re-hash and create-if-absent,
+    # the blob_persisted publish - the window replicate's duration_ms covers
+    # (CannObserv/replicator#96). The 64 MiB ceiling is inferred, not measured:
+    # replicate's 5.4 s transfer there plus a SHA-256 over 64 MiB. Five minutes
+    # is ~500x the first and ~50x the second. Live since the first command,
+    # 2026-10-01T16:01:01Z (CannObserv/archiver#283); a group gone from the
+    # stream is group-missing every tick.
     StreamCheck(
         CONTENT_PERSIST,
         never_trimmed=True,

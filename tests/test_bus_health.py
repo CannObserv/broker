@@ -664,10 +664,10 @@ def test_content_persist_is_a_never_trimmed_command_stream_with_one_pool() -> No
     `+xtrim` on the instance naming it, so any decrease in its length is a fault
     and there is no cap for a length threshold to mirror.
 
-    The shared undelivered threshold, sized against `content.replicate`'s
-    measured worst handler (5.4 s at 64 MiB, CannObserv/broker#30): a persist
-    moves the same bytes between the same kind of stores. An assumption until
-    replicator times its own handler.
+    The shared undelivered threshold, on replicator's own timing of the handler
+    (CannObserv/broker#76): 265-571 ms for the first three persists, and a
+    64 MiB ceiling inferred from `content.replicate`'s measured 5.4 s
+    (CannObserv/broker#30) plus a SHA-256 over the same bytes.
     """
     persist = _check_for(CONTENT_PERSIST)
     assert persist.pending_group == "replicator.persist"

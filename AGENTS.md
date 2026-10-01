@@ -175,9 +175,9 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   #14's hole the other way round). `content.process` is the first stream that
   does not open it: its producer's pattern rides the `+xadd` selector alone.
 - Open: #62 (observo#629's consumer, then telling cannobserv both groups are
-  live); archiver switching on `content.persist` issuance (archiver#283, #64's
-  second half); #53 (CI off co-broker, or `citest` re-minted); #73. The
-  history of #62, #64 and archiver#251: [README.md](README.md), *Provenance*.
+  live); #53 (CI off co-broker, or `citest` re-minted); #73. The history of
+  #62, #64 (`content.persist` live 2026-10-01, #76) and archiver#251:
+  [README.md](README.md), *Provenance*.
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
   2026-09-29; what it leaves open: `docs/NODE-CREDENTIALS.md`. #72 (the ACL
   digests shipped with each backup) closed the same day.

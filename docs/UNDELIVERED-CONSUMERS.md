@@ -70,7 +70,7 @@ So the check compares positions and dates one entry:
 **The threshold is 5 minutes on every group, and it is not a mirrored
 constant.** Every other threshold in this probe copies a retention cap owned in
 another repo; this one is owned here, because it describes the consumer's read
-loop as this node can observe it. All five live groups are blocking `XREADGROUP`
+loop as this node can observe it. All six live groups are blocking `XREADGROUP`
 readers, so delivery is immediate - `replicator.fetch` answered the 14:18:00Z
 command at 14:18:01Z - and five minutes is two orders of magnitude of slack over
 that, and ~55x the slowest handler: `content.replicate`'s, 5.4 s at the 64 MiB
@@ -81,10 +81,16 @@ names its owner. The two groups declared ahead of their consumers by
 CannObserv/broker#62, `observo.process` and `watcher.derived`, take the value
 on the same assumption - a blocking read through co-core-aio's driver - and
 observo#629 and watcher#325 are where a different loop would be stated.
-`replicator.persist` (CannObserv/broker#64) takes it too, on a measurement
-borrowed rather than taken: a persist moves the same bytes between the same
-kind of stores as `content.replicate`'s handler, and replicator has not timed
-its own. `test_every_probed_group_carries_an_undelivered_threshold` fails if a
+`replicator.persist` (CannObserv/broker#64) took it on `content.replicate`'s
+measurement and keeps it on its own (CannObserv/broker#76). Replicator timed
+the first three persists once CannObserv/archiver#283 switched issuance on:
+265-571 ms for pages of ~130 KB, over the whole handler - digest check, source
+lookup, temp-tier read, re-hash and create-if-absent, the `blob_persisted`
+publish - the window replicate's `duration_ms` covers. Archiver saw 1.35-1.68 s
+from issue to `blob_persisted`, so delivery is immediate there too. The 64 MiB
+ceiling is inferred, not measured: replicate's 5.4 s transfer plus a SHA-256
+over 64 MiB. Five minutes is ~500x the measured persists and ~50x the inferred
+ceiling. `test_every_probed_group_carries_an_undelivered_threshold` fails if a
 ninth group arrives without one, and `StreamCheck` refuses the other direction - a
 threshold on a row with no group - at import.
 
