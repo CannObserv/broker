@@ -3,7 +3,7 @@
 # The offline estimators prefer a file's own last exact measurement to the
 # repo-wide figure in .skills/context-token-ratio, falling back to it for a
 # file never counted exactly or since drifted far from the size recorded here.
-13834 5717 AGENTS.md
+13957 5764 AGENTS.md
 20163 7997 docs/ACL-CUTOVER.md
 25603 9973 docs/BUS-HEALTH.md
 3147 1217 docs/CONSUMER-REGISTRATIONS.md
@@ -11,10 +11,10 @@
 3135 1235 docs/INCIDENT-2026-09-10.md
 5431 1989 docs/MEMORY-PROTECTION.md
 4936 1924 docs/NETWORK-PATHS.md
-7750 3407 docs/NODE-CREDENTIALS.md
-22846 8990 docs/RECOVERY.md
+7948 3481 docs/NODE-CREDENTIALS.md
+25172 9899 docs/RECOVERY.md
 24122 9529 docs/RESTART-WINDOW.md
 8336 3232 docs/SKILLS.md
 9372 3426 docs/SOCRATICODE.md
-25832 9925 docs/STREAMS.md
-7160 2655 docs/UNDELIVERED-CONSUMERS.md
+25949 9984 docs/STREAMS.md
+7629 2863 docs/UNDELIVERED-CONSUMERS.md
