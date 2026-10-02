@@ -143,10 +143,11 @@ Per tick it probes:
     (*Detecting loss* below).
 
   Only a stream that exists is checked - one nothing has written yet is
-  dormant, not a fault, which is the state of both #62 streams until
-  watcher#325 issues its first command; from then until CannObserv/processor#1's
-  consumer creates `processor.process`, this finding on `content.process` is
-  "Processor is down" from the broker's side - and a stream the probe reads without a group
+  dormant, not a fault, which is `content.derived`'s state until Processor
+  publishes. `content.process` was never in that window: `processor ensure-group`
+  created it and `processor.process` on 2026-10-02, ahead of Watcher's first
+  command (CannObserv/broker#75), so on that stream "Processor is down" is the
+  undelivered age, not this finding - and a stream the probe reads without a group
   cannot trip it: `info.changes` until its consumer exists, and the config/state
   streams, where `StreamCheck` refuses a group at import time. A missing group
   records no pending count, so when it comes back its two-tick rule starts

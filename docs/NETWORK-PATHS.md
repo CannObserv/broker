@@ -20,7 +20,7 @@ Client-side, from each participant's own host, as its own ACL user:
 | `replicator` -> broker | **4.05 ms** (n 6, 3.96-10.48) | **0.47 ms** (n 30, 0.44-0.56) | direct | 2026-09-11, `co-replicator` (CannObserv/replicator#88) |
 | `watcher` -> broker | **7.31 ms** (n 6, 5.17-9.94) | **1.55 ms** (n 30, 0.57-2.09) | direct | 2026-09-15, `co-watcher` (CannObserv/watcher#296) |
 | `archiver` -> broker | not taken | not taken | direct | - |
-| `processor` -> broker | not taken | not taken | DERP (sea) - `tailscale ping broker`, 16-17 ms, 2026-10-01 | - (CannObserv/processor#1's to take, from `co-processor` as `processor`) |
+| `processor` -> broker | not taken | not taken | DERP (sea) - `tailscale ping broker`, 16-17 ms, 2026-10-01 | - (a `PING` as `processor` succeeded at the handoff, by 2026-10-02 (broker#75); timings are CannObserv/processor#1's to take) |
 
 Network-side, one vantage point and one method for all three, so the rows are
 comparable with each other rather than only with themselves - `tailscale ping`

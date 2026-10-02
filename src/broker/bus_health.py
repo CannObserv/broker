@@ -723,11 +723,12 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # cap there is Processor's call and would ride its publish.
     #
     # Both groups are declared ahead of their consumers. While nothing has
-    # written a stream its row is dormant; once watcher writes content.process
-    # and processor's group is not on it, the finding is group-missing every tick
-    # - which for this stream IS "Processor is down", the state the design
-    # surfaces on the watcher side as processing_timeout. The undelivered
-    # threshold is the shared one on the shared assumption (see its comment).
+    # written a stream its row is dormant. processor.process was created before
+    # watcher's first command (CannObserv/broker#75, 2026-10-02), so it outlives
+    # any outage of processor's, and "Processor is down" - the state the design
+    # surfaces on the watcher side as processing_timeout - reads here as the
+    # undelivered age, not group-missing. The undelivered threshold is the
+    # shared one on the shared assumption (see its comment).
     StreamCheck(
         CONTENT_PROCESS,
         never_trimmed=True,
