@@ -20,7 +20,7 @@ Client-side, from each participant's own host, as its own ACL user:
 | `replicator` -> broker | **4.05 ms** (n 6, 3.96-10.48) | **0.47 ms** (n 30, 0.44-0.56) | direct | 2026-09-11, `co-replicator` (CannObserv/replicator#88) |
 | `watcher` -> broker | **7.31 ms** (n 6, 5.17-9.94) | **1.55 ms** (n 30, 0.57-2.09) | direct | 2026-09-15, `co-watcher` (CannObserv/watcher#296) |
 | `archiver` -> broker | not taken | not taken | direct | - |
-| `processor` -> broker | not taken | not taken | DERP (sea) - `tailscale ping broker`, 16-17 ms, 2026-10-01 | - (a `PING` as `processor` succeeded at the handoff, by 2026-10-02 (broker#75); timings are CannObserv/processor#1's to take) |
+| `processor` -> broker | not taken | not taken | **direct under traffic, DERP (sea) at idle** - a NAT hairpin to this node's public endpoint, 1 ms, lapsing after ~150 s idle (CannObserv/processor#15, 2026-10-02) | - (a `PING` as `processor` succeeded at the handoff, by 2026-10-02 (broker#75); timings are CannObserv/processor#1's to take) |
 
 Network-side, one vantage point and one method for all three, so the rows are
 comparable with each other rather than only with themselves - `tailscale ping`
@@ -31,28 +31,32 @@ x20 from `co-broker`, 2026-09-15 21:01Z:
 | to `archiver` | 1 ms | **1 ms** | 4 ms | direct, 20 of 20 |
 | to `replicator` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 |
 | to `watcher` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 |
-| to `co-processor` | 16 ms | **17 ms** | 18 ms | **DERP (sea), 20 of 20** - 2026-10-01 22:04Z, and 20 of 20 at 2026-09-30 00:09Z |
+| to `co-processor` | 16 ms | **17 ms** | 18 ms | **DERP (sea), 20 of 20** - 2026-10-02 17:41Z, as at 2026-10-01 22:04Z and 2026-09-30 00:09Z; never direct from this side |
 
 Archiver's client-side cold and warm cells were never taken with the method the
 other two used; its network path is confirmed direct above, and a Redis `PING`
 adds microseconds to it. Only archiver's host can fill those cells.
 
-**`co-processor` is relayed, not booting** (CannObserv/broker#75). It joined
-the tailnet at 2026-09-29T22:52Z. Every ping since has gone through DERP
-(sea) at 16-18 ms, in both directions: 20 of 20 from here on 2026-09-30 and
-again on 2026-10-01, and `tailscale ping broker` from `co-processor` the same.
-That is the case the risk below says to revisit, not the boot-time transient
-it accepts.
+**`co-processor` is direct one way, lazily, through a shared NAT**
+(CannObserv/broker#75, CannObserv/processor#15). The two VMs sit behind the
+same exe.dev public address: `tailscale netcheck` reports `16.145.19.221` on
+both, and this node advertises `16.145.19.221:13487` [measured 2026-10-02].
+From `co-processor` the path goes direct within seconds of traffic - `via
+16.145.19.221:13487 in 1ms`, a NAT hairpin onto this node's own endpoint - and
+lapses back to DERP (sea) after about 150 s idle (processor#15). From this side
+it has never gone direct: 20 of 20 relayed at each of three runs, the last at
+2026-10-02T17:41Z, with the peer showing no current address where `watcher`
+shows its public one.
 
-**Both ends look able to go direct.** `tailscale netcheck` is clean on both:
-UDP works and the mapping does not vary by destination (this node 2026-10-01,
-`co-processor` 2026-09-30, where the node also advertises a public and a LAN
-endpoint). Yet this node's `tailscale status --json` shows the peer with no
-current address (`CurAddr` empty, relay `sea`), where `watcher` shows its
-public one. The cause is not visible from either end's own diagnostics, and it
-is CannObserv/processor#1's to chase before the consumer carries traffic. Its
-client-side cells are processor#1's to fill too, as `processor`, once a
-consumer connects.
+What that means for the bus: the consumer's blocking `XREADGROUP` keeps its own
+session warm, so the path should stay direct while the service runs; an idle
+service, or the first command after one, pays ~16 ms through the relay.
+Whether it holds under the real service is processor#15's to confirm once
+CannObserv/processor#1 runs, and a fall back to DERP under load comes back to
+broker#75. It depends on exe.dev's NAT hairpinning, which no participant
+controls. Before 2026-10-02 it never formed at all (2026-09-30, both ends
+relayed); what changed is not known - processor#8's re-up is one candidate.
+The client-side cells are processor#1's to fill, as `processor`.
 The row it replaces was `observo-primary`'s, the host #62 declared for the
 role: direct at 1 ms, 17 of 20, on 2026-09-24.
 
@@ -73,7 +77,9 @@ it. Measured, it is **a boot-time transient, not a steady-state dependency**:
 
 - **Steady state is direct for all three**, confirmed from both ends - the
   three live participants. `co-processor`, declared ahead of its consumer, is
-  relayed today and is the exception this risk is revisited for (above).
+  the exception: direct from its side only under traffic, through a NAT hairpin,
+  and relayed at idle and from this side (above). It is revisited when its
+  consumer runs (CannObserv/processor#15).
 - **DERP appears only in the first seconds after a participant boots.**
   Replicator's first `tailscale ping` after a boot went through DERP (sea) at
   17-18 ms before the direct path formed at 1 ms, and the path was direct again

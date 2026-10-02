@@ -122,7 +122,7 @@ other three.
 | `archiver` | `archiver` | `co-registrar` | pdx | `100.109.138.101` | direct |
 | `watcher` | `watcher` | `co-watcher` | pdx | `100.66.24.24` | direct |
 | `replicator` | `replicator` | `co-replicator` | pdx | `100.114.136.20` | direct |
-| `processor` | `co-processor` *(group created 2026-10-02; consumer CannObserv/processor#1)* | `co-processor` | not recorded | `100.110.22.56` | **DERP (sea)**, both directions, 2026-09-30 and 2026-10-01 - no direct path has formed ([NETWORK-PATHS.md](NETWORK-PATHS.md)) |
+| `processor` | `co-processor` *(group created 2026-10-02; consumer CannObserv/processor#1)* | `co-processor` | not recorded | `100.110.22.56` | **direct from `co-processor` under traffic, DERP (sea) at idle** - a hairpin through the exe.dev NAT both VMs share; never direct from this side (CannObserv/processor#15, [NETWORK-PATHS.md](NETWORK-PATHS.md)) |
 | broker | `broker` | `co-broker` | pdx | `100.97.91.19` | - |
 
 **This table is checked against the live broker.** `CLIENT LIST` reports each
