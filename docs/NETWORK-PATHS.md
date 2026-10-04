@@ -20,7 +20,7 @@ Client-side, from each participant's own host, as its own ACL user:
 | `replicator` -> broker | **4.05 ms** (n 6, 3.96-10.48) | **0.47 ms** (n 30, 0.44-0.56) | direct | 2026-09-11, `co-replicator` (CannObserv/replicator#88) |
 | `watcher` -> broker | **7.31 ms** (n 6, 5.17-9.94) | **1.55 ms** (n 30, 0.57-2.09) | direct | 2026-09-15, `co-watcher` (CannObserv/watcher#296) |
 | `archiver` -> broker | not taken | not taken | direct | - |
-| `processor` -> broker | **4.5 ms** (n 5, 4.1-9.5) | **0.51 ms** (n 20, p95 0.66) | direct - a NAT hairpin, `via 16.145.19.221:13487` | 2026-10-03 18:45Z, `co-processor`, redis-py in the service's venv (CannObserv/broker#75); the service's own `XADD content.derived` took 2.0 ms |
+| `processor` -> broker | **4.5 ms** (n 5, 4.1-9.5) | **0.51 ms** (n 20, p95 0.66) | direct - a NAT hairpin, `via 16.145.19.221:13487` | 2026-10-03 18:45Z, `co-processor`, redis-py in the service's venv (CannObserv/broker#75); the service's own `XADD content.derived` took 2.0 ms (n 1, the first command's `publish_ms`) |
 
 Network-side, one vantage point and one method for all three, so the rows are
 comparable with each other rather than only with themselves - `tailscale ping`
