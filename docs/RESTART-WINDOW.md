@@ -55,7 +55,7 @@ be done one service at a time with a rollback after each.
 | | |
 |---|---|
 | **Expected downtime** | under a minute - one `systemctl restart` |
-| **Blast radius** | every participant loses the bus for that minute - three today, Processor too once CannObserv/processor#1 consumes (broker#75) |
+| **Blast radius** | every participant loses the bus for that minute - four since Processor began consuming on 2026-10-02 (broker#75); Processor's reconnect across a broker restart is untested |
 | **Reversible** | yes, at every step |
 | **Data touched** | none by steps 1b to 1d and 2 to 4. Step 1a-bis rewrites the AOF and discards its history, deliberately, after a fresh snapshot has been shipped off-node |
 
@@ -329,8 +329,7 @@ changed is not a finding. `entries-added` going **backwards** is, on any stream;
 so is a group's `last-delivered-id` moving backwards.
 
 Then confirm each service is back **and consuming**. `CLIENT LIST` grouped by
-`user=` should show every deployed service - `processor` only once
-CannObserv/processor#1 consumes - and `ACL LOG` should be empty (a restart clears it). Each group's `last-delivered-id` should reach its stream's
+`user=` should show every deployed service, `processor` included, and `ACL LOG` should be empty (a restart clears it). Each group's `last-delivered-id` should reach its stream's
 `last-generated-id` once a new entry arrives. Read positions, not counters: after
 the 2026-09-16 restart `XINFO GROUPS` `lag` read ~150 on groups that were caught
 up, and consumer `idle` was reset for every consumer at AOF load (#20).

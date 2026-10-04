@@ -1,8 +1,8 @@
 # broker
 
 Operational code for the Cannabis Observer **change-bus broker** - the Redis
-Streams instance the cluster's services publish to and consume from: three
-live, and a fourth, Processor, onboarded ahead of its consumer (broker#62, #75).
+Streams instance the cluster's services publish to and consume from: four,
+Processor the newest, consuming since 2026-10-02 (broker#62, #75).
 
 This repo owns the broker's *tuning*, its *monitoring*, and the *cluster stream
 inventory*. It owns no application logic and no data model. Nothing here is
@@ -72,8 +72,9 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   #62's line unchanged, minted hash-only because #72's backup refuses a
   plaintext line; `observo` deleted, never having connected; the probe on
   `processor.process`. co-core still names `observo.process` until
-  CannObserv/cannobserv#503. Open: CannObserv/processor#1's consumer, then
-  telling cannobserv both groups are live.
+  CannObserv/cannobserv#503. Processor consumed from 2026-10-02 and Watcher
+  issued in shadow from 2026-10-03 (watcher#325): both groups live. Open:
+  NOPERM shown on this broker rather than only stated.
 - CannObserv/broker#64 - `content.persist` (archiver -> replicator, cannobserv
   #493), provisioned 2026-09-26 ahead of both ends: archiver's `+xadd` in a
   selector only, replicator's third worker pool, `replicator.persist` probed,

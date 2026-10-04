@@ -149,7 +149,7 @@ this section's own table did. The env files are each service's:
 | archiver | `/etc/archiver/.env` |
 | watcher | `/etc/watcher/.env` |
 | replicator | `/etc/replicator/.env` |
-| processor | `/etc/processor/.env`, on `co-processor` - no Processor code reads it until CannObserv/processor#1 ships (CannObserv/broker#75) |
+| processor | `/etc/processor/.env`, on `co-processor`, as `CO_PROCESSOR_BUS_URL` - read by the `processor` unit since 2026-10-02 (CannObserv/broker#75) |
 
 **As of the 2026-09-10 cutover, and no longer true:** watcher ran in `lax` on its
 own VM, and replicator shared that VM with no tailnet node of its own - inferred
@@ -169,8 +169,7 @@ anything except the service being flipped.
 
 ### Step 2 - each service onto its own credential
 
-For each of archiver, watcher, replicator - and processor, once
-CannObserv/processor#1 has a consumer to flip - on its own host:
+For each of archiver, watcher, replicator and processor, on its own host:
 
 ```bash
 # in /etc/<service>/.env, change the bus URL's credential:

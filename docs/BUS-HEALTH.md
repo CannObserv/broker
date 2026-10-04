@@ -143,8 +143,8 @@ Per tick it probes:
     (*Detecting loss* below).
 
   Only a stream that exists is checked - one nothing has written yet is
-  dormant, not a fault, which is `content.derived`'s state until Processor
-  publishes. `content.process` was never in that window: `processor ensure-group`
+  dormant, not a fault. Neither processing-pair stream is dormant now, and
+  `content.process` never was: `processor ensure-group`
   created it and `processor.process` on 2026-10-02, ahead of Watcher's first
   command (CannObserv/broker#75), so on that stream "Processor is down" is the
   undelivered age, not this finding - and a stream the probe reads without a group

@@ -210,8 +210,9 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # ahead of their consumers by CannObserv/broker#62 - `processor.process` (the
 # worker pool #62 gave observo, re-homed by CannObserv/broker#75) and
 # `watcher.derived` - take this value on the same assumption, a blocking read
-# through co-core-aio's driver; CannObserv/processor#1 and watcher#325 are where
-# a different loop would be stated.
+# through co-core-aio's driver, which Processor confirmed for its loop on
+# broker#75; CannObserv/processor#1 and watcher#325 are where a different loop
+# would be stated.
 #
 # **Sized against the slowest handler on the node, not only the fastest**
 # (CannObserv/broker#30). A blocking reader is not reading while it is inside a
@@ -329,11 +330,12 @@ REPLICATE_GROUP = group_name(CONTENT_REPLICATE, "replicator")
 # The processing pair (CannObserv/broker#62, the cannobserv#486 contract): the
 # command stream's one worker pool is Processor's - Observo's until
 # CannObserv/broker#75 moved it to a service of its own - and the fact stream's
-# first group is Watcher's. Both are declared here ahead of their consumers -
-# cannobserv v0.19.4 marks them *pending broker#62* under the #384 rule that a
-# documented group exists on the broker, still naming `observo.process` until
-# CannObserv/cannobserv#503 - which is what lets the probe watch for them from
-# the first entry either stream ever carries.
+# first group is Watcher's. Both were declared here ahead of their consumers,
+# and both have been live since 2026-10-03 - cannobserv v0.19.4 marks them
+# *pending broker#62* under the #384 rule that a documented group exists on the
+# broker, still naming `observo.process` until CannObserv/cannobserv#503 -
+# which is what lets the probe watch for them from the first entry either
+# stream ever carries.
 PROCESS_GROUP = group_name(CONTENT_PROCESS, "processor")
 DERIVED_GROUP = group_name(CONTENT_DERIVED, "watcher")
 # The persist command (CannObserv/broker#64, the cannobserv#493 contract):
@@ -722,13 +724,14 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # watcher.derived first, and no opinion on its length or its age, since a
     # cap there is Processor's call and would ride its publish.
     #
-    # Both groups are declared ahead of their consumers. While nothing has
-    # written a stream its row is dormant. processor.process was created before
-    # watcher's first command (CannObserv/broker#75, 2026-10-02), so it outlives
-    # any outage of processor's, and "Processor is down" - the state the design
-    # surfaces on the watcher side as processing_timeout - reads here as the
-    # undelivered age, not group-missing. The undelivered threshold is the
-    # shared one on the shared assumption (see its comment).
+    # Both groups were declared ahead of their consumers, and both are live
+    # since 2026-10-03. While nothing has written a stream its row is dormant.
+    # processor.process was created before watcher's first command
+    # (CannObserv/broker#75, 2026-10-02), so it outlives any outage of
+    # processor's, and "Processor is down" - the state the design surfaces on
+    # the watcher side as processing_timeout - reads here as the undelivered
+    # age, not group-missing. The undelivered threshold is the shared one on
+    # the shared assumption (see its comment).
     StreamCheck(
         CONTENT_PROCESS,
         never_trimmed=True,

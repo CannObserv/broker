@@ -64,11 +64,11 @@ DIGEST_PLACEHOLDERS = ("__ARCHIVER_PW__",)
 
 # The participants. Each holds its own ACL user of the same name and a row in
 # the participants table; both facts are asserted from this one tuple.
-# `processor` is declared ahead of its consumer (CannObserv/broker#75, which
-# re-homed #62's `observo` user): its ACL user and its two streams exist so that
-# CannObserv/processor#1 can ship against a grant rather than a NOPERM, and the
-# live tests that read `CLIENT LIST` assert only on the participants that are
-# connected, so a declared one that is not yet is no finding.
+# `processor` was declared ahead of its consumer (CannObserv/broker#75, which
+# re-homed #62's `observo` user), so CannObserv/processor#1 shipped against a
+# grant rather than a NOPERM; it has consumed since 2026-10-02. The live tests
+# that read `CLIENT LIST` assert only on the participants that are connected,
+# so a declared one that is not yet is no finding.
 SERVICE_USERS = ("archiver", "watcher", "replicator", "processor")
 
 

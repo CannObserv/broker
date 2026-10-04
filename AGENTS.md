@@ -174,8 +174,8 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   group commands on its root, so it can `XACK` its consumer's work away -
   #14's hole the other way round). `content.process` is the first stream that
   does not open it: its producer's pattern rides the `+xadd` selector alone.
-- Open: #75 (CannObserv/processor#1's consumer, then telling cannobserv both
-  groups are live - cannobserv#503 renames `observo.process`); #53 (CI off
+- Open: #75 (live in shadow since 2026-10-03; NOPERM is still stated, not
+  shown, on this broker - cannobserv#503 renames `observo.process`); #53 (CI off
   co-broker, or `citest` re-minted); #73. The history of #62, #64
   (`content.persist` live 2026-10-01, #76), #75 and archiver#251:
   [README.md](README.md), *Provenance*.
