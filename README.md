@@ -73,8 +73,9 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   plaintext line; `observo` deleted, never having connected; the probe on
   `processor.process`. co-core still names `observo.process` until
   CannObserv/cannobserv#503. Processor consumed from 2026-10-02 and Watcher
-  issued in shadow from 2026-10-03 (watcher#325): both groups live. Open:
-  NOPERM shown on this broker rather than only stated.
+  issued in shadow from 2026-10-03 (watcher#325): both groups live. NOPERM
+  shown on this broker by a planned rehearsal, 2026-10-04: a refused publish
+  left the command pending and the reclaim delivered it, no strike.
 - CannObserv/broker#64 - `content.persist` (archiver -> replicator, cannobserv
   #493), provisioned 2026-09-26 ahead of both ends: archiver's `+xadd` in a
   selector only, replicator's third worker pool, `replicator.persist` probed,
