@@ -216,7 +216,8 @@ def test_the_checkin_credential_has_a_file_of_its_own() -> None:
 
     And only the one file: ``notifier.env`` was kept through the handover for
     the key that disabled notifier's copy (#66), was never the probe's, and was
-    shredded once notifier deleted the ``co-broker`` tenant (#70).
+    shredded as ``notifier.env.pre-status-66`` once notifier deleted the
+    ``co-broker`` tenant (#70). The substring assert covers either spelling.
     """
     text = REPO_SERVICE.read_text()
     assert "EnvironmentFile=-/etc/broker/status.env" in text
