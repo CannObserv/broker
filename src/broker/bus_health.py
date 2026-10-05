@@ -331,11 +331,12 @@ REPLICATE_GROUP = group_name(CONTENT_REPLICATE, "replicator")
 # command stream's one worker pool is Processor's - Observo's until
 # CannObserv/broker#75 moved it to a service of its own - and the fact stream's
 # first group is Watcher's. Both were declared here ahead of their consumers,
-# and both have been live since 2026-10-03 - cannobserv v0.19.4 marks them
-# *pending broker#62* under the #384 rule that a documented group exists on the
-# broker, still naming `observo.process` until CannObserv/cannobserv#503 -
-# which is what lets the probe watch for them from the first entry either
-# stream ever carries.
+# and both have been live since 2026-10-03 - the pinned cannobserv v0.19.x marks
+# them *pending broker#62*, naming `observo.process`, under the #384 rule that a
+# documented group exists on the broker (fixed upstream by
+# CannObserv/cannobserv#503, 9dcc1c75, in its next release) - which is what
+# lets the probe watch for them from the first entry either stream ever
+# carries.
 PROCESS_GROUP = group_name(CONTENT_PROCESS, "processor")
 DERIVED_GROUP = group_name(CONTENT_DERIVED, "watcher")
 # The persist command (CannObserv/broker#64, the cannobserv#493 contract):

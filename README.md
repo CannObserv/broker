@@ -71,11 +71,13 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   its own, Processor (`co-processor`), 2026-09-30: ACL user `processor` with
   #62's line unchanged, minted hash-only because #72's backup refuses a
   plaintext line; `observo` deleted, never having connected; the probe on
-  `processor.process`. co-core still names `observo.process` until
-  CannObserv/cannobserv#503. Processor consumed from 2026-10-02 and Watcher
-  issued in shadow from 2026-10-03 (watcher#325): both groups live. NOPERM
-  shown on this broker by a planned rehearsal, 2026-10-04: a refused publish
-  left the command pending and the reclaim delivered it, no strike.
+  `processor.process`; co-core renamed it upstream in cannobserv#503
+  (`9dcc1c75`, unreleased as of 2026-10-05). Processor consumed from
+  2026-10-02 and Watcher issued in shadow from 2026-10-03 (watcher#325): both
+  groups live. NOPERM shown on this broker by a planned rehearsal, 2026-10-04:
+  a refused publish left the command pending and the reclaim delivered it, no
+  strike. The `tag:observo-primary` tailnet rule came out 2026-10-05; closed
+  that day.
 - CannObserv/broker#64 - `content.persist` (archiver -> replicator, cannobserv
   #493), provisioned 2026-09-26 ahead of both ends: archiver's `+xadd` in a
   selector only, replicator's third worker pool, `replicator.persist` probed,
