@@ -565,6 +565,12 @@ timers into co-status (`CannObserv/status`, tailnet node `status`). co-status
 kept the wire contract - path, body, the 202, the monitor id - so broker#66
 changed the host and the key and nothing else.
 
+Broker's access to notifier is gone, not dormant (broker#70, 2026-10-05). The
+old key was revoked when notifier deleted the `co-broker` tenant. Its file,
+`/etc/broker/notifier.env.pre-status-66`, was shredded, and `notifier` is no
+longer in this node's tailnet netmap. From here, a `notifier:9000` timeout is
+the expected state and not a fault, so do not ask for the rule back.
+
 **The report goes every tick regardless of `finding_count`, and that is the
 design rather than chattiness.** A findings-only push is silent in exactly the
 cases that matter most - a dead probe, a stopped timer, a wedged `uv run` or a
