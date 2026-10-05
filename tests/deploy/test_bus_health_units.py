@@ -214,8 +214,9 @@ def test_the_checkin_credential_has_a_file_of_its_own() -> None:
     The leading `-` is part of the contract: absent is the supported state, and
     a node not yet wired to co-status must still start.
 
-    And only the one file: ``notifier.env`` is kept through the handover for
-    the key that disables notifier's copy (#66), and it is not the probe's.
+    And only the one file: ``notifier.env`` was kept through the handover for
+    the key that disabled notifier's copy (#66), was never the probe's, and was
+    shredded once notifier deleted the ``co-broker`` tenant (#70).
     """
     text = REPO_SERVICE.read_text()
     assert "EnvironmentFile=-/etc/broker/status.env" in text
