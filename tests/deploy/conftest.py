@@ -45,6 +45,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -300,6 +301,21 @@ def on_broker_node() -> bool:
     return any(marker.exists() for marker in NODE_MARKERS)
 
 
+def require_broker_node() -> None:
+    """Skip unless ``on_broker_node``: the one place a test leaves the node."""
+    if not on_broker_node():
+        pytest.skip("not the broker node - no NODE_MARKERS present")
+
+
+def pretend_node(monkeypatch, tmp_path: Path, *, present: bool) -> None:
+    """Point ``NODE_MARKERS`` at one marker under ``tmp_path``, present or not,
+    so a pin can show both sides of ``require_broker_node`` on any host."""
+    marker = tmp_path / "node-marker"
+    if present:
+        marker.touch()
+    monkeypatch.setattr(sys.modules[__name__], "NODE_MARKERS", (marker,))
+
+
 def read_installed(path: Path) -> str:
     """``path``'s contents on the broker node; a skip anywhere else.
 
@@ -307,8 +323,7 @@ def read_installed(path: Path) -> str:
     on the node an absent ``path`` fails: it is a deploy step not taken, or one
     undone.
     """
-    if not on_broker_node():
-        pytest.skip("not the broker node - no NODE_MARKERS present")
+    require_broker_node()
     try:
         return path.read_text()
     except FileNotFoundError:

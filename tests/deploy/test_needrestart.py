@@ -29,8 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.deploy import conftest
-from tests.deploy.conftest import DEPLOY, on_broker_node, read_installed
+from tests.deploy.conftest import DEPLOY, pretend_node, read_installed, require_broker_node
 
 DROPIN = DEPLOY / "needrestart.conf.d" / "broker.conf"
 INSTALLED = Path("/etc/needrestart/conf.d/broker.conf")
@@ -81,8 +80,7 @@ def test_installed_copy_matches_tracked() -> None:
 def test_live_config_chain_resolves_to_list_only() -> None:
     """The main config globs ``conf.d/*.conf`` in sort order, so a later file
     could override this one. Evaluate the chain needrestart itself reads."""
-    if not on_broker_node():
-        pytest.skip("not the broker node - no NODE_MARKERS present")
+    require_broker_node()
     assert MAIN_CONF.exists(), f"{MAIN_CONF} absent - needrestart not installed on the node"
     assert _restart_mode(MAIN_CONF) == "l"
 
@@ -101,17 +99,10 @@ def stock_needrestart(tmp_path, monkeypatch) -> Path:
     return main
 
 
-def _node(monkeypatch, tmp_path, *, present: bool) -> None:
-    marker = tmp_path / "node-marker"
-    if present:
-        marker.touch()
-    monkeypatch.setattr(conftest, "NODE_MARKERS", (marker,))
-
-
 def test_live_chain_skips_off_the_node_even_with_needrestart_installed(
     stock_needrestart, monkeypatch, tmp_path
 ) -> None:
-    _node(monkeypatch, tmp_path, present=False)
+    pretend_node(monkeypatch, tmp_path, present=False)
     with pytest.raises(pytest.skip.Exception):
         test_live_config_chain_resolves_to_list_only()
 
@@ -123,7 +114,7 @@ def test_live_chain_fails_on_the_node_without_the_dropin(
     node would skip the one test that guards it."""
     if shutil.which("perl") is None:
         pytest.skip("perl not available on this host")
-    _node(monkeypatch, tmp_path, present=True)
+    pretend_node(monkeypatch, tmp_path, present=True)
     with pytest.raises(AssertionError):
         test_live_config_chain_resolves_to_list_only()
 
@@ -131,12 +122,12 @@ def test_live_chain_fails_on_the_node_without_the_dropin(
 def test_installed_copy_fails_on_the_node_when_absent(
     stock_needrestart, monkeypatch, tmp_path
 ) -> None:
-    _node(monkeypatch, tmp_path, present=True)
+    pretend_node(monkeypatch, tmp_path, present=True)
     with pytest.raises(pytest.fail.Exception):
         test_installed_copy_matches_tracked()
 
 
 def test_installed_copy_skips_off_the_node(stock_needrestart, monkeypatch, tmp_path) -> None:
-    _node(monkeypatch, tmp_path, present=False)
+    pretend_node(monkeypatch, tmp_path, present=False)
     with pytest.raises(pytest.skip.Exception):
         test_installed_copy_matches_tracked()

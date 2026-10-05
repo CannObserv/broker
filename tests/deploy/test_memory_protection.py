@@ -30,8 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.deploy import conftest
-from tests.deploy.conftest import DEPLOY, read_installed
+from tests.deploy.conftest import DEPLOY, pretend_node, read_installed
 from tests.deploy.test_installed_redis_config_matches_repo import (
     REPO_REDIS_CONF,
     parse_directives,
@@ -398,13 +397,6 @@ def test_earlyoom_is_installed_and_disabled(verb: str, expected: str) -> None:
 # --- the node signal the tests above skip on (broker#79) ---
 
 
-def _node(monkeypatch, tmp_path, *, present: bool) -> None:
-    marker = tmp_path / "node-marker"
-    if present:
-        marker.touch()
-    monkeypatch.setattr(conftest, "NODE_MARKERS", (marker,))
-
-
 @pytest.mark.parametrize("present", [True, False], ids=["on-node", "off-node"])
 def test_earlyoom_tests_skip_only_off_the_node(monkeypatch, tmp_path, present: bool) -> None:
     """earlyoom is disabled on purpose (#58), not uninstalled: its config stays,
@@ -412,6 +404,6 @@ def test_earlyoom_tests_skip_only_off_the_node(monkeypatch, tmp_path, present: b
     missing ``/etc/default/earlyoom`` says "not the node" only off it; on it, the
     deploy step was undone, and the guard reports that instead of going quiet."""
     monkeypatch.setitem(INSTALLED, EARLYOOM, tmp_path / "earlyoom")
-    _node(monkeypatch, tmp_path, present=present)
+    pretend_node(monkeypatch, tmp_path, present=present)
     with pytest.raises(pytest.fail.Exception if present else pytest.skip.Exception):
         test_earlyoom_is_installed_and_disabled("is-enabled", "disabled")
