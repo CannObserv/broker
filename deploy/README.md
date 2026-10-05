@@ -20,10 +20,15 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). It **cannot reach dev tooling**, which exe.dev starts at -1000, so it would shed small daemons only: **installed and disabled** (broker#58), configured for the day that changes |
 | `needrestart.conf.d/broker.conf` | `/etc/needrestart/conf.d/` | `$nrconf{restart} = 'l'`: needrestart **lists** restarts after an apt run, never performs them. Stock Ubuntu mode restarts automatically, so a `libc6` security update would restart `redis-server` outside a window (broker#65) |
 
-`tests/deploy/` asserts all of it: the installed copies match these files
-(skipping when absent, so CI and dev clones pass), and
+`tests/deploy/` asserts all of it: the installed copies match these files, and
 `test_live_broker_matches_tracked_config.py` reads the running config back
 through `CONFIG GET` so a `CONFIG SET` that no file records still gets caught.
+Off the node they skip, so CI and dev clones pass. "Off the node" is
+`on_broker_node()` in `tests/deploy/conftest.py`, never the absence of the file
+under test: on the node a missing copy **fails**, so deleting a drop-in cannot
+quiet its own guard (broker#79). The memory-protection and needrestart rows
+follow that rule; the units and the redis-server drop-in still skip on their own
+absence until broker#81.
 
 ## The ACL users need a restart, and that was not obvious
 
