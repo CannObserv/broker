@@ -115,7 +115,7 @@ def test_live_chain_fails_on_the_node_without_the_dropin(
     if shutil.which("perl") is None:
         pytest.skip("perl not available on this host")
     pretend_node(monkeypatch, tmp_path, present=True)
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="undef"):
         test_live_config_chain_resolves_to_list_only()
 
 
