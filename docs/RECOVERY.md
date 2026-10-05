@@ -305,7 +305,7 @@ against its stream's `last-generated-id`. Once they are back:
 sudo systemctl enable --now broker-bus-health.timer broker-backup.timer
 sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -o cat --no-pager
 set -a; . /etc/broker/.env; set +a
-uv run pytest tests/deploy -q          # 0 skipped on a node that is fully installed
+uv run pytest tests/deploy -rs         # the only skips: test_redis_acl.py's unassigned-DLQ rows
 ```
 
 The first probe tick after the timer starts should be `finding_count: 0`; the
