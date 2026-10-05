@@ -1,4 +1,4 @@
-"""What the deploy tests share: the tracked ACL file, and two servers.
+"""What the deploy tests share: the tracked ACL file, two servers, and the node signal.
 
 ``parse_users`` and ``ACL_FILE`` are here rather than in a test module because
 two test modules read the tracked file and neither should have to import the
@@ -28,6 +28,10 @@ also why the throwaway one is no longer called ``live_acl_broker``. Standing
 beside a fixture that really is the live broker, that name said the opposite of
 what it is, and the test that compares the two is exactly where a reader must
 not have to guess which is which.
+
+``on_broker_node`` is the one answer to "is this the node?" for a test whose
+subject is an installed file (CannObserv/broker#79), and ``read_installed`` the
+read that uses it.
 
 Both throwaway servers - ``tracked_acl_broker``'s, and the one that loads the
 node's *saved* ACL to compare it with the live one (CannObserv/broker#54) - are
@@ -276,6 +280,39 @@ def tracked_acl_broker(tmp_path_factory):
 
     with acl_server(acl, tmp_path) as connect:
         yield connect
+
+
+#: What only the broker node carries, readable without sudo or an env file. **Any**
+#: one present means "this is the node", so the absence of a single installed
+#: drop-in is a finding there rather than a skip. Keying a test on the file it
+#: guards - or on the package that file configures - is what made
+#: ``test_needrestart.py`` fail on every CI runner shipping needrestart, and would
+#: have made the drop-in's deletion skip its own guard on the node (broker#79).
+NODE_MARKERS = (
+    Path("/etc/broker"),
+    Path("/etc/systemd/system/broker-bus-health.service"),
+    Path("/etc/systemd/system/broker-backup.service"),
+    Path("/etc/systemd/system/redis-server.service.d/broker.conf"),
+)
+
+
+def on_broker_node() -> bool:
+    return any(marker.exists() for marker in NODE_MARKERS)
+
+
+def read_installed(path: Path) -> str:
+    """``path``'s contents on the broker node; a skip anywhere else.
+
+    Off the node is decided by ``on_broker_node``, never by ``path`` itself, and
+    on the node an absent ``path`` fails: it is a deploy step not taken, or one
+    undone.
+    """
+    if not on_broker_node():
+        pytest.skip("not the broker node - no NODE_MARKERS present")
+    try:
+        return path.read_text()
+    except FileNotFoundError:
+        pytest.fail(f"{path} is not installed on the broker node")
 
 
 #: The operator's password, a ``systemd-creds`` credential encrypted to the node

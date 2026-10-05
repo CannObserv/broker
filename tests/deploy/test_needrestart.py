@@ -14,18 +14,23 @@ Tracked in ``deploy/``, installed as:
 
 Split like the other deploy tests: **pure** assertions on the tracked copy run
 everywhere; **installed parity** and **live** assertions skip where the node is
-not this one.
+not this one - decided by ``on_broker_node``, not by needrestart being installed.
+GitHub's ``ubuntu-latest`` ships needrestart without this drop-in, and the live
+test failed on it for 27 pushes in a row (broker#79). On the node, a missing
+drop-in fails both rather than skipping them.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from tests.deploy.conftest import DEPLOY
+from tests.deploy import conftest
+from tests.deploy.conftest import DEPLOY, on_broker_node, read_installed
 
 DROPIN = DEPLOY / "needrestart.conf.d" / "broker.conf"
 INSTALLED = Path("/etc/needrestart/conf.d/broker.conf")
@@ -70,16 +75,68 @@ def test_dropin_sets_nothing_else() -> None:
 
 
 def test_installed_copy_matches_tracked() -> None:
-    try:
-        installed = INSTALLED.read_text()
-    except FileNotFoundError:
-        pytest.skip(f"{INSTALLED} not installed on this host")
-    assert installed == DROPIN.read_text()
+    assert read_installed(INSTALLED) == DROPIN.read_text()
 
 
 def test_live_config_chain_resolves_to_list_only() -> None:
     """The main config globs ``conf.d/*.conf`` in sort order, so a later file
     could override this one. Evaluate the chain needrestart itself reads."""
-    if not MAIN_CONF.exists():
-        pytest.skip("needrestart not installed on this host")
+    if not on_broker_node():
+        pytest.skip("not the broker node - no NODE_MARKERS present")
+    assert MAIN_CONF.exists(), f"{MAIN_CONF} absent - needrestart not installed on the node"
     assert _restart_mode(MAIN_CONF) == "l"
+
+
+# --- the node signal the two tests above skip on (broker#79) ---
+
+
+@pytest.fixture
+def stock_needrestart(tmp_path, monkeypatch) -> Path:
+    """A needrestart main config with no drop-in behind it: GitHub's
+    ``ubuntu-latest``, which ships needrestart and resolves to stock ``undef``."""
+    main = tmp_path / "needrestart.conf"
+    main.write_text("$nrconf{verbosity} = 1;\n")
+    monkeypatch.setattr(sys.modules[__name__], "MAIN_CONF", main)
+    monkeypatch.setattr(sys.modules[__name__], "INSTALLED", tmp_path / "conf.d" / "broker.conf")
+    return main
+
+
+def _node(monkeypatch, tmp_path, *, present: bool) -> None:
+    marker = tmp_path / "node-marker"
+    if present:
+        marker.touch()
+    monkeypatch.setattr(conftest, "NODE_MARKERS", (marker,))
+
+
+def test_live_chain_skips_off_the_node_even_with_needrestart_installed(
+    stock_needrestart, monkeypatch, tmp_path
+) -> None:
+    _node(monkeypatch, tmp_path, present=False)
+    with pytest.raises(pytest.skip.Exception):
+        test_live_config_chain_resolves_to_list_only()
+
+
+def test_live_chain_fails_on_the_node_without_the_dropin(
+    stock_needrestart, monkeypatch, tmp_path
+) -> None:
+    """The hazard the obvious fix had: keyed on the drop-in, its deletion from the
+    node would skip the one test that guards it."""
+    if shutil.which("perl") is None:
+        pytest.skip("perl not available on this host")
+    _node(monkeypatch, tmp_path, present=True)
+    with pytest.raises(AssertionError):
+        test_live_config_chain_resolves_to_list_only()
+
+
+def test_installed_copy_fails_on_the_node_when_absent(
+    stock_needrestart, monkeypatch, tmp_path
+) -> None:
+    _node(monkeypatch, tmp_path, present=True)
+    with pytest.raises(pytest.fail.Exception):
+        test_installed_copy_matches_tracked()
+
+
+def test_installed_copy_skips_off_the_node(stock_needrestart, monkeypatch, tmp_path) -> None:
+    _node(monkeypatch, tmp_path, present=False)
+    with pytest.raises(pytest.skip.Exception):
+        test_installed_copy_matches_tracked()

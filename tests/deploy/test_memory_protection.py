@@ -16,7 +16,8 @@ Tracked in ``deploy/``, installed as:
 
 Split like the other deploy tests: **pure** assertions on the tracked copies
 run everywhere; **installed parity** and **live** assertions skip where the node
-is not this one.
+is not this one, by ``on_broker_node`` rather than by the file each one checks: on
+the node, a missing drop-in fails (broker#79).
 """
 
 from __future__ import annotations
@@ -29,7 +30,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.deploy.conftest import DEPLOY
+from tests.deploy import conftest
+from tests.deploy.conftest import DEPLOY, read_installed
 from tests.deploy.test_installed_redis_config_matches_repo import (
     REPO_REDIS_CONF,
     parse_directives,
@@ -93,15 +95,6 @@ PROTECTED = [
 DEV_TOOLING = ["node", "npm exec socrat", "npx", "MainThread"]
 
 _UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
-
-
-def _read_if_installed(path: Path) -> str | None:
-    """Only ``FileNotFoundError`` means "not installed" - a ``PermissionError``
-    propagates rather than silently passing."""
-    try:
-        return path.read_text()
-    except FileNotFoundError:
-        return None
 
 
 def sysctl_settings() -> dict[str, str]:
@@ -306,10 +299,7 @@ def test_earlyoom_acts_while_memory_is_still_available() -> None:
 
 @pytest.mark.parametrize("tracked", list(INSTALLED), ids=lambda p: p.name)
 def test_installed_copy_matches_tracked(tracked: Path) -> None:
-    installed = _read_if_installed(INSTALLED[tracked])
-    if installed is None:
-        pytest.skip(f"{INSTALLED[tracked]} not installed on this host")
-    assert installed == tracked.read_text()
+    assert read_installed(INSTALLED[tracked]) == tracked.read_text()
 
 
 @pytest.mark.parametrize("key", sorted(sysctl_settings()))
@@ -322,8 +312,7 @@ def test_live_sysctl_is_the_tracked_value(key: str) -> None:
     is exactly the drift this reads back. Derived from the file rather than
     named, so the next key gets the check without an edit here.
     """
-    if _read_if_installed(INSTALLED[SYSCTL]) is None:
-        pytest.skip("sysctl drop-in not installed on this host")
+    read_installed(INSTALLED[SYSCTL])
     live = Path("/proc/sys", *key.split(".")).read_text().strip()
     assert live == sysctl_settings()[key]
 
@@ -331,8 +320,7 @@ def test_live_sysctl_is_the_tracked_value(key: str) -> None:
 @pytest.mark.parametrize("tracked", list(CGROUPS), ids=lambda p: p.parent.name)
 def test_live_memory_low_is_the_tracked_value(tracked: Path) -> None:
     """A drop-in on disk is not a value in the kernel until systemd applies it."""
-    if _read_if_installed(INSTALLED[tracked]) is None:
-        pytest.skip(f"{INSTALLED[tracked]} not installed on this host")
+    read_installed(INSTALLED[tracked])
     assert int(CGROUPS[tracked].read_text()) == memory_low(tracked)
 
 
@@ -342,8 +330,7 @@ def test_live_bus_is_out_of_earlyooms_reach(tracked: Path) -> None:
     until ``choom`` or a restart, so read the kernel's. ``--avoid`` then takes it
     below earlyoom's badness-0 starting victim, which it never replaces with a
     lower score."""
-    if _read_if_installed(INSTALLED[tracked]) is None:
-        pytest.skip(f"{INSTALLED[tracked]} not installed on this host")
+    read_installed(INSTALLED[tracked])
     unit = OOM_UNITS[tracked]
     main_pid = subprocess.run(
         ["systemctl", "show", "-p", "MainPID", "--value", unit], capture_output=True, text=True
@@ -377,8 +364,7 @@ def test_live_prefer_reaches_nothing() -> None:
     protection* section describes a different node, and earlyoom is worth
     turning back on.
     """
-    if _read_if_installed(INSTALLED[EARLYOOM]) is None:
-        pytest.skip("earlyoom not configured on this host")
+    read_installed(INSTALLED[EARLYOOM])
     live = _live_processes()
     roots: dict[str, set[int]] = {}
     for comm, adj in live:
@@ -402,9 +388,30 @@ def test_earlyoom_is_installed_and_disabled(verb: str, expected: str) -> None:
     arguments, and an enabled unit would come back at the next hard stop. Kept
     installed so that if ``test_live_prefer_reaches_nothing`` ever fails, turning
     it back on is ``systemctl enable --now earlyoom``."""
-    if _read_if_installed(INSTALLED[EARLYOOM]) is None:
-        pytest.skip("earlyoom not configured on this host")
+    read_installed(INSTALLED[EARLYOOM])
     if not shutil.which("systemctl"):
         pytest.skip("no systemctl")
     state = subprocess.run(["systemctl", verb, "earlyoom"], capture_output=True, text=True)
     assert state.stdout.strip() == expected
+
+
+# --- the node signal the tests above skip on (broker#79) ---
+
+
+def _node(monkeypatch, tmp_path, *, present: bool) -> None:
+    marker = tmp_path / "node-marker"
+    if present:
+        marker.touch()
+    monkeypatch.setattr(conftest, "NODE_MARKERS", (marker,))
+
+
+@pytest.mark.parametrize("present", [True, False], ids=["on-node", "off-node"])
+def test_earlyoom_tests_skip_only_off_the_node(monkeypatch, tmp_path, present: bool) -> None:
+    """earlyoom is disabled on purpose (#58), not uninstalled: its config stays,
+    and ``test_earlyoom_is_installed_and_disabled`` asserts that state. So a
+    missing ``/etc/default/earlyoom`` says "not the node" only off it; on it, the
+    deploy step was undone, and the guard reports that instead of going quiet."""
+    monkeypatch.setitem(INSTALLED, EARLYOOM, tmp_path / "earlyoom")
+    _node(monkeypatch, tmp_path, present=present)
+    with pytest.raises(pytest.fail.Exception if present else pytest.skip.Exception):
+        test_earlyoom_is_installed_and_disabled("is-enabled", "disabled")
