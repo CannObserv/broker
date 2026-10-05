@@ -2586,8 +2586,8 @@ def test_the_checkin_url_is_not_notifiers() -> None:
 async def test_the_retired_notifier_names_are_not_read(fake_redis, tmp_path, monkeypatch) -> None:
     """`/etc/broker/notifier.env` outlived the switch - the handover disabled
     notifier's copy with its key (#66) - until it was shredded (#70). An
-    operator shell that sourced it, or a node restored from before then, must
-    not be mistaken for a wired node. Only the `STATUS_*` pair counts."""
+    operator shell that sourced it must not be mistaken for a wired node. Only
+    the `STATUS_*` pair counts."""
     monkeypatch.setenv("NOTIFIER_MONITOR_ID", "01JMONITOR")
     monkeypatch.setenv("NOTIFIER_API_KEY", "k3y")
     monkeypatch.setattr(
