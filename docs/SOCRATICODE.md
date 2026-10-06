@@ -167,3 +167,24 @@ path hash, `d4eab3ecb321`.
 its installed tooling, 360 files against broker's 57 when measured on
 2026-09-15 - plus `.worktrees/` and `.claude/worktrees/`, so an index of the
 main checkout does not also take each worktree's copy of the tree.
+
+**Both launches are pinned, to one version (#33).** The session's server is
+the plugin's `npx -y --prefer-online ${SOCRATICODE_SPEC:-socraticode@latest}`,
+pinned by `SOCRATICODE_SPEC` in `.claude/settings.json`'s `env` block. The
+driver's (the health hook, `index`, `status`, `verify`) is a pre-install under
+`~/.socraticode/pin`, **outside the repo**, so `git log` shows only half a
+re-pin. Unpinned, either launch installs at start: the 1.2 G peak behind
+2026-09-16. Re-pin both in one sitting, as a decision, each step capped
+(`systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M choom -n 500 --`):
+`npm install --prefix ~/.socraticode/pin socraticode@<v>`, then fill the npx
+cache for the exact spec (`npm exec --yes --prefer-online
+--package=socraticode@<v> -- true`), then the settings line.
+`tests/deploy/test_socraticode_config.py` fails on a spec that is not
+`socraticode@X.Y.Z`, and on this VM on a driver pin that disagrees with it.
+Prove a launch from the process table (an `npm exec socraticode@<v>` whose
+parent is the session's `claude`), never from a manifest or `claude mcp list`.
+Here the env block alone reached a headless launch of the extension's binary
+(2.1.289, 2026-10-06), unlike the three hosts in gregoryfoster/skills#332. A
+VS Code-hosted launch was not yet observed; if one shows `@latest`, the
+fallback is `claudeCode.environmentVariables` in
+`~/.vscode-server/data/Machine/settings.json`.
