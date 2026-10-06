@@ -183,8 +183,9 @@ cache for the exact spec (`npm exec --yes --prefer-online
 `socraticode@X.Y.Z`, and on this VM on a driver pin that disagrees with it.
 Prove a launch from the process table (an `npm exec socraticode@<v>` whose
 parent is the session's `claude`), never from a manifest or `claude mcp list`.
-Here the env block alone reached a headless launch of the extension's binary
-(2.1.289, 2026-10-06), unlike the three hosts in gregoryfoster/skills#332. A
-VS Code-hosted launch was not yet observed; if one shows `@latest`, the
-fallback is `claudeCode.environmentVariables` in
-`~/.vscode-server/data/Machine/settings.json`.
+Here the env block alone reaches the launch, unlike the three hosts in
+gregoryfoster/skills#332: observed 2026-10-06 on extension 2.1.289, headless
+and then VS Code-hosted after a window reload, with no VS Code settings file,
+shell export or extension-host environment carrying the variable. If a later
+extension build launches `@latest` again, the fallback is
+`claudeCode.environmentVariables` in `~/.vscode-server/data/Machine/settings.json`.
