@@ -846,3 +846,26 @@ def test_a_file_absent_behind_sudo_fails_on_the_node(
     assert outcome is None if expected is None else isinstance(outcome, expected)
     if not node:
         assert calls == [], "sudo ran off the node"
+
+
+@pytest.mark.parametrize("present", [True, False], ids=["on-node", "off-node"])
+@pytest.mark.parametrize(
+    "site",
+    [
+        lambda: next(conftest.live_client.__wrapped__()),
+        lambda: node_passwords.__wrapped__(None),
+        lambda: node_saved_acl.__wrapped__(None),
+    ],
+    ids=["live_client", "node_passwords", "node_saved_acl"],
+)
+def test_each_sudo_read_fails_on_the_node_when_its_file_is_absent(
+    monkeypatch, tmp_path, site, present: bool
+) -> None:
+    """Each call site, not only the helper: an inline skip put back in any one
+    of the three fixtures would pass the pin above. Driven through the
+    fixture's own body, with working sudo and every file absent."""
+    monkeypatch.setenv("BROKER_REDIS_URL", "redis://brokeradmin@localhost:6379/0")
+    monkeypatch.setattr(conftest, "_sudo_status", lambda *argv: 0 if argv == ("true",) else 1)
+    pretend_node(monkeypatch, tmp_path, present=present)
+    expected = pytest.fail.Exception if present else pytest.skip.Exception
+    assert isinstance(outcome_of(site), expected)
