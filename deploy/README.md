@@ -332,7 +332,7 @@ Then verify against the running broker rather than against the files:
 
 ```bash
 set -a; . /etc/broker/.env; set +a
-uv run pytest tests/deploy            # every skip becomes a real assertion here
+uv run pytest tests/deploy -rs        # the only skips: test_redis_acl.py's unassigned-DLQ rows
 ```
 
 **Restarting `redis-server` is a cohort-wide event.** Every service connects
