@@ -48,8 +48,9 @@ enforced the same way since CannObserv/broker#43: the four group commands
 (`XREADGROUP`, `XACK`, `XAUTOCLAIM`, `XGROUP CREATE`) ride a **consume
 selector** naming only the streams this column says the service consumes in a
 group, so a producer cannot take delivery in its consumer's group and `XACK` the
-entry away. Each service's reads are selectors of their own, on the streams its
-owner named; the three groupless tails (`info.watch-status`, `info.registry`,
+entry away. Processor keeps them on its root, which names only the stream it
+consumes and its own queue. The other three services' reads are selectors of
+their own, on the streams each owner named; the three groupless tails (`info.watch-status`, `info.registry`,
 `content.fetch-policy`) are reads, not group commands.
 `tests/deploy/test_redis_acl.py` parses this column and that phrase and asks
 redis to prove both halves, so a row changed here without the grant following
