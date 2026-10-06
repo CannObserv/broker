@@ -49,15 +49,15 @@ silently corrupts values.
   `info.changes`'s borrowed 110k (broker#60); the processing pair arrived with
   no cap by contract (broker#62), as did `content.persist` (broker#64). All
   but `content.derived` are also **Never XTRIMmed**: no `+xtrim` selector names
-  them since broker#41, and a trim grant returns only as a producer's named request.
-  `docs/STREAMS.md`'s **No retention cap** is pinned to the probe's unthresholded rows; a cap
-  comes back only with a producer that owns one. Their groups *are* probed -
-  the old unqualified "never `content.blobs`" was archiver's role boundary,
-  retired by broker#1 Phase 5 because a neutral node has no role to be out of
-  bounds of. A group's `warn_undelivered_age_seconds` is not the exception it
-  looks like: an undelivered age is a statement about the consumer's read loop,
-  which this node measures directly and therefore owns, not about how long
-  entries are kept.
+  them since broker#41, and a trim grant returns only as a producer's named
+  request. `docs/STREAMS.md`'s **No retention cap** is pinned to the probe's
+  unthresholded rows; a cap comes back only with a producer that owns one. Their
+  groups *are* probed - the old unqualified "never `content.blobs`" was
+  archiver's role boundary, retired by broker#1 Phase 5 because a neutral node
+  has no role to be out of bounds of. A group's `warn_undelivered_age_seconds`
+  is not the exception it looks like: an undelivered age is a statement about
+  the consumer's read loop, which this node measures directly and therefore
+  owns, not about how long entries are kept.
 - **DLQs: the broker detects, captures and escalates; the consumer triages.**
   Splitting the old single "drainer" role is broker#1 Phase 5. Anything
   mechanical and suffix-keyed belongs here; reading a payload to tell residue
