@@ -11,7 +11,7 @@ imported by any service; the services reach the broker over the network, by URL.
 | Path | What it is |
 |---|---|
 | [`deploy/redis.conf.broker`](deploy/redis.conf.broker) | The broker's tuning as deployed - bind, auth, AOF persistence, `noeviction`, an explicit `maxmemory` cap. Appended to `/etc/redis/redis.conf`, with the credential templated |
-| [`deploy/redis-acl.conf`](deploy/redis-acl.conf) + [`deploy/render-acl.sh`](deploy/render-acl.sh) | The per-service ACL users - what actually scopes each service to its own streams, rather than documenting it. Since broker#14 `+xadd`/`+xtrim`/`+set` ride **selectors** naming only what each service produces, so a consumer cannot publish to the stream it reads. Rendered to `/etc/redis/users.acl`; changed live as `acladmin` and mirrored back |
+| [`deploy/redis-acl.conf`](deploy/redis-acl.conf) + [`deploy/render-acl.sh`](deploy/render-acl.sh) | The per-service ACL users - what actually scopes each service to its own streams, rather than documenting it. Since broker#14 `+xadd`/`+xtrim`/`+set` ride **selectors** naming only what each service produces, so a consumer cannot publish to the stream it reads; since broker#43 the group commands ride a selector naming only what it consumes, so a producer cannot take delivery in its consumer's group. Rendered to `/etc/redis/users.acl`; changed live as `acladmin` and mirrored back |
 | [`deploy/redis-server.service.d/broker.conf`](deploy/redis-server.service.d/broker.conf) + [`deploy/wait-for-tailnet-addr.sh`](deploy/wait-for-tailnet-addr.sh) | Unit ordering only: `After=tailscaled` plus the `/proc/net/fib_trie` wait that R1's boot race exists for |
 | [`deploy/broker-bus-health.service`](deploy/broker-bus-health.service) / [`.timer`](deploy/broker-bus-health.timer) | The periodic WARN-only health probe, every 10 minutes |
 | [`src/broker/bus_health.py`](src/broker/bus_health.py) | The probe: memory headroom **and eviction policy**, per-stream length against retention caps, last-entry age on groupless streams, per-group `pending`, **the age of what a consumer group has not been delivered** - the check a stopped reader is otherwise invisible to, since pending counts only what was delivered; both, and whether the group exists at all, come out of one `XINFO GROUPS` per stream (#29) - **DLQ depth and continuity** - a queue drained between ticks is reported from its monotonic `entries-added` even though depth never saw it - disk, persistence status, and the backup's freshness |
@@ -61,6 +61,11 @@ owns:
   decision (CannObserv/watcher#327, CannObserv/replicator#119), and folded
   each service's publish into one selector (live 2026-10-06): archiver's
   `info.changes` is the one stream outside `*.dlq` any identity can trim.
+  #43 then moved the group commands off each root into a consume selector
+  naming only the streams that service consumes in a group, and every read
+  into a selector naming the streams its owner answered for
+  (CannObserv/archiver#321, CannObserv/watcher#344, CannObserv/replicator#129),
+  live 2026-10-06: no producer can take delivery in its consumer's group.
 
 Onboarding and credential history since, moved from AGENTS.md's *Related*
 (2026-09-29):

@@ -191,6 +191,21 @@ def selector_patterns(rules: list[str], command: str) -> set[str]:
     }
 
 
+def reaches(rules: list[str], command: str, key: str) -> bool:
+    """Whether ``command`` may be issued on ``key``, by any route.
+
+    The root's commands on the root's patterns, or any selector granting the
+    command on its own. Since CannObserv/broker#43 most of what a service reads
+    is a selector, so "holds the command" and "can name the key" no longer
+    combine into "can issue it there" - the two halves have to come from the
+    same permission set.
+    """
+    root, _ = split_rules(rules)
+    return (command in root and admits(root_key_patterns(rules), key)) or admits(
+        selector_patterns(rules, command), key
+    )
+
+
 def granted_commands(rules: list[str]) -> set[str]:
     """Every `+command` a user holds, by any route.
 
@@ -386,12 +401,21 @@ def test_a_dlq_writer_can_also_drain_it(users, user) -> None:
     Asked of the **selectors** rather than of the root rules, since broker#14
     took both commands off every root permission set: on the root they applied
     to every pattern the user holds, including the streams it only reads.
+
+    The audit is `XLEN` and `XRANGE`, asked queue by queue since the reads
+    became selectors too (CannObserv/broker#43). `XINFO STREAM` was on this
+    list for the boundary of an `XTRIM MINID`, which only `acladmin`'s backstop
+    drain takes; every drainer's triage reads the entries and deletes the ids
+    it read (CannObserv/archiver#238, CannObserv/replicator#129).
     """
     queues = [p for p in key_patterns(users[user]) if p.endswith(".dlq")]
     if not queues:
         pytest.skip(f"{user} writes no DLQ")
-    for command in ("+xrange", "+xlen", "+xinfo|stream"):
-        assert command in users[user], f"{user} cannot drain its own DLQ: missing {command}"
+    for queue in queues:
+        for command in ("+xrange", "+xlen"):
+            assert reaches(users[user], command, queue), (
+                f"{user} cannot drain {queue}, which it writes: missing {command} there"
+            )
     disposable = selector_patterns(users[user], "+xtrim") | selector_patterns(users[user], "+xdel")
     for queue in queues:
         assert admits(disposable, queue), (
@@ -634,6 +658,170 @@ def test_no_selector_can_trim_a_stream_the_inventory_never_xtrims(users) -> None
             )
 
 
+# --- what each service may CONSUME (CannObserv/broker#43) ---
+#
+# The mirror of the publish half. Until #43 the four group commands sat on each
+# root beside every stream the service named, produced ones included, so every
+# grouped stream's producer could take delivery in its consumer's group and
+# XACK the entry away before the consumer saw it - tested against this file on
+# 2026-09-22. Each service now consumes through a selector, and its reads are
+# selectors too, each naming the streams an owner's call site issues it on.
+
+GROUP_CELL = 3
+"""The ``Consumer group`` column of the *Streams on this broker* table."""
+
+
+def documented_group_consumers() -> dict[str, str]:
+    """``stream -> the service consuming it in a group``, off ../docs/STREAMS.md.
+
+    The right half of the ``Producer → consumer`` cell, on the rows whose
+    ``Consumer group`` cell does not say ``none``: a groupless reader
+    (``content.fetch-policy``, ``info.registry``, ``info.watch-status``) holds
+    no group command, and neither does a group that is only a target
+    (``info.changes``). Parsed for the reason ``documented_producers`` is.
+    """
+    found: dict[str, str] = {}
+    for topic, cells in inventory_rows().items():
+        if cells[GROUP_CELL].strip(" *").lower().startswith("none"):
+            continue
+        consumer = cells[PRODUCER_CELL].split("→")[1].split("*(")[0].strip(" *").split()[0]
+        assert consumer.lower() in SERVICE_USERS, f"{topic}'s consumer cell names {consumer!r}"
+        found[topic] = consumer.lower()
+    return found
+
+
+def test_the_inventory_and_the_probe_agree_on_who_consumes_each_group() -> None:
+    """The consumer column and the probe's groups name the same service per
+    stream, so the test below cannot be satisfied by a table the probe
+    contradicts - or, with no grouped row parsed, by nothing at all."""
+    consumers = documented_group_consumers()
+    probed = {c.topic: probed_consumer(c.topic) for c in STREAM_CHECKS if c.pending_group}
+    assert consumers, "the inventory names no grouped stream - has the table moved?"
+    assert consumers == probed, f"inventory {consumers}, probe {probed}"
+
+
+@pytest.mark.parametrize("user", SERVICE_USERS)
+def test_a_group_command_reaches_exactly_the_streams_the_service_consumes(users, user) -> None:
+    """broker#43's hole, closed and pinned in both directions.
+
+    A group command reaching a stream the service does not consume is the
+    swallow: `XREADGROUP` in the consumer's group marks the entry delivered to
+    a consumer that will never ack it, and `XACK` removes it from the PEL, so
+    nothing dead-letters and the probe reads healthy. One missing from a stream
+    it does consume is a loop that backs off forever on NOPERM. Derived from
+    the inventory's consumer column, like the publish test from its producer
+    column, so a new grouped stream cannot arrive without a grant or a red test.
+    """
+    consumed = {topic for topic, c in documented_group_consumers().items() if c == user}
+    for command in GROUP_CONSUMER_COMMANDS:
+        reached = {s for s in CANONICAL_STREAMS if reaches(users[user], command, s)}
+        assert reached == consumed, (
+            f"{user}'s {command} reaches {sorted(reached)}; it consumes {sorted(consumed)} "
+            "in a group - more is another service's group to swallow, less a stalled loop"
+        )
+
+
+@pytest.mark.parametrize("user", SERVICE_USERS)
+def test_no_root_names_a_stream_the_service_produces(users, user) -> None:
+    """A root key pattern applies to every command on the root, so a produced
+    stream on it hands the producer whatever the root holds - the group
+    commands until broker#43, and any read added there later. Processor and
+    the processing pair started this way (broker#62); the rest followed."""
+    produced = {topic for topic, producer in documented_producers().items() if producer == user}
+    named = sorted(t for t in produced if admits(root_key_patterns(users[user]), t))
+    assert not named, f"{user}'s root names {named}, which it produces"
+
+
+#: The reads each owner named at its call sites, per command and key
+#: (CannObserv/broker#43): CannObserv/archiver#321 at 9490b19,
+#: CannObserv/watcher#344 at d7b4914, CannObserv/replicator#129 at 9a168e0 -
+#: plus the runbook reads replicator's docs/COMMANDS.md issues under its own
+#: credential on streams it consumes, which the ask did not cover. Mirrored, not
+#: derived: the broker cannot read another repository's call sites. Processor's
+#: line was read off its driver (CannObserv/broker#75) and keeps its root.
+ANSWERED_READS: dict[str, dict[str, frozenset[str]]] = {
+    "archiver": {
+        "+xread": frozenset({INFO_WATCH_STATUS}),
+        "+xpending": frozenset({CONTENT_REVISIONS, CONTENT_ARTIFACTS}),
+        "+xlen": frozenset({dlq_name(CONTENT_REVISIONS), dlq_name(CONTENT_ARTIFACTS)}),
+        "+xrange": frozenset({dlq_name(CONTENT_REVISIONS), dlq_name(CONTENT_ARTIFACTS)}),
+    },
+    "watcher": {
+        "+xread": frozenset({INFO_REGISTRY}),
+        "+xinfo|stream": frozenset({INFO_WATCH_STATUS}),
+        "+xrange": frozenset(
+            {INFO_WATCH_STATUS, dlq_name(CONTENT_BLOBS), dlq_name(CONTENT_DERIVED)}
+        ),
+        "+xlen": frozenset(
+            {CONTENT_FETCH, CONTENT_REVISIONS, dlq_name(CONTENT_BLOBS), dlq_name(CONTENT_DERIVED)}
+        ),
+    },
+    "replicator": {
+        "+xread": frozenset({CONTENT_FETCH_POLICY}),
+        "+xpending": frozenset({CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST}),
+        "+xinfo|stream": frozenset({CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST}),
+        "+xlen": frozenset(
+            {
+                CONTENT_FETCH_POLICY,
+                CONTENT_BLOBS,
+                CONTENT_ARTIFACTS,
+                *(dlq_name(t) for t in (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST)),
+            }
+        ),
+        "+xrange": frozenset(
+            {
+                CONTENT_FETCH,
+                CONTENT_REPLICATE,
+                CONTENT_PERSIST,
+                CONTENT_FETCH_POLICY,
+                CONTENT_BLOBS,
+                CONTENT_ARTIFACTS,
+                *(dlq_name(t) for t in (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST)),
+            }
+        ),
+    },
+}
+
+#: The reads a service user is asked about, and how each is sent to a live
+#: server. Each is answered without a key existing - an absent stream, or a
+#: group that is not there, is an ordinary error and not a NOPERM.
+READ_PROBES = {
+    "+xread": lambda key: ("XREAD", "COUNT", "1", "STREAMS", key, "0-0"),
+    "+xlen": lambda key: ("XLEN", key),
+    "+xrange": lambda key: ("XRANGE", key, "-", "+", "COUNT", "1"),
+    "+xpending": lambda key: ("XPENDING", key, "nobody"),
+    "+xinfo|stream": lambda key: ("XINFO", "STREAM", key),
+    "+exists": lambda key: ("EXISTS", key),
+}
+
+#: Every stream and queue a read could name.
+STREAMS_AND_QUEUES = frozenset(CANONICAL_STREAMS | {dlq_name(s) for s in CANONICAL_STREAMS})
+
+
+@pytest.mark.parametrize("user", sorted(ANSWERED_READS))
+def test_a_service_reads_exactly_what_its_owner_answered(users, user) -> None:
+    """The root's reads, cut to the answers and moved into selectors.
+
+    Exact per command, both ways: a read the owner did not name is the
+    root-wide property #43 exists to close in its read-only form (archiver
+    could `XREAD` its own grouped stream because `XPENDING` needed the key on
+    the root), and a read it named and lost is a runbook that NOPERMs or a
+    dashboard that reads "could not measure". The root keeps `+info +ping` and
+    no key, so nothing it holds reaches a stream.
+    """
+    rules = users[user]
+    root, _ = split_rules(rules)
+    assert not root_key_patterns(rules), f"{user}'s root names {root_key_patterns(rules)}"
+    assert {r for r in root if r.startswith(("+", "-"))} == {"+info", "+ping"}, root
+    for command in READ_PROBES:
+        reached = {key for key in STREAMS_AND_QUEUES if reaches(rules, command, key)}
+        expected = ANSWERED_READS[user].get(command, frozenset())
+        assert reached == expected, (
+            f"{user}'s {command} reaches {sorted(reached - expected)} unanswered and "
+            f"misses {sorted(expected - reached)}"
+        )
+
+
 #: What archiver itself trims: `trim_topics`, the allowlist its outbox drain
 #: loop trims and nothing else (CannObserv/archiver#239), passed as a literal in
 #: archiver's `src/api/main.py`. One `XTRIM` in the process, verified at every
@@ -798,20 +986,21 @@ def test_replicator_holds_the_xpending_its_delivery_ceiling_reads(users) -> None
 
     The dedupe namespace's shape (CannObserv/broker#9) a second time. The grant
     was built from what `MONITOR` saw, and this path runs only after a failure
-    no capture had seen. On the root permission set, which already names every
-    command stream: the selectors confine `XADD`, `XTRIM`, `SET` and `XDEL` to
-    the keys each may change, and `XPENDING` changes nothing.
+    no capture had seen. In the consume selector since CannObserv/broker#43,
+    with the other rare-path read replicator#129 named: `XRANGE` by id,
+    re-reading a poison frame before it is dead-lettered.
 
     Static as well as exercised below, because CI installs no `redis-server` and
     every test on `tracked_acl_broker` skips there.
     """
     rules = users["replicator"]
-    assert "+xpending" in split_rules(rules)[0], (
-        "replicator's delivery ceiling reads XPENDING (CannObserv/broker#39)"
-    )
     assert REPLICATOR_COMMAND_STREAMS, "the probe watches no replicator group on a command stream"
     for topic in REPLICATOR_COMMAND_STREAMS:
-        assert admits(root_key_patterns(rules), topic), f"replicator cannot name {topic}"
+        for command in ("+xpending", "+xrange"):
+            assert reaches(rules, command, topic), (
+                f"replicator cannot {command} {topic}: XPENDING is the delivery ceiling "
+                "(CannObserv/broker#39), XRANGE by id the poison frame's re-read"
+            )
 
 
 # --- the processing pair (CannObserv/broker#62) ---
@@ -896,8 +1085,8 @@ def test_a_command_stream_has_one_probed_group_and_its_consumer_holds_the_group_
 
     A command stream takes exactly one group - the worker pool - and the probe
     watches it under the name co-core derives. The service running that pool
-    must be able to run it: name the stream on its root, hold the driver's four
-    group commands there, and both write and empty the stream's dead-letter
+    must be able to run it: issue the driver's four group commands on the
+    stream, by whichever route, and both write and empty the stream's dead-letter
     queue, since the driver quarantines an undecodable frame there and the
     consumer is the queue's drainer (`DLQ_DRAINERS`).
     """
@@ -908,9 +1097,7 @@ def test_a_command_stream_has_one_probed_group_and_its_consumer_holds_the_group_
         groups = [c.pending_group for c in STREAM_CHECKS if c.topic == topic]
         assert groups == [group_name(topic, consumer)], f"{topic} carries {groups}"
         rules = users[consumer]
-        assert admits(root_key_patterns(rules), topic), f"{consumer} cannot name {topic}"
-        root, _ = split_rules(rules)
-        missing = [command for command in GROUP_CONSUMER_COMMANDS if command not in root]
+        missing = [c for c in GROUP_CONSUMER_COMMANDS if not reaches(rules, c, topic)]
         assert not missing, f"{consumer} lacks {missing} on {topic}"
         queue = dlq_name(topic)
         assert admits(selector_patterns(rules, "+xadd"), queue), f"{consumer} cannot write {queue}"
@@ -933,7 +1120,7 @@ def test_watcher_issues_content_process_and_cannot_cap_it(users) -> None:
     rules = users["watcher"]
     assert admits(selector_patterns(rules, "+xadd"), CONTENT_PROCESS)
     assert not admits(selector_patterns(rules, "+xtrim"), CONTENT_PROCESS)
-    assert admits(root_key_patterns(rules), CONTENT_DERIVED), "watcher cannot read the facts"
+    assert reaches(rules, "+xreadgroup", CONTENT_DERIVED), "watcher cannot read the facts"
     assert not admits(selector_patterns(rules, "+xadd"), CONTENT_DERIVED), "a consumer forging them"
     assert admits(selector_patterns(rules, "+xadd"), dlq_name(CONTENT_DERIVED))
     assert admits(selector_patterns(rules, "+xdel"), dlq_name(CONTENT_DERIVED))
@@ -963,9 +1150,10 @@ def test_archiver_issues_content_persist_and_can_neither_read_nor_cap_it(users) 
     """
     rules = users["archiver"]
     assert admits(selector_patterns(rules, "+xadd"), CONTENT_PERSIST)
-    assert not admits(root_key_patterns(rules), CONTENT_PERSIST), (
-        "archiver can read and XACK the commands it issues (broker#43)"
-    )
+    for command in GROUP_CONSUMER_COMMANDS:
+        assert not reaches(rules, command, CONTENT_PERSIST), (
+            f"archiver can {command} the commands it issues (broker#43)"
+        )
     assert not admits(selector_patterns(rules, "+xtrim"), CONTENT_PERSIST)
     assert not admits(key_patterns(rules), dlq_name(CONTENT_PERSIST)), (
         "the queue is its consumer's to write and drain, not the issuer's"
@@ -986,7 +1174,7 @@ def test_replicator_serves_content_persist_and_cannot_cap_its_queue(users) -> No
     """
     rules = users["replicator"]
     queue = dlq_name(CONTENT_PERSIST)
-    assert admits(root_key_patterns(rules), CONTENT_PERSIST)
+    assert reaches(rules, "+xreadgroup", CONTENT_PERSIST)
     assert admits(selector_patterns(rules, "+xadd"), CONTENT_ARTIFACTS), "the outcome facts"
     assert admits(selector_patterns(rules, "+xadd"), queue)
     assert admits(selector_patterns(rules, "+xdel"), queue)
@@ -995,7 +1183,7 @@ def test_replicator_serves_content_persist_and_cannot_cap_its_queue(users) -> No
         assert not admits(selector_patterns(rules, command), CONTENT_PERSIST), (
             f"replicator holds {command} on the command stream it consumes"
         )
-    assert "+xclaim" not in split_rules(rules)[0], "the reclaim is XAUTOCLAIM"
+    assert "+xclaim" not in granted_commands(rules), "the reclaim is XAUTOCLAIM"
 
 
 def test_replicator_stanza_names_the_source_its_persist_grant_was_read_off() -> None:
@@ -1830,6 +2018,10 @@ def test_replicator_can_count_a_commands_deliveries_on_every_command_stream(
     assert times_delivered() == 1
     client.xautoclaim(topic, group, "worker", min_idle_time=0)
     assert times_delivered() == 2
+    # The other rare-path read (CannObserv/replicator#129): XRANGE by id, the
+    # re-read of a frame that never decoded, before it is dead-lettered.
+    ((reread, _fields),) = client.xrange(topic, min=entry, max=entry)
+    assert reread == entry
 
 
 @contextlib.contextmanager
@@ -2055,6 +2247,91 @@ def test_replicator_drains_content_persist_dlq_without_trimming_it(tracked_acl_b
     ):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             refused()
+
+
+@pytest.mark.parametrize("topic", sorted(documented_group_consumers()))
+def test_only_the_consumer_can_create_and_take_delivery_in_its_group(
+    fresh_acl_broker, topic
+) -> None:
+    """The swallow broker#43 measured, refused by redis; the consumer served.
+
+    On a server of its own, so the stream does not exist when the consumer
+    creates its group: `XGROUP CREATE ... MKSTREAM` is how each driver meets
+    its stream on first boot, and a key pattern admits a key that is not
+    there yet. Then the producer - the one identity the old root let in - is
+    refused every group command, including the early `XGROUP CREATE` at `$`
+    that would have skipped a backlog, and the consumer is delivered the entry
+    the intruder could not take.
+    """
+    consumer = documented_group_consumers()[topic]
+    producer = documented_producers()[topic]
+    group = group_name(topic, consumer)
+    assert not fresh_acl_broker("acladmin").exists(topic)
+    owner = fresh_acl_broker(consumer)
+    assert owner.xgroup_create(topic, group, id="$", mkstream=True)
+    with _seeder(fresh_acl_broker) as seeder:
+        entry = seeder.xadd(topic, {"k": "v"})
+
+    intruder = fresh_acl_broker(producer)
+    for refused in (
+        lambda: intruder.xreadgroup(group, "intruder", {topic: ">"}, count=1),
+        lambda: intruder.xack(topic, group, entry),
+        lambda: intruder.xautoclaim(topic, group, "intruder", min_idle_time=0),
+        lambda: intruder.xgroup_create(topic, f"{group}.early", id="$", mkstream=True),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
+
+    ((_stream, [(delivered, _fields)]),) = owner.xreadgroup(group, "worker", {topic: ">"}, count=1)
+    assert delivered == entry, f"{group} was delivered {delivered}, not the entry seeded here"
+    assert owner.xack(topic, group, entry) == 1
+
+
+#: The three groupless tails, each the stream's only reader on its service and
+#: each one a selector built from group names would have missed
+#: (CannObserv/archiver#321, CannObserv/watcher#344, CannObserv/replicator#129).
+GROUPLESS_READERS = {
+    INFO_WATCH_STATUS: "archiver",
+    INFO_REGISTRY: "watcher",
+    CONTENT_FETCH_POLICY: "replicator",
+}
+
+
+@pytest.mark.parametrize("topic", sorted(GROUPLESS_READERS))
+def test_a_groupless_reader_replays_its_stream_from_the_start(fresh_acl_broker, topic) -> None:
+    """`XREAD` from `0-0`, as replicator replays content.fetch-policy at every
+    boot and watcher the registry; archiver resumes from its own cursor, which
+    is the same read from a later id."""
+    reader = fresh_acl_broker(GROUPLESS_READERS[topic])
+    with _seeder(fresh_acl_broker) as seeder:
+        entry = seeder.xadd(topic, {"k": "v"})
+    ((_stream, [(read, _fields)]),) = reader.xread({topic: "0-0"}, count=1)
+    assert read == entry
+
+
+def _served(client, argv: tuple[str, ...]) -> bool:
+    """Whether redis ran ``argv`` for ``client``: anything but a NOPERM."""
+    try:
+        client.execute_command(*argv)
+    except redis_pkg.exceptions.NoPermissionError:
+        return False
+    except redis_pkg.exceptions.ResponseError:
+        return True
+    return True
+
+
+@pytest.mark.parametrize("user", sorted(ANSWERED_READS))
+def test_redis_serves_exactly_the_answered_reads(tracked_acl_broker, user) -> None:
+    """`test_a_service_reads_exactly_what_its_owner_answered` on redis's own
+    matcher, over every stream and queue: each answered read served, every
+    other one refused."""
+    client = tracked_acl_broker(user)
+    for command, argv in READ_PROBES.items():
+        expected = ANSWERED_READS[user].get(command, frozenset())
+        wrong = sorted(
+            key for key in STREAMS_AND_QUEUES if _served(client, argv(key)) != (key in expected)
+        )
+        assert not wrong, f"{user}'s {command} is served or refused wrongly on {wrong}"
 
 
 def test_citest_cannot_name_a_production_topic(tracked_acl_broker) -> None:

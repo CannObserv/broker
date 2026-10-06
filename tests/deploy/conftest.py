@@ -261,6 +261,26 @@ def tracked_acl_broker(tmp_path_factory):
     place to rely on that.
     """
     tmp_path = tmp_path_factory.mktemp("acl")
+    with acl_server(render_tracked_acl(tmp_path), tmp_path) as connect:
+        yield connect
+
+
+@pytest.fixture
+def fresh_acl_broker(tmp_path):
+    """``tracked_acl_broker`` on a server of the test's own, holding no key.
+
+    For the assertions a shared server cannot make: that a group is created
+    with ``MKSTREAM`` on a stream that does not exist yet, which is how every
+    consumer meets its stream on first boot (CannObserv/broker#43), and that a
+    group's first delivery is the entry the test seeded rather than one an
+    earlier test left behind.
+    """
+    with acl_server(render_tracked_acl(tmp_path), tmp_path) as connect:
+        yield connect
+
+
+def render_tracked_acl(tmp_path: Path) -> Path:
+    """The tracked file rendered with ``PASSWORD`` for every user, as installed."""
     passwords = tmp_path / "passwords"
     placeholders = sorted(set(re.findall(r"__[A-Z]+_PW__", ACL_FILE.read_text())))
     digest = hashlib.sha256(PASSWORD.encode()).hexdigest()
@@ -280,9 +300,7 @@ def tracked_acl_broker(tmp_path_factory):
             [str(RENDER_SCRIPT), str(passwords)], capture_output=True, text=True, check=True
         ).stdout
     )
-
-    with acl_server(acl, tmp_path) as connect:
-        yield connect
+    return acl
 
 
 #: What only the broker node carries, readable without sudo or an env file. **Any**

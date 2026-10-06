@@ -170,12 +170,12 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 ## Related
 
 - CannObserv/broker#1 - the relocation epic, closed 2026-09-15. What landed
-  after it on the grants and reads (#14, #29, #34, #59):
+  after it on the grants and reads (#14, #29, #34, #59, #41, #43):
   [README.md](README.md), *Provenance*.
-- Open follow-on: #43 (each grouped stream's producer holds the
-  group commands on its root, so it can `XACK` its consumer's work away -
-  #14's hole the other way round). `content.process` is the first stream that
-  does not open it: its producer's pattern rides the `+xadd` selector alone.
+- #41 and #43, live 2026-10-06: no service but archiver holds `+xtrim`, and
+  each consumes through a selector naming only its grouped streams, with every
+  read a selector of its own and `+info +ping` alone on the root. Next on that
+  shape: #78 (the infrastructure service's read-only consumer).
 - Open: #53 (CI off co-broker, or `citest` re-minted). The history of #62, #64
   (`content.persist` live 2026-10-01, #76), #75 and archiver#251:
   [README.md](README.md), *Provenance*.
