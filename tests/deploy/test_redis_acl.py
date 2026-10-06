@@ -1689,9 +1689,9 @@ def _enabled(tracked_acl_broker, user: str):
     """``user``, switched ``on`` by `acladmin` for the block and ``off`` after.
 
     For the identity the tracked file ships ``off`` - `default`, whose rules
-    are still worth exercising. Issued WITHOUT re-supplying a password: that is the
-    assertion that ``off`` leaves the password set intact, which is what makes
-    carrying one on a disabled user worth its apparent redundancy.
+    are still worth exercising. Issued WITHOUT re-supplying a password: that is
+    the assertion that ``off`` leaves the password set intact, which is what
+    makes carrying one on a disabled user worth its apparent redundancy.
     """
     admin = tracked_acl_broker("acladmin")
     admin.execute_command("ACL", "SETUSER", user, "on")
