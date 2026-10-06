@@ -18,9 +18,10 @@ they are here:
     decrypted from the node's credential store through ``sudo -n`` for the life
     of the module. Until CannObserv/broker#52 this was the probe's
     ``brokeradmin``, which then had to carry every grant these tests read with.
-    ``BROKER_REDIS_URL`` supplies the address alone. Skips off the node: without
-    the URL, without passwordless sudo, or when the broker does not answer; and
-    without the credential only off the node, where on it that fails.
+    ``BROKER_REDIS_URL`` supplies the address alone. Skips off the node; and on
+    it without the URL (the env not sourced), without passwordless sudo, or when
+    the broker does not answer. A credential absent, undecryptable or refused
+    on the node fails.
 
 Each lived in the module that first needed it until
 ``test_live_acl_matches_tracked_acl.py`` needed both *in one test* - which is
@@ -426,13 +427,14 @@ def live_client():
     # without it never reaches here - and redis is a hard dependency of the
     # project, not an extra.
     #
-    # Skips only off the node. Once sudo works and the credential file exists,
-    # a credential that will not decrypt or that the broker refuses is a
-    # finding - the half-done rotation
+    # On the node, three skips stay: the URL unset (the env not sourced), no
+    # passwordless sudo, and the broker not answering. None of them is the
+    # credential's state. The credential itself never skips there: one that
+    # will not decrypt or that the broker refuses is the half-done rotation
     # test_each_node_credential_authenticates_its_user exists for, and a skip
     # would hide it behind the very fixture that test depends on. An ABSENT one
-    # is a finding on the node too (CannObserv/broker#81): the rotation never
-    # leaves the path empty, and the mint runs before the first render.
+    # fails too (CannObserv/broker#81): the rotation never leaves the path
+    # empty, and the mint runs before the first render.
     sudo_installed(OPERATOR_CREDENTIAL)
     client = _operator_client(url)
     if client is None:
