@@ -39,6 +39,7 @@
     "OLLAMA_MODE": "external",
     "OLLAMA_URL": "http://index:11434",
     "EMBEDDING_MODEL": "nomic-embed-text",
-    "EMBEDDING_DIMENSIONS": "768"
+    "EMBEDDING_DIMENSIONS": "768",
+    "SOCRATICODE_SPEC": "socraticode@1.16.0"
   }
 }
