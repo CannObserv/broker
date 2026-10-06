@@ -88,10 +88,13 @@ decision with archiver (*the OOM seam*).
 
 - [ ] Every service owner agrees the window. The cohort is pre-production
       with a single hourly Watched Item, so the quiesce is effectively free.
-- [ ] `uv run pytest -rs` green on `co-broker` with the env sourced; the only
-      skips are `test_redis_acl.py`'s unassigned-DLQ rows. A missing artifact
-      fails rather than skips (broker#81); any other skip means the env is not
-      sourced, `sudo -n` does not work, or the broker is not answering.
+- [ ] `uv run pytest -rs` green on `co-broker`, from `~/broker` (a worktree
+      lacks the gitignored files `test_socraticode_config.py` reads) with the
+      env sourced; the only skips are `test_redis_acl.py`'s unassigned-DLQ rows.
+      A missing artifact fails rather than skips (broker#81). Any other skip
+      prints its reason under `-rs`: read it before going on. The usual ones
+      are the env not sourced, `sudo -n` not working, or the broker not
+      answering, but a missing tool (`redis-server`, `perl`, `git`) skips too.
 - [ ] The backup pipeline is healthy before anything depends on it:
       `journalctl -u broker-backup -n 1 -o cat --no-pager` says `uploaded` or
       `unchanged` with a `snapshot_at` inside the last hour, and the probe's
