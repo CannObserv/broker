@@ -3,7 +3,8 @@
 The guards landed first, ahead of the config: none of them needs
 ``.socraticode.json`` to exist, and one exists to stop the rest of #17 landing in
 the wrong order. The config's own tests - ``projectId``, ``linkedProjects``, the
-client ``env`` block, the manifest, the two hooks - arrived with it.
+client ``env`` block, the manifest, the two hooks - arrived with it; the launch
+pin (#33) came later.
 
 The namespace guards mirror notifier's ``tests/deploy/test_socraticode_config.py``.
 The key and project-id guards are broker's own, because what they pin is sharper
@@ -339,6 +340,38 @@ def test_the_manifest_is_an_object_whose_paths_resolve() -> None:
         path = artifact["path"]
         assert not any(c in path for c in "*?["), f"{path} is a glob - the server stat()s it"
         assert (REPO_ROOT / path).exists(), f"{path} does not resolve"
+
+
+#: The session's launch is ``npx -y --prefer-online ${SOCRATICODE_SPEC:-...}``,
+#: and npx keys its cache on the spec string: only an exact version resolves
+#: from cache without installing. A tag or range floats, and the install it
+#: brings at session start is the 1.2 G peak behind 2026-09-16 (#33).
+SESSION_SPEC = "SOCRATICODE_SPEC"
+_EXACT_SPEC = re.compile(r"^socraticode@(\d+\.\d+\.\d+)$")
+
+#: The driver's pre-install (health hook, index, status, verify) - off-repo,
+#: so only a test on this VM can see it.
+DRIVER_PIN = Path.home() / ".socraticode" / "pin" / "node_modules" / "socraticode" / "package.json"
+
+
+def test_the_session_launch_is_pinned_to_an_exact_version(client_env: dict[str, str]) -> None:
+    """Never ``@latest``, a bare name or a range - each installs at some session start."""
+    spec = client_env.get(SESSION_SPEC)
+    assert spec is not None, f"{SESSION_SPEC} is unset - the plugin launches socraticode@latest"
+    assert _EXACT_SPEC.match(spec), f"{SESSION_SPEC}={spec!r} is not socraticode@X.Y.Z"
+
+
+def test_the_session_and_driver_pins_agree(client_env: dict[str, str]) -> None:
+    """Two builds writing one store is the defect a half re-pin creates (#33).
+
+    VM-local: CI has no pre-install, and skips loudly rather than passing.
+    """
+    text = _read_if_present(DRIVER_PIN)
+    if text is None:
+        pytest.skip(f"no driver pin at {DRIVER_PIN.parent}")
+    match = _EXACT_SPEC.match(client_env.get(SESSION_SPEC, ""))
+    assert match, f"{SESSION_SPEC} is not an exact pin"
+    assert json.loads(text)["version"] == match[1]
 
 
 @pytest.mark.parametrize("hook", list(HOOKS), ids=list(HOOKS))
