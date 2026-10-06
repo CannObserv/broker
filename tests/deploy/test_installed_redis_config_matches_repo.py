@@ -131,6 +131,16 @@ def test_tracked_config_sets_an_explicit_nonzero_maxmemory() -> None:
     assert parse_size(directives["maxmemory"]) > 0
 
 
+def test_tracked_config_closes_the_database_index_axis() -> None:
+    """R4, the axis an ACL cannot reach: Redis ACLs do not partition by database
+    index, so a test URL repointed at ``/15`` on this broker is refused here or
+    nowhere (CannObserv/broker#5). The other axis is that no test credential
+    exists on the instance (``test_the_tracked_acl_declares_no_ci_identity``,
+    CannObserv/broker#53). Live, ``test_every_tracked_directive_is_in_force``
+    reads the same value back; this is the half CI runs."""
+    assert parse_directives(REPO_REDIS_CONF.read_text()).get("databases") == "1"
+
+
 def test_tracked_config_carries_no_secret() -> None:
     """The tracked copy is templated; the value is minted at install time. It is
     nobody's password since CannObserv/broker#52, but it is still what governs

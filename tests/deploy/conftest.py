@@ -255,10 +255,9 @@ def tracked_acl_broker(tmp_path_factory):
 
     **Module-scoped deliberately, not by oversight.** Sharing it across the two
     modules that use it would save one spawn, and cost the isolation that
-    `_enabled` in `test_redis_acl.py` needs - it switches `default` and `citest`
-    on and off again on this server. It restores them in a
-    `finally`, but a fixture every module in the directory leans on is the wrong
-    place to rely on that.
+    `_enabled` in `test_redis_acl.py` needs - it switches `default` on and off
+    again on this server. It restores it in a `finally`, but a fixture every
+    module in the directory leans on is the wrong place to rely on that.
     """
     tmp_path = tmp_path_factory.mktemp("acl")
     with acl_server(render_tracked_acl(tmp_path), tmp_path) as connect:

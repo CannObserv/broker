@@ -44,6 +44,7 @@ from co_core.pure.adapters.bus.streams import (
     stream_kind,
 )
 
+from src.broker import backup
 from src.broker.bus_health import (
     CHANGES_PRODUCER_MAXLEN,
     DLQ_DRAINERS,
@@ -1328,7 +1329,7 @@ def test_only_the_operator_can_read_the_config(users) -> None:
     returns authenticates nobody - the operator's stanza has to say so.
     """
     for name, rules in users.items():
-        if name in {"acladmin", "citest"}:
+        if name == "acladmin":
             continue
         held = granted_commands(rules) & {"+config", "+config|get", "+@all"}
         assert not held, f"{name} can CONFIG GET requirepass: {sorted(held)}"
@@ -1607,9 +1608,9 @@ def test_a_not_a_fault_row_is_still_a_denial(users) -> None:
     user's stanza - and the row has to follow it rather than explain a denial
     that can no longer occur.
 
-    A `-` rule (`citest`'s `+@all -@dangerous`) is refused rather than guessed
-    at: `holds` reads `+` rules only, so it would call an excluded command held
-    and fail the row for the wrong reason.
+    A `-` rule (`default`'s `-@all`) is refused rather than guessed at: `holds`
+    reads `+` rules only, so it would call an excluded command held and fail the
+    row for the wrong reason.
     """
     stale = []
     for row in not_a_fault_rows():
@@ -1687,9 +1688,8 @@ def test_anonymous_access_is_refused_at_first_load(tracked_acl_broker) -> None:
 def _enabled(tracked_acl_broker, user: str):
     """``user``, switched ``on`` by `acladmin` for the block and ``off`` after.
 
-    For the identities the tracked file ships ``off`` - `default`, and `citest`
-    until CannObserv/broker#53 decides what CI uses - whose rules are still
-    worth exercising. Issued WITHOUT re-supplying a password: that is the
+    For the identity the tracked file ships ``off`` - `default`, whose rules
+    are still worth exercising. Issued WITHOUT re-supplying a password: that is the
     assertion that ``off`` leaves the password set intact, which is what makes
     carrying one on a disabled user worth its apparent redundancy.
     """
@@ -1918,8 +1918,8 @@ def test_only_the_operator_can_read_requirepass(tracked_acl_broker, user) -> Non
 
     The claim the acladmin stanza makes, over every user the file declares -
     the probe included since CannObserv/broker#52. Asked of redis rather than of
-    the rules, because `citest` holds `+@all` and is kept off `CONFIG` only by
-    `-@admin -@dangerous` - a subtraction the parsing helpers here do not model.
+    the rules, because a refusal can rest on a subtraction (`default`'s `-@all`)
+    the parsing helpers here do not model.
     A user shipped `off` is switched on for the question, since the question is
     about its rules.
     """
@@ -2340,25 +2340,16 @@ def test_redis_serves_exactly_the_answered_reads(tracked_acl_broker, user) -> No
         assert not wrong, f"{user}'s {command} is served or refused wrongly on {wrong}"
 
 
-def test_citest_cannot_name_a_production_topic(tracked_acl_broker) -> None:
-    """R4, on the axis ACLs can actually enforce. The db-15 guard was never the
-    enforcement - Redis ACLs cannot partition by database index at all - so a
-    credential that cannot NAME a production topic is. The database-index axis is
-    closed separately by `databases 1` (CannObserv/broker#5).
+def test_the_tracked_acl_declares_no_ci_identity(users) -> None:
+    """R4 on the topic-name axis, closed by absence (CannObserv/broker#53).
 
-    Shipped `off` since CannObserv/broker#52 - its password is held nowhere, so
-    an enabled `citest` was surface nobody could use - and switched on here,
-    because the rules are what CannObserv/broker#53 will re-mint against."""
-    with _enabled(tracked_acl_broker, "citest") as client:
-        assert client.xadd("probe.scratch", {"k": "v"})
-        for topic in (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_BLOBS):
-            with pytest.raises(redis_pkg.exceptions.NoPermissionError):
-                client.xadd(topic, {"k": "v"})
-
-
-def test_citest_is_off_until_something_holds_its_password(users) -> None:
-    """Its digest is on the node and its plaintext nowhere (CannObserv/broker#49),
-    so `on` bought nothing but an identity to guess at. Back `on` when
-    CannObserv/broker#53 re-mints it for a CI target, or deleted if that issue
-    takes CI off co-broker."""
-    assert users["citest"][0] == "off"
+    `citest` (#2) was a credential that could not NAME a production topic, for a
+    suite repointed here. Nothing ever authenticated as it, and it bounded the
+    keys a test could name, not the memory under `noeviction`, the event loop or
+    the `ACL LOG` it shared with production. So no test credential exists here:
+    every user is a participant (`SERVICE_USERS`, each with a row in
+    docs/STREAMS.md) or one a node rebuild mints. Tests run against a throwaway
+    `redis-server` of their own - `tests/deploy/` here, each sibling's suite
+    there. The database-index axis is `databases 1`
+    (`test_tracked_config_closes_the_database_index_axis`)."""
+    assert set(users) == {*SERVICE_USERS, *backup.NODE_USERS}

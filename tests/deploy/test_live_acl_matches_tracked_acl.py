@@ -116,12 +116,12 @@ RETIRED_USERS = frozenset(name for name, rules in TRACKED.items() if "off" in ru
 NOT_COMPARED = "passwords"
 
 # The node's own passwords file - `0400 root:root`, so read only through `sudo -n`,
-# and only ever by the render, which emits digests (CannObserv/broker#49).
+# and only ever by the render, which emits digests (CannObserv/broker#49), or by
+# a `grep` that prints a key or an exit status and never a value.
 NODE_PASSWORDS = Path("/etc/redis/broker-acl-passwords")
 
 # Every user, by digest alone. The services since CannObserv/broker#49 - each
-# one's plaintext belongs to its service, or for `citest` to whatever CI target
-# CannObserv/broker#53 settles on - and the operator users since
+# one's plaintext belongs to its service - and the operator users since
 # CannObserv/broker#52: `acladmin` and `brokeradmin` are authenticated from
 # encrypted credentials (NODE_CREDENTIALS), and `default`'s digest is of a value
 # nobody kept. A service minted later is exempt here only for the interval
@@ -497,9 +497,8 @@ def test_the_node_holds_no_plaintext_for_any_user(node_passwords) -> None:
 
     The comparison above cannot see it: a plaintext line renders the same digest
     as the digest line it replaced, so a plaintext could come back - by an old
-    mint recipe that writes one, by re-minting ``citest`` for
-    CannObserv/broker#53, or by an operator credential "kept handy" beside its
-    encrypted copy - and every other test would stay green.
+    mint recipe that writes one, or by an operator credential "kept handy"
+    beside its encrypted copy - and every other test would stay green.
     """
     found = []
     for user in DIGEST_ONLY_USERS:
@@ -512,6 +511,25 @@ def test_the_node_holds_no_plaintext_for_any_user(node_passwords) -> None:
         "users authenticate from /etc/credstore.encrypted/ and the rest from off the node, "
         "and a commented secret is not a rollback; replace each line with "
         '__<USER>_PW_SHA256__=<its digest> (deploy/README.md, "Changing a grant").'
+    )
+
+
+def test_the_nodes_passwords_file_names_only_declared_users(node_passwords) -> None:
+    """A line whose user the tracked file no longer declares is never read:
+    render-acl.sh substitutes the placeholders it finds and ignores the rest. So
+    it outlives the user unnoticed, and ships with every backup as the digest of
+    a user no rebuild creates (CannObserv/broker#72). A removal is not finished
+    until the line goes with the user (CannObserv/broker#53, ``citest``).
+
+    Read by key alone: ``grep -o`` prints the placeholder and stops before ``=``.
+    """
+    result = _sudo("grep", "-oE", r"^__[A-Z]+_PW(_SHA256)?__", str(node_passwords), text=True)
+    assert result.returncode in (0, 1), f"grep over {node_passwords} failed"
+    named = {re.sub(r"_PW(_SHA256)?__$", "", key)[2:].lower() for key in result.stdout.split()}
+    assert not named - set(TRACKED_USERS), (
+        f"{node_passwords} holds a line for {sorted(named - set(TRACKED_USERS))}, which "
+        f"{ACL_FILE.name} does not declare. Delete it with the user "
+        '(deploy/README.md, "Removing a user").'
     )
 
 

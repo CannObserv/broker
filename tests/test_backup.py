@@ -83,7 +83,6 @@ __WATCHER_PW_SHA256__={_hex("watcher")}
 
 __REPLICATOR_PW_SHA256__={_hex("replicator")}
 __PROCESSOR_PW_SHA256__={_hex("processor")}
-__CITEST_PW_SHA256__={_hex("citest")}
 __DEFAULT_PW_SHA256__={_hex("default")}
 __ACLADMIN_PW_SHA256__={_hex("acladmin")}
 __BROKERADMIN_PW_SHA256__={_hex("brokeradmin")}
@@ -92,7 +91,7 @@ __BROKERADMIN_PW_SHA256__={_hex("brokeradmin")}
 # What ships: the service lines alone, sorted.
 SHIPPED = "".join(
     f"__{u.upper()}_PW_SHA256__={_hex(u)}\n"
-    for u in ("archiver", "citest", "processor", "replicator", "watcher")
+    for u in ("archiver", "processor", "replicator", "watcher")
 )
 SHIPPED_SHA = hashlib.sha256(SHIPPED.encode()).hexdigest()
 DIGESTS_KEY = f"co-broker/20260910T155308Z{DIGESTS_SUFFIX}"  # the run, NOW
@@ -418,7 +417,7 @@ def test_project_digests_refuses_without_echoing_a_value(line: str, why: str) ->
         project_digests(PASSWORDS + line + "\n")
     assert SECRET not in str(caught.value)
     assert _hex("watcher") not in str(caught.value)
-    assert "line 11" in str(caught.value)
+    assert f"line {len(PASSWORDS.splitlines()) + 1}" in str(caught.value)
 
 
 def test_project_digests_keeps_prose_that_only_names_a_placeholder() -> None:
@@ -467,12 +466,12 @@ def test_run_backup_ships_the_digests_beside_the_snapshot(rdb, client, bucket, t
     assert meta["taken_at"] == "2026-09-10T15:53:08Z"
     assert meta["snapshot_at"] == "2026-09-10T15:43:08Z"  # the RDB it was shipped beside
     assert meta["sha256"] == SHIPPED_SHA
-    assert meta["users"] == "archiver,citest,processor,replicator,watcher"
+    assert meta["users"] == "archiver,processor,replicator,watcher"
     assert meta["source_host"] == "co-broker"
     assert state["digests_object"] == f"gs://a-backup-bucket/{DIGESTS_KEY}"
     assert state["digests_outcome"] == "uploaded"
     assert state["digests_sha256"] == SHIPPED_SHA
-    assert state["digests_users"] == ["archiver", "citest", "processor", "replicator", "watcher"]
+    assert state["digests_users"] == ["archiver", "processor", "replicator", "watcher"]
     assert _state(tmp_path)["digests_sha256"] == SHIPPED_SHA
 
 
@@ -509,7 +508,7 @@ def test_a_refused_passwords_file_fails_the_run_after_the_snapshot_ships(
     assert state["outcome"] == "failed"
     assert "last_success_at" not in state
     assert SECRET not in state["last_error"]
-    assert "line 11" in state["last_error"]
+    assert f"line {len(PASSWORDS.splitlines()) + 1}" in state["last_error"]
     # The operator reading it learns the data half is safe.
     assert "gs://a-backup-bucket/co-broker/20260910T154308Z.rdb.gz" in state["last_error"]
 
