@@ -208,12 +208,35 @@ line is the digest of a value nobody kept, and there is nothing to rotate.
 `test_the_nodes_passwords_file_renders_the_credentials_that_are_live` renders
 the node's file under `sudo -n` and compares every user's digest with
 `ACL GETUSER`, so a forgotten line fails the suite rather than waiting for a
-rebuild (CannObserv/broker#49). The four service users - `archiver`, `watcher`,
-`replicator`, `citest` - are held by digest alone since 2026-09-23; nothing on
-this node needs their plaintext. `processor` never had a plaintext here: its
+rebuild (CannObserv/broker#49). The service users `archiver`, `watcher` and
+`replicator` are held by digest alone since 2026-09-23; nothing on this node
+needs their plaintext. `processor` never had a plaintext here: its
 handoff was hash-only (CannObserv/broker#75), the shape a service minted since
 the backup refuses plaintext lines takes - [docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md),
 step 1. The three operator lines joined on 2026-09-29 (broker#52).
+
+### Removing a user
+
+Three writes, in this order, and the passwords line is the one that gets
+forgotten: render-acl.sh ignores a line whose placeholder the tracked file no
+longer carries, so nothing fails while the line sits there - except
+`test_the_nodes_passwords_file_names_only_declared_users` - and the backup ships
+it hourly as the digest of a user no rebuild creates.
+
+```bash
+rcli acladmin ACL DELUSER <user>          # -> (integer) 1; drops its connections
+rcli acladmin ACL SAVE
+# then delete its stanza from deploy/redis-acl.conf, commit, and push
+sudo sed -i '/^__<USER>_PW\(_SHA256\)\?__=/d' /etc/redis/broker-acl-passwords
+sudo grep -c '^__<USER>_PW' /etc/redis/broker-acl-passwords   # -> 0
+```
+
+The tracked file goes before the passwords line, not after. A rebuild renders
+main's tracked file over the newest shipped digests, and a placeholder with no
+line is the one mismatch render-acl.sh refuses. An extra line, the other way
+round, renders. `citest` went this way on 2026-10-06 (CannObserv/broker#53).
+Rehearse the `DELUSER` on a throwaway server loaded from the tracked file first,
+as any grant change.
 
 **The third line is the one that gets skipped.** Until broker#11 nothing
 checked it, and it rested on someone remembering four times: eleven corrections

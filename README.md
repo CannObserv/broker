@@ -109,6 +109,12 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   password. A plaintext line fails the run, the node users are minted fresh
   and never ship, and `restore --digests` writes the newest set. This retired
   the password-manager copy that went stale when `observo` was minted.
+- CannObserv/broker#53 - `citest` deleted live 2026-10-06T21:38:34Z, its
+  passwords line with it. R4's test credential (#2) had never authenticated
+  and had no holder after #49. No test credential exists here now: the tracked
+  ACL declares participants and node users only, and `databases 1` stays. The
+  siblings' suites default to loopback; CannObserv/replicator#132 asks
+  replicator's to refuse any other host.
 
 ## What stayed in archiver
 

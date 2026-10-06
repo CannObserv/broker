@@ -37,6 +37,11 @@ uv run ruff check . && uv run ruff format --check .
 Source env files as `set -a; . <file>; set +a` - `export $(cat ... | xargs)`
 silently corrupts values.
 
+**No test targets `co-broker`.** `tests/deploy/` spawns its own throwaway
+`redis-server` on 127.0.0.1 (skipped where the binary is absent, as on CI's
+runner). The node-only live tests read the broker as `acladmin` and write
+nothing. The ACL declares no CI identity (#53).
+
 ## Rules
 
 - **No retention opinion on the eight `content.*` streams.** No *retention*
@@ -177,9 +182,8 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   grouped streams, every read a selector, `+info +ping` alone on the root
   (processor's root already named only its own stream and queue). Next on that
   shape: #78 (the infrastructure service's read-only consumer).
-- Open: #53 (CI off co-broker, or `citest` re-minted). The history of #62, #64
-  (`content.persist` live 2026-10-01, #76), #75 and archiver#251:
-  [README.md](README.md), *Provenance*.
+- The history of #62, #64 (`content.persist` live 2026-10-01, #76), #75, #53
+  and archiver#251: [README.md](README.md), *Provenance*.
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
   2026-09-29; what it leaves open: `docs/NODE-CREDENTIALS.md`. #72 (the ACL
   digests shipped with each backup) closed the same day.

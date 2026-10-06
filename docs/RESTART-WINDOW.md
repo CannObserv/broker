@@ -69,7 +69,7 @@ cannot reach production topic names*).
 | Directive | Closes | Why it needs a restart |
 |---|---|---|
 | `databases 1` | the database-index axis - `SELECT 15` fails outright, so a repointed `REPLICATOR_TEST_REDIS_URL` has nowhere to land | `databases` is startup-only |
-| `aclfile /etc/redis/users.acl` | the topic-name axis - a `citest` credential that cannot **name** a production topic | `aclfile` is an **immutable** config; `CONFIG SET aclfile` fails |
+| `aclfile /etc/redis/users.acl` | the topic-name axis - a `citest` credential that could not **name** a production topic; since CannObserv/broker#53, no test credential at all | `aclfile` is an **immutable** config; `CONFIG SET aclfile` fails |
 
 Redis ACLs cannot partition by database index at all, which is why neither
 substitutes for the other. Doing them together means R4 closes in one event.

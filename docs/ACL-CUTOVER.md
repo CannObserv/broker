@@ -26,7 +26,7 @@ per-doc context budget.
 
 ### 1. Mint the ACL passwords
 
-One per service minted on this node, and `citest`. A service minted since
+One per service minted on this node. A service minted since
 CannObserv/broker#72 is not in the loop - see the hash-only handoff below. These
 are the plaintexts
 that leave the node: each is handed to its service and then replaced here by its
@@ -48,7 +48,7 @@ since CannObserv/broker#52.
 # subshell exits 141 - so the mint disables it for itself and asserts the length.
 mint() { set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40; }
 sudo install -m 0400 -o root -g root /dev/null /etc/redis/broker-acl-passwords
-for p in ARCHIVER WATCHER REPLICATOR CITEST; do
+for p in ARCHIVER WATCHER REPLICATOR; do
     echo "__${p}_PW__=$(mint)"
 done | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
 # default, on a new cluster: the digest of a value nobody keeps.
@@ -76,8 +76,8 @@ last line is the point, whichever source you draw from.
 **Then take the service plaintexts off this node.** The mint writes each in
 plaintext because each has to be handed to its service. Once `archiver`,
 `watcher` and `replicator` hold theirs - *Step 2 - each service onto its own
-credential*, after the window, not preparation item 2 below - and `citest` is
-wherever CannObserv/broker#53 puts it, replace each of those four lines with
+credential*, after the window, not preparation item 2 below - replace each of
+those three lines with
 `__<USER>_PW_SHA256__=<its digest>` - deploy/README.md, *Changing a grant*.
 Nothing here authenticates as them, and
 `test_the_node_holds_no_plaintext_for_any_user` fails until it is done
@@ -132,10 +132,10 @@ sudo shred -u /root/users.acl.check /root/aclcheck.log
 ```
 
 **`PING` must return `NOAUTH`.** If it returns `PONG`, stop - see *The `nopass`
-trap* below. `ACL LIST` must show eight users: `archiver`, `watcher`,
-`replicator`, `processor`, `brokeradmin`, `acladmin`, `citest` (`off` until
-CannObserv/broker#53), and `default` - **`off`**, `-@all`, still carrying a
-password hash.
+trap* below. `ACL LIST` must show seven users: `archiver`, `watcher`,
+`replicator`, `processor`, `brokeradmin`, `acladmin`, and `default` - **`off`**,
+`-@all`, still carrying a password hash. No test credential: `citest` was
+deleted by CannObserv/broker#53.
 
 ### 3. Note where each service lives
 
@@ -258,7 +258,7 @@ Then verify every axis, not only the one that changed:
 redis-cli PING                                             # -> NOAUTH Authentication required.
 rcli acladmin ACL GETUSER default                          # -> flags off, one hash, commands -@all
 rcli brokeradmin INFO server | grep redis_version          # the probe's credential still answers
-for u in archiver watcher replicator processor citest; do
+for u in archiver watcher replicator processor; do
     echo "$u: held by digest on this node - verify from its own host"
 done
 rcli acladmin CLIENT LIST | grep -c 'flags=b'              # same count as before the flip
@@ -274,7 +274,7 @@ prints `WRONGPASS` - which also writes an `AUTH` / `reason: auth` entry into
 alarming thing that log can say about a node where nothing is wrong. That is
 what `archiver` did on 2026-09-23 (CannObserv/archiver#251), and since
 CannObserv/broker#49 converted the rest the same day, it is what **every**
-service user does: `archiver`, `watcher`, `replicator` and `citest` are all
+service user does: `archiver`, `watcher` and `replicator` are all
 held by digest alone, and `processor` has been since its hash-only mint
 (CannObserv/broker#75). The replacements are verification **from the
 service's own host**, or an assertion about the ACL rather than about
