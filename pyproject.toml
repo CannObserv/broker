@@ -14,14 +14,19 @@ dependencies = [
 [dependency-groups]
 dev = [
     "fakeredis>=2.20",
-    "pytest>=9.1.1,<10",
+    # 9.1.0 and 9.1.1 lose a directory's conftest fixtures when the command line
+    # interleaves it with a sibling (pytest-dev/pytest#14635, CannObserv/broker#73).
+    # The fix is on 9.1.x, unreleased as of 2026-10-06: once 9.1.2 ships,
+    # `uv lock --upgrade-package pytest` takes it with no edit here, and
+    # tests/deploy/test_pytest_collection.py is what says whether it carries the fix.
+    "pytest>=9.0.3,!=9.1.0,!=9.1.1,<10",
     "pytest-asyncio>=1.3.0,<2",
     "ruff>=0.16.8,<0.17",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -p pytester"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
