@@ -822,7 +822,7 @@ def test_a_node_credential_is_read_the_way_the_probe_reads_it(monkeypatch, tmp_p
     ],
     ids=["on-node", "sudo-off-node", "present-off-node", "no-sudo", "present-on-node"],
 )
-def test_a_file_absent_behind_sudo_fails_on_the_node(
+def test_sudo_installed_asks_for_the_node_before_sudo_or_the_file(
     monkeypatch, tmp_path, sudo: bool, node: bool, exists: bool, expected
 ) -> None:
     """``live_client``'s operator credential, ``node_passwords`` and
