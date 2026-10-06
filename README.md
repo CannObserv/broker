@@ -57,6 +57,10 @@ owns:
   its row in `docs/STREAMS.md` says why (CannObserv/archiver#234 answered).
   #59 then cut the two DLQs: archiver's `+xtrim` is `~info.changes` alone,
   and it disposes of dead letters by `+xdel` (live 2026-09-24).
+  #41 took `+xtrim` off watcher and replicator, which trim nothing by
+  decision (CannObserv/watcher#327, CannObserv/replicator#119), and folded
+  each service's publish into one selector (live 2026-10-06): archiver's
+  `info.changes` is the one stream outside `*.dlq` any identity can trim.
 
 Onboarding and credential history since, moved from AGENTS.md's *Related*
 (2026-09-29):

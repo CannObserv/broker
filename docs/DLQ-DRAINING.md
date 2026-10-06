@@ -97,9 +97,9 @@ first, a later entry carries a higher id and survives, and everything the trim
 removes is in the dump. The same hazard is why archiver's triage disposes by
 `XDEL` of named ids (CannObserv/archiver#238).
 
-**For `*.dlq` keys only.** Four rows of [STREAMS.md](STREAMS.md) say **Never XTRIMmed** -
-`content.replicate`, `content.process`, `content.persist` and `info.registry` -
-and this procedure pointed at any of them is refused: `acladmin`, the credential it runs as since CannObserv/broker#52,
+**For `*.dlq` keys only.** Every stream row of [STREAMS.md](STREAMS.md) but
+`info.changes` and `content.derived` says **Never XTRIMmed** (CannObserv/broker#34, #41),
+and this procedure pointed at any stream is refused: `acladmin`, the credential it runs as since CannObserv/broker#52,
 holds `+xtrim` on `~*.dlq` and nothing else (CannObserv/broker#34; it was
 `brokeradmin`'s until #52). The refusal is the backstop against the incident
 reflex - `acladmin` could lift it with its own `+acl`, and must not; the reasons

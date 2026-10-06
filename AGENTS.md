@@ -47,8 +47,9 @@ silently corrupts values.
   and `content.persist` (`content.fetch-policy` is LWW and capped).
   `content.blobs` had the rule first (broker#20); four joined it when they lost
   `info.changes`'s borrowed 110k (broker#60); the processing pair arrived with
-  no cap by contract (broker#62), as did `content.persist` (broker#64); both
-  command streams are also **Never XTRIMmed**, `content.replicate`'s posture.
+  no cap by contract (broker#62), as did `content.persist` (broker#64). All
+  but `content.derived` are also **Never XTRIMmed**: no `+xtrim` selector names
+  them since broker#41, and a trim grant returns only as a producer's named request.
   `docs/STREAMS.md`'s **No retention cap** is pinned to the probe's unthresholded rows; a cap
   comes back only with a producer that owns one. Their groups *are* probed -
   the old unqualified "never `content.blobs`" was archiver's role boundary,

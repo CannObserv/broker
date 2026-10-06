@@ -31,12 +31,14 @@ from co_core.pure.adapters.bus.streams import (
     CONTENT_BLOBS,
     CONTENT_DERIVED,
     CONTENT_FETCH,
+    CONTENT_FETCH_POLICY,
     CONTENT_PERSIST,
     CONTENT_PROCESS,
     CONTENT_REPLICATE,
     CONTENT_REVISIONS,
     INFO_CHANGES,
     INFO_REGISTRY,
+    INFO_WATCH_STATUS,
     dlq_name,
     group_name,
     stream_kind,
@@ -45,6 +47,7 @@ from co_core.pure.adapters.bus.streams import (
 from src.broker.bus_health import (
     CHANGES_PRODUCER_MAXLEN,
     DLQ_DRAINERS,
+    LWW_PRODUCER_MAXLEN,
     REGISTRY_PRODUCER_MAXLEN,
     STREAM_CHECKS,
 )
@@ -717,6 +720,56 @@ def test_archiver_dead_letter_disposals_name_their_caller(users) -> None:
     )
 
 
+#: What each owner said, at its call sites, that it trims - nothing - and the
+#: issue a trim grant would come back citing (CannObserv/broker#41).
+UNTRIMMED_BY_DECISION = {
+    "watcher": "CannObserv/watcher#327",
+    "replicator": "CannObserv/replicator#119",
+}
+
+
+@pytest.mark.parametrize("user", sorted(UNTRIMMED_BY_DECISION))
+def test_a_producer_that_trims_nothing_holds_no_trim(users, user) -> None:
+    """broker#34's question, asked of the other two producers and answered.
+
+    Both held `+xtrim` on every stream they publish, from the observed
+    inventory, and neither issued it: watcher's retention rides
+    `BusPublish.maxlen` on the two republished streams and nothing caps the
+    rest (CannObserv/watcher#317, #327); replicator's docs say nothing there
+    trims and its two fact streams are uncapped by decision
+    (CannObserv/replicator#106, #119). So the grant came off whole rather than
+    shrinking - a dead letter goes by `XDEL` (broker#59), which both still hold.
+
+    A trim comes back as a request naming its caller, and the stanza names the
+    issue that request will cite, so the next reader can tell a decision from
+    an omission.
+    """
+    assert not selector_patterns(users[user], "+xtrim"), f"{user} holds a trim it never issues"
+    assert "+xtrim" not in granted_commands(users[user])
+    assert UNTRIMMED_BY_DECISION[user] in stanza(user), (
+        f"{user}'s stanza does not name {UNTRIMMED_BY_DECISION[user]}, the decision behind it"
+    )
+
+
+@pytest.mark.parametrize("user", SERVICE_USERS)
+def test_a_service_publishes_through_one_selector(users, user) -> None:
+    """One `+xadd` selector per service, its streams and its queues together.
+
+    The publish set was split for one reason - `+xtrim` rode some of it and
+    not the rest (broker#34 on archiver, broker#62's `content.process`,
+    broker#64's `content.persist.dlq`). With no `+xtrim` beside any `+xadd`
+    since CannObserv/broker#41 the split carries no meaning, and a second
+    selector is the place a stream gets added without being read against the
+    first.
+    """
+    _root, selectors = split_rules(users[user])
+    publishing = [selector for selector in selectors if "+xadd" in selector]
+    assert len(publishing) == 1, f"{user} publishes through {len(publishing)} selectors"
+    assert [rule for rule in publishing[0] if rule.startswith("+")] == ["+xadd"], (
+        f"{user}'s publish selector grants more than +xadd: {publishing[0]}"
+    )
+
+
 def test_replicator_can_set_only_its_dedupe_keys(users) -> None:
     """`+set` moves the same way, which this file's own stanza asked for.
 
@@ -874,8 +927,8 @@ def test_watcher_issues_content_process_and_cannot_cap_it(users) -> None:
     entries naming them, so `content.process` takes `content.replicate`'s
     **Never XTRIMmed** posture from its first day - in no `+xtrim` selector on
     the instance - and not `content.fetch`'s, whose producer keeps an unissued
-    trim from the observed-inventory era. The `+xadd` therefore sits in a
-    selector of its own rather than joining the `(+xadd +xtrim ...)` one.
+    trim from the observed-inventory era - which CannObserv/broker#41 took off
+    too, so watcher now holds no `+xtrim` at all.
     """
     rules = users["watcher"]
     assert admits(selector_patterns(rules, "+xadd"), CONTENT_PROCESS)
@@ -925,11 +978,11 @@ def test_replicator_serves_content_persist_and_cannot_cap_its_queue(users) -> No
     (already `content.artifacts`), and the dead-letter queue written and
     emptied - by `XDEL`, never `XTRIM`.
 
-    The queue's `+xadd` sits apart from replicator's `(+xadd +xtrim ...)`
-    selector: a triage disposes of the ids an operator named, and a trim would
-    erase the non-zero depth the probe reads as a dead letter awaiting triage
-    (CannObserv/broker#59). The command stream itself is in no selector at all,
-    so replicator can neither forge a persist nor cap one.
+    The queue was granted without `+xtrim`: a triage disposes of the ids an
+    operator named, and a trim would erase the non-zero depth the probe reads
+    as a dead letter awaiting triage (CannObserv/broker#59). The command stream
+    itself is in no selector at all, so replicator can neither forge a persist
+    nor cap one.
     """
     rules = users["replicator"]
     queue = dlq_name(CONTENT_PERSIST)
@@ -1607,6 +1660,22 @@ def test_archiver_caps_the_registry_by_publishing_and_info_changes_by_trimming(
     assert client.xadd(INFO_REGISTRY, {"k": "v"}, maxlen=REGISTRY_PRODUCER_MAXLEN, approximate=True)
     assert client.xadd(INFO_CHANGES, {"k": "v"})
     assert client.xtrim(INFO_CHANGES, maxlen=CHANGES_PRODUCER_MAXLEN, approximate=True) == 0
+
+
+def test_watcher_caps_its_republished_streams_by_publishing(tracked_acl_broker) -> None:
+    """The two capped streams watcher publishes, under the grant broker#41 left it.
+
+    `content.fetch-policy` and `info.watch-status` are capped by
+    `BusPublish.maxlen`: the `MAXLEN` rides the `XADD`, which an ACL checks as
+    `XADD`. So the cap survives a watcher holding no `+xtrim` at all - the
+    shape `test_archiver_caps_the_registry_by_publishing_and_info_changes_by_trimming`
+    proved for the registry - and a separate trim is refused.
+    """
+    client = tracked_acl_broker("watcher")
+    for topic in (CONTENT_FETCH_POLICY, INFO_WATCH_STATUS):
+        assert client.xadd(topic, {"k": "v"}, maxlen=LWW_PRODUCER_MAXLEN, approximate=True)
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            client.xtrim(topic, maxlen=LWW_PRODUCER_MAXLEN, approximate=True)
 
 
 def test_replicator_cannot_replace_a_stream_with_a_string(tracked_acl_broker) -> None:
