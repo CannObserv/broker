@@ -61,7 +61,7 @@ silently corrupts values.
 - **DLQs: the broker detects, captures and escalates; the consumer triages.**
   Splitting the old single "drainer" role is broker#1 Phase 5. Anything
   mechanical and suffix-keyed belongs here; reading a payload to tell residue
-  from a real failure, and the `XTRIM` after it, belongs to the stream's own
+  from a real failure, and the `XDEL` after it, belongs to the stream's own
   consumer (`DLQ_DRAINERS`). Do not add payload semantics to this repo to close
   that gap - that is the boundary, not an omission. An unclaimed `*.dlq` is
   reported as unassigned, never skipped.
