@@ -215,29 +215,6 @@ handoff was hash-only (CannObserv/broker#75), the shape a service minted since
 the backup refuses plaintext lines takes - [docs/ACL-CUTOVER.md](../docs/ACL-CUTOVER.md),
 step 1. The three operator lines joined on 2026-09-29 (broker#52).
 
-### Removing a user
-
-Three writes, in this order, and the passwords line is the one that gets
-forgotten: render-acl.sh ignores a line whose placeholder the tracked file no
-longer carries, so nothing fails while the line sits there - except
-`test_the_nodes_passwords_file_names_only_declared_users` - and the backup ships
-it hourly as the digest of a user no rebuild creates.
-
-```bash
-rcli acladmin ACL DELUSER <user>          # -> (integer) 1; drops its connections
-rcli acladmin ACL SAVE
-# then delete its stanza from deploy/redis-acl.conf, commit, and push
-sudo sed -i '/^__<USER>_PW\(_SHA256\)\?__=/d' /etc/redis/broker-acl-passwords
-sudo grep -c '^__<USER>_PW' /etc/redis/broker-acl-passwords   # -> 0
-```
-
-The tracked file goes before the passwords line, not after. A rebuild renders
-main's tracked file over the newest shipped digests, and a placeholder with no
-line is the one mismatch render-acl.sh refuses. An extra line, the other way
-round, renders. `citest` went this way on 2026-10-06 (CannObserv/broker#53).
-Rehearse the `DELUSER` on a throwaway server loaded from the tracked file first,
-as any grant change.
-
 **The third line is the one that gets skipped.** Until broker#11 nothing
 checked it, and it rested on someone remembering four times: eleven corrections
 during the broker#2 cutover, step 4 of the restart window, and broker#9's key
@@ -270,6 +247,29 @@ One limit, deliberate:
   a test over the source - `test_replicator_can_name_every_dedupe_namespace`
   derives the dedupe namespaces from co-core's command taxonomy, and that is
   what caught broker#9.
+
+### Removing a user
+
+Three writes, in this order, and the passwords line is the one that gets
+forgotten: render-acl.sh ignores a line whose placeholder the tracked file no
+longer carries, so nothing fails while the line sits there - except
+`test_the_nodes_passwords_file_names_only_declared_users` - and the backup ships
+it hourly as the digest of a user no rebuild creates.
+
+```bash
+rcli acladmin ACL DELUSER <user>          # -> (integer) 1; drops its connections
+rcli acladmin ACL SAVE
+# then delete its stanza from deploy/redis-acl.conf, commit, and push
+sudo sed -i '/^__<USER>_PW\(_SHA256\)\?__=/d' /etc/redis/broker-acl-passwords
+sudo grep -c '^__<USER>_PW' /etc/redis/broker-acl-passwords   # -> 0
+```
+
+The tracked file goes before the passwords line, not after. A rebuild renders
+main's tracked file over the newest shipped digests, and a placeholder with no
+line is the one mismatch render-acl.sh refuses. An extra line, the other way
+round, renders. `citest` went this way on 2026-10-06 (CannObserv/broker#53).
+Rehearse the `DELUSER` on a throwaway server loaded from the tracked file first,
+as any grant change.
 
 ## Why the tuning is in `redis.conf` and not in the drop-in
 
