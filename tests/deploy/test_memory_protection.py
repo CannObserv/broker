@@ -185,10 +185,12 @@ def test_overcommit_is_enabled_as_redis_asks() -> None:
 
     What the change does cost: an allocation larger than the whole machine now
     fails at first touch - an OOM kill, in the order the tests below pin - instead
-    of up front with ``ENOMEM``. If the process asking is dev tooling, at -1000,
-    neither killer can take it, and the kill lands on the daemons and then the bus.
-    That is the trade, taken because a WARNING at every start, which step 1d of
-    the restart runbook walks a reader straight into, is worse than a setting
+    of up front with ``ENOMEM``. Until broker#71 dev tooling sat at -1000, where
+    no killer could take it, and the kill would have landed on the daemons and
+    then the bus. Since 2026-10-06 sessions read 0, and the kernel ranks them
+    ahead of both. That is the trade, taken because a WARNING at every start,
+    which step 1d of the restart runbook walks a reader straight into, is worse
+    than a setting
     whose two modes are indistinguishable at any size ``maxmemory`` permits.
 
     ``jemalloc#1328``, which the warning cites, is about mode **2**:
@@ -223,20 +225,20 @@ def test_system_slice_protects_at_least_what_its_children_claim() -> None:
 
 @pytest.mark.parametrize("tracked", list(OOM_UNITS), ids=lambda p: OOM_UNITS[p])
 def test_the_bus_is_out_of_earlyooms_reach_but_not_exempt(tracked: Path) -> None:
-    """``--avoid`` alone left the bus inside earlyoom's reach, and dev tooling never is.
+    """``--avoid`` alone left the bus inside earlyoom's reach.
 
-    exe.dev's ``exe-init`` and ``sshd`` run at ``oom_score_adj`` -1000, and every
-    session process inherits it - VSCode Server, its ``MainThread`` children,
-    ``claude``, SocratiCode's ``npx`` - so the kernel and earlyoom 1.7 alike skip
-    them outright. ``--prefer`` cannot reach one: a dry run prints it at 300, but
-    that is the score before the skip (broker#58). A unit at the default adj 0
+    exe.dev's ``exe-init`` and ``sshd`` run at ``oom_score_adj`` -1000. Until
+    broker#71 every session process inherited it - VSCode Server, its
+    ``MainThread`` children, ``claude``, SocratiCode's ``npx`` - and the kernel and
+    earlyoom 1.7 alike skipped them outright (broker#58). Since 2026-10-06 they
+    read 0. A unit at the default adj 0
     reads ~667 here, which ``--avoid`` only brings to ~367, so the dry run on
     2026-09-16 would have killed tailscaled and redis-server. At -900 their
     ``oom_score`` is under ``AVOID_PENALTY`` and earlyoom never picks them.
 
-    -900, not -1000. The kernel's own OOM killer can never pick dev tooling at
-    -1000; with the bus at -1000 too, nothing big would be left to kill, and
-    ``kernel.panic = 0`` hangs the node on that panic. At -900 the kernel's last
+    -900, not -1000. While dev tooling sat at -1000 (until broker#71), a bus at
+    -1000 too would have left nothing big to kill, and ``kernel.panic = 0`` hangs
+    the node on that panic. At -900 the kernel's last
     resort is a kill ``Restart=`` recovers in 100 ms. Debian gives the system
     ``dbus-daemon`` the same.
     """
@@ -278,10 +280,10 @@ def test_earlyoom_avoid_list_covers_the_bus(name: str) -> None:
 
 @pytest.mark.parametrize("name", DEV_TOOLING)
 def test_earlyoom_prefers_dev_tooling(name: str) -> None:
-    """Inert on this node, where earlyoom is disabled and every match inherits
-    -1000 anyway. Kept for the case ``test_live_prefer_reaches_nothing`` watches
-    for - a session no longer exempt - where earlyoom goes back on and dev
-    tooling is then taken first."""
+    """Inert on this node, where earlyoom is disabled. The same regex picks out dev
+    tooling for ``test_live_sessions_are_killed_before_the_bus``, and earlyoom
+    takes it first if it is ever turned back on: on 2026-10-06 a dry run's last
+    ``new victim`` was VSCode Server's ``MainThread``."""
     args = earlyoom_args()
     assert re.search(flag(args, "--prefer"), name), f"--prefer misses {name}"
     assert not re.search(flag(args, "--avoid"), name), f"--avoid protects {name}"
@@ -340,53 +342,71 @@ def test_live_bus_is_out_of_earlyooms_reach(tracked: Path) -> None:
     assert int((proc / "oom_score").read_text()) - AVOID_PENALTY < 0
 
 
-def _live_processes() -> list[tuple[str, int]]:
-    """``(comm, oom_score_adj)`` of every process, skipping any that exit mid-scan."""
+def _live_scores() -> list[tuple[str, int, int]]:
+    """``(comm, oom_score_adj, oom_score)`` of every process, skipping any that exit
+    mid-scan."""
     found = []
     for proc in Path("/proc").iterdir():
         if not proc.name.isdigit():
             continue
         try:
             found.append(
-                ((proc / "comm").read_text().strip(), int((proc / "oom_score_adj").read_text()))
+                (
+                    (proc / "comm").read_text().strip(),
+                    int((proc / "oom_score_adj").read_text()),
+                    int((proc / "oom_score").read_text()),
+                )
             )
         except (FileNotFoundError, ProcessLookupError):
             continue
     return found
 
 
-def test_live_prefer_reaches_nothing() -> None:
-    """The host class this node's memory story rests on (broker#58): exe.dev's own
-    processes sit at -1000, so every session - and every ``--prefer`` match - is
-    exempt from earlyoom and the kernel alike, and why earlyoom is disabled. If
-    exe.dev stops exempting sessions, this fails: ``deploy/README.md``'s *Memory
-    protection* section describes a different node, and earlyoom is worth
-    turning back on.
+def test_live_sessions_are_killed_before_the_bus() -> None:
+    """The host class this node's memory story rests on since broker#71: exe.dev's
+    own ``exe-init`` and ``sshd`` stay at -1000, and the sessions they start no
+    longer inherit it. Every ``--prefer`` match - VSCode Server, ``claude``,
+    SocratiCode's ``npx`` - reads 0, so the kernel's own OOM killer reaches dev
+    tooling before the bus. That ordering is why earlyoom stays disabled
+    (operator's decision, 2026-10-06).
+
+    Until the ``exe-init`` swap of 2026-10-06, sessions inherited -1000 and this
+    test's predecessor, ``test_live_prefer_reaches_nothing``, pinned the opposite.
+    A failure here means sessions are exempt again - an ``exe-init`` rolled back or
+    replaced by a build with the bug - and broker#71 is undone.
     """
     read_installed(INSTALLED[EARLYOOM])
-    live = _live_processes()
+    live = _live_scores()
     roots: dict[str, set[int]] = {}
-    for comm, adj in live:
+    for comm, adj, _ in live:
         if comm in EXE_DEV_ROOTS:
             roots.setdefault(comm, set()).add(adj)
     assert roots.keys() == set(EXE_DEV_ROOTS), f"exe.dev's roots not found: {roots}"
     assert all(adjs == {EXEMPT} for adjs in roots.values()), f"a root left -1000: {roots}"
     prefer = flag(earlyoom_args(), "--prefer")
-    reachable = [(comm, adj) for comm, adj in live if re.search(prefer, comm) and adj != EXEMPT]
-    assert not reachable, f"--prefer now reaches dev tooling: {reachable}"
+    tooling = [(comm, adj, score) for comm, adj, score in live if re.search(prefer, comm)]
+    assert tooling, "no --prefer match running: this test runs from a session, so one must"
+    exempt = [entry for entry in tooling if entry[1] == EXEMPT]
+    assert not exempt, f"sessions inherit -1000 again (broker#71): {exempt}"
+    bus = max(score for comm, _, score in live if comm in OOM_UNITS.values())
+    behind = [entry for entry in tooling if entry[2] <= bus]
+    assert not behind, f"dev tooling at or below the bus's {bus} for the kernel: {behind}"
 
 
 @pytest.mark.parametrize(
     ("verb", "expected"), [("is-active", "inactive"), ("is-enabled", "disabled")]
 )
 def test_earlyoom_is_installed_and_disabled(verb: str, expected: str) -> None:
-    """Installed and configured, not running (broker#58). It cannot reach dev
-    tooling at -1000, and what it can reach - the session ``dbus-daemon``,
-    ``(sd-pam)``, cron, logind, timesyncd, journald - frees tens of MiB and costs
-    the journal. Disabled as well as stopped: ``apt install`` starts it on stock
-    arguments, and an enabled unit would come back at the next hard stop. Kept
-    installed so that if ``test_live_prefer_reaches_nothing`` ever fails, turning
-    it back on is ``systemctl enable --now earlyoom``."""
+    """Installed and configured, not running. Disabled by broker#58, when it could
+    not reach dev tooling at -1000 and what it could reach - the session
+    ``dbus-daemon``, ``(sd-pam)``, cron, logind, timesyncd, journald - freed tens
+    of MiB and cost the journal. Kept disabled after broker#71 made sessions
+    killable (operator's decision, 2026-10-06): the kernel's own killer now takes
+    dev tooling before the bus, which ``test_live_sessions_are_killed_before_the_bus``
+    pins. What earlyoom would add is acting at ``-m`` available instead of at
+    exhaustion. Disabled as well as stopped: ``apt install`` starts it on stock
+    arguments, and an enabled unit would come back at the next hard stop.
+    Turning it on is ``systemctl enable --now earlyoom``."""
     read_installed(INSTALLED[EARLYOOM])
     if not shutil.which("systemctl"):
         pytest.skip("no systemctl")
