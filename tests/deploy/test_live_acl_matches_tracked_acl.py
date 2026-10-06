@@ -812,25 +812,37 @@ def test_a_node_credential_is_read_the_way_the_probe_reads_it(monkeypatch, tmp_p
 
 
 @pytest.mark.parametrize(
-    ("sudo", "node", "expected"),
+    ("sudo", "node", "exists", "expected"),
     [
-        (True, True, pytest.fail.Exception),
-        (True, False, pytest.skip.Exception),
-        (False, True, pytest.skip.Exception),
+        (True, True, False, pytest.fail.Exception),
+        (True, False, False, pytest.skip.Exception),
+        (True, False, True, pytest.skip.Exception),
+        (False, True, False, pytest.skip.Exception),
+        (True, True, True, None),
     ],
-    ids=["on-node", "sudo-off-node", "no-sudo"],
+    ids=["on-node", "sudo-off-node", "present-off-node", "no-sudo", "present-on-node"],
 )
 def test_a_file_absent_behind_sudo_fails_on_the_node(
-    monkeypatch, tmp_path, sudo: bool, node: bool, expected
+    monkeypatch, tmp_path, sudo: bool, node: bool, exists: bool, expected
 ) -> None:
     """``live_client``'s operator credential, ``node_passwords`` and
     ``node_saved_acl`` all decide through ``sudo_installed``. GitHub's runners
     have passwordless sudo, so working sudo says nothing about the host; and on
     the node none of the three is ever absent by design - the rotation in
     docs/NODE-CREDENTIALS.md replaces the credential by ``mv`` - so absence is an
-    install not finished, or one undone."""
-    monkeypatch.setattr(
-        conftest, "_sudo_status", lambda *argv: 0 if sudo and argv == ("true",) else 1
-    )
+    install not finished, or one undone. Off the node it skips even where the
+    file exists, as ``read_installed`` does."""
+    calls = []
+
+    def sudo_status(*argv: str) -> int:
+        calls.append(argv)
+        if argv == ("true",):
+            return 0 if sudo else 1
+        return 0 if exists else 1
+
+    monkeypatch.setattr(conftest, "_sudo_status", sudo_status)
     pretend_node(monkeypatch, tmp_path, present=node)
-    assert isinstance(outcome_of(sudo_installed, tmp_path / "absent"), expected)
+    outcome = outcome_of(sudo_installed, tmp_path / "file")
+    assert outcome is None if expected is None else isinstance(outcome, expected)
+    if not node:
+        assert calls == [], "sudo ran off the node"

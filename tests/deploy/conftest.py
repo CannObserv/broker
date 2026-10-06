@@ -379,15 +379,16 @@ def _sudo_status(*argv: str) -> int:
 def sudo_installed(path: Path) -> Path:
     """``path``, a file only root reads, present on the broker node; a skip elsewhere.
 
-    ``read_installed`` for what needs ``sudo -n`` to see. No passwordless sudo
-    is a skip. Working sudo is not a node signal - GitHub's runners have it - so
-    an absent ``path`` is decided by ``on_broker_node``: a skip off the node, a
-    failure on it (CannObserv/broker#81).
+    ``read_installed`` for what needs ``sudo -n`` to see, in the same order: off
+    the node is decided by ``on_broker_node`` before any ``sudo`` runs - working
+    sudo is no node signal, GitHub's runners have it - and on the node an absent
+    ``path`` fails (CannObserv/broker#81). No passwordless sudo on the node is
+    still a skip: it is the account the suite runs as, not a file not installed.
     """
+    require_broker_node()
     if _sudo_status("true"):
-        pytest.skip("no passwordless sudo - not the broker node")
+        pytest.skip("no passwordless sudo - cannot read root's files")
     if _sudo_status("test", "-f", str(path)):
-        require_broker_node()
         pytest.fail(f"{path} is not installed on the broker node")
     return path
 
