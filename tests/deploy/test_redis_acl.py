@@ -2258,26 +2258,32 @@ def test_only_the_consumer_can_create_and_take_delivery_in_its_group(
     On a server of its own, so the stream does not exist when the consumer
     creates its group: `XGROUP CREATE ... MKSTREAM` is how each driver meets
     its stream on first boot, and a key pattern admits a key that is not
-    there yet. Then the producer - the one identity the old root let in - is
-    refused every group command, including the early `XGROUP CREATE` at `$`
-    that would have skipped a backlog, and the consumer is delivered the entry
+    there yet. The producer - the one identity the old root let in - is
+    refused first the early `XGROUP CREATE` at `$` under the consumer's own
+    name, which would have skipped the backlog the consumer boots to, and then
+    every group command on the live group; the consumer is delivered the entry
     the intruder could not take.
     """
     consumer = documented_group_consumers()[topic]
     producer = documented_producers()[topic]
     group = group_name(topic, consumer)
-    assert not fresh_acl_broker("acladmin").exists(topic)
+    admin = fresh_acl_broker("acladmin")
+    intruder = fresh_acl_broker(producer)
+    assert not admin.exists(topic)
+    # The early create, under the consumer's own name, before its first boot.
+    with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+        intruder.xgroup_create(topic, group, id="$", mkstream=True)
+    assert not admin.exists(topic), "a refused MKSTREAM still made the stream"
+
     owner = fresh_acl_broker(consumer)
     assert owner.xgroup_create(topic, group, id="$", mkstream=True)
     with _seeder(fresh_acl_broker) as seeder:
         entry = seeder.xadd(topic, {"k": "v"})
 
-    intruder = fresh_acl_broker(producer)
     for refused in (
         lambda: intruder.xreadgroup(group, "intruder", {topic: ">"}, count=1),
         lambda: intruder.xack(topic, group, entry),
         lambda: intruder.xautoclaim(topic, group, "intruder", min_idle_time=0),
-        lambda: intruder.xgroup_create(topic, f"{group}.early", id="$", mkstream=True),
     ):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             refused()
