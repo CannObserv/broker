@@ -151,8 +151,9 @@ src/broker/      bus_health.py (the probe), backup.py, restore.py,
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/,
                  rehearses the restore against a real redis-server, and guards the
                  SocratiCode config (#17), ruff's reach into the docs (#38),
-                 credentials out of every runbook's argv (#47), and the vendored
-                 skills' links, listing and channel URLs (#63)
+                 credentials out of every runbook's argv (#47), the vendored
+                 skills' links, listing and channel URLs (#63), and pytest's
+                 conftest reach across argument orders (#73)
 ```
 
 ## Agent Skills
