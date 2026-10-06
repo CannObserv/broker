@@ -1,16 +1,13 @@
 # broker#21 - installed as /etc/default/earlyoom.
 #
-# A shedder of the node's small daemons, NOT a killer of dev tooling
-# (broker#58).
-# VSCode Server, Claude Code and SocratiCode inherit exe.dev's oom_score_adj
-# -1000, which earlyoom 1.7 skips outright, as the kernel does: nothing on this
-# node can kill them. What it can reach is any process above -1000 whose
-# oom_score stays above 0 after --avoid - small daemons: the session
-# dbus-daemon, (sd-pam), cron, polkitd, logind, timesyncd, and journald, which
-# is at adj -250 and still scores 202 - tens of MiB in all, journald's evidence
-# included. So it is INSTALLED AND DISABLED (broker#58); this file is kept
-# current for the day sessions stop being exempt, when
-# `systemctl enable --now earlyoom` is the whole change.
+# INSTALLED AND DISABLED. Disabled by broker#58, when VSCode Server, Claude Code
+# and SocratiCode inherited exe.dev's oom_score_adj -1000, which earlyoom 1.7
+# skips outright, as the kernel does, and all it could reach was small daemons -
+# tens of MiB, journald's evidence included. broker#71 (2026-10-06) took sessions
+# off -1000: they read 0, and the kernel's own killer now ranks them ahead of the
+# daemons and the bus. Kept disabled by the operator's decision of that date; what
+# it would add is acting at -m available instead of at exhaustion. This file is
+# kept current, so `systemctl enable --now earlyoom` is the whole change.
 #
 #   -r 3600   one memory report an hour in the journal (the package default)
 #   -m 10     SIGTERM below 10% available (~790 MiB at 8 GB), SIGKILL below 5%.
@@ -22,9 +19,9 @@
 #             bus's oom_score under 300, so --avoid lands it below earlyoom's
 #             badness-0 starting victim, which it never replaces with less
 #   --prefer  dev tooling: node, npx (titled `npm exec <pkg>`), and VSCode
-#             Server's node processes, whose comm is MainThread. Inert while
-#             sessions sit at -1000 - a dry run prints them at 300, the score
-#             before the skip; read its `new victim` lines, not that column
+#             Server's node processes, whose comm is MainThread. Live since
+#             broker#71: a dry run on 2026-10-06 ended on MainThread; read its
+#             `new victim` lines, not the badness column
 #
 # No -p: it needs CAP_SYS_NICE, which this DynamicUser unit does not have.
 #

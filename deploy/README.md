@@ -15,9 +15,9 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
 | `sysctl.d/60-broker-memory.conf` | `/etc/sysctl.d/` | `vm.min_free_kbytes` 64 MiB: the reserve atomic allocations draw on (broker#21) |
 | `system.slice.d/broker-memory.conf` | `/etc/systemd/system/system.slice.d/` | `MemoryLow=` for the slice - without it the two below protect nothing, because this node has no `memory_recursiveprot` |
-| `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`: out of earlyoom's reach, and the kernel's last resort after the small daemons. `broker.conf` beside it stays ordering-only |
+| `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`: out of earlyoom's reach, and the kernel's last resort after dev tooling and the small daemons. `broker.conf` beside it stays ordering-only |
 | `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` and `OOMScoreAdjust=-900` for the network path |
-| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). It **cannot reach dev tooling**, which exe.dev starts at -1000, so it would shed small daemons only: **installed and disabled** (broker#58), configured for the day that changes |
+| `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). **Installed and disabled**: broker#58 disabled it when dev tooling sat at exe.dev's -1000, out of its reach, and it stays disabled now that broker#71 put sessions at 0, where the kernel takes them before the bus (operator's decision, 2026-10-06). Configured, so turning it on is one command |
 | `needrestart.conf.d/broker.conf` | `/etc/needrestart/conf.d/` | `$nrconf{restart} = 'l'`: needrestart **lists** restarts after an apt run, never performs them. Stock Ubuntu mode restarts automatically, so a `libc6` security update would restart `redis-server` outside a window (broker#65) |
 
 `tests/deploy/` asserts all of it: the installed copies match these files, and
@@ -359,22 +359,26 @@ things about this node shaped them:
   its slice's, and `system.slice` defaults to 0. Check
   `/sys/fs/cgroup/system.slice/redis-server.service/memory.low`, not
   `systemctl show`, which reports the configured value either way.
-- **Everything exe.dev starts is at `oom_score_adj` -1000, and nothing can kill
-  it.** `exe-init` and `sshd` run there and every session process inherits it -
-  VSCode Server, `claude`, SocratiCode's `npx`. The kernel skips a -1000 process
-  outright, and so does earlyoom 1.7, *after* adding the `--prefer` bonus: its
-  `-d` dry run prints a session at 300, but that is the score before the skip
-  (broker#58). So `--prefer` reaches nothing here, and neither killer can take
-  the processes that exhausted the node in broker#17.
-- **What earlyoom can reach is small daemons.** Anything above -1000 whose
-  `oom_score` stays above 0 after `--avoid` - adj alone does not decide it,
-  since journald at -250 still scores 502 (202 after `--avoid`). Measured: the
-  session `dbus-daemon` (~800, 500 after `--avoid`), `(sd-pam)` (~733), cron and
-  polkitd (~666), then logind, timesyncd and journald. Under sustained pressure it would
-  work through all of them - tens of MiB, journald's evidence included - and then
-  find no victim. So it is **installed and disabled** (broker#58), its config kept
-  current: if exe.dev ever stops exempting sessions, `test_live_prefer_reaches_nothing`
-  fails, and `systemctl enable --now earlyoom` is the whole change.
+- **exe.dev's own processes sit at `oom_score_adj` -1000; its sessions no
+  longer do.** `exe-init` and `sshd` run there, and nothing can kill them. Until
+  broker#71 every session process inherited it too - VSCode Server, `claude`,
+  SocratiCode's `npx` - an `exe-init` bug exe.dev confirmed, so neither killer
+  could take the processes that exhausted the node in broker#17. The fixed
+  `exe-init` (`14fd603`) went in on 2026-10-06, and sessions read 0. The kernel's
+  order measured that day: the user `systemd` and `(sd-pam)` (adj 100, ~734, a
+  few MiB), then `claude` (690), `MainThread` (683), `node`, `npm exec`, then the
+  small daemons at ~666, and the bus last. `test_live_sessions_are_killed_before_the_bus`
+  pins it, and fails if a session reads -1000 again.
+- **earlyoom stays installed and disabled.** broker#58 disabled it when it could
+  reach only small daemons: anything above -1000 whose `oom_score` stays above 0
+  after `--avoid` - the session `dbus-daemon`, `(sd-pam)`, cron, polkitd, logind,
+  timesyncd and journald (at -250 it still scores 502, 202 after `--avoid`) -
+  tens of MiB, journald's evidence included. Since broker#71 `--prefer` reaches
+  dev tooling (a 2026-10-06 dry run ended on `MainThread`), but the kernel
+  already takes it before the bus, and it stays off by the operator's decision of
+  that date. What it would add is acting at `-m` available instead of at
+  exhaustion. Its config is kept current: `systemctl enable --now earlyoom` is
+  the whole change.
 - **The bus is out of earlyoom's reach and near-last for the kernel.** A unit at
   the default adj 0 reads ~667, which `--avoid` only takes to ~367, so as first
   installed earlyoom's dry run would have killed tailscaled and redis-server.
@@ -424,8 +428,8 @@ overcommit at the value redis asks for, redis's protection against twice the
 tracked cap, the slice covering its children, the bus's score out of earlyoom's
 reach, both regexes against the real process names and systemd's split, and -
 on this node - installed parity, every tracked sysctl key read back from
-`/proc/sys`, the host class (exe.dev's roots at -1000, no `--prefer` match
-outside it), and earlyoom stopped and disabled.
+`/proc/sys`, the host class (exe.dev's roots at -1000, every `--prefer` match
+above it and ranked ahead of the bus), and earlyoom stopped and disabled.
 
 ## Changing the cap
 
