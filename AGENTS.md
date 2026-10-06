@@ -175,7 +175,7 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - #41 and #43, live 2026-10-06: no service but archiver holds `+xtrim`, and
   archiver, watcher and replicator consume through a selector naming only their
   grouped streams, every read a selector, `+info +ping` alone on the root
-  (processor's root already named only what it consumes). Next on that
+  (processor's root already named only its own stream and queue). Next on that
   shape: #78 (the infrastructure service's read-only consumer).
 - Open: #53 (CI off co-broker, or `citest` re-minted). The history of #62, #64
   (`content.persist` live 2026-10-01, #76), #75 and archiver#251:
