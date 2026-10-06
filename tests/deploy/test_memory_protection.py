@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.deploy.conftest import DEPLOY, pretend_node, read_installed
+from tests.deploy.conftest import DEPLOY, outcome_of, pretend_node, read_installed
 from tests.deploy.test_installed_redis_config_matches_repo import (
     REPO_REDIS_CONF,
     parse_directives,
@@ -425,5 +425,7 @@ def test_earlyoom_tests_skip_only_off_the_node(monkeypatch, tmp_path, present: b
     deploy step was undone, and the guard reports that instead of going quiet."""
     monkeypatch.setitem(INSTALLED, EARLYOOM, tmp_path / "earlyoom")
     pretend_node(monkeypatch, tmp_path, present=present)
-    with pytest.raises(pytest.fail.Exception if present else pytest.skip.Exception):
-        test_earlyoom_is_installed_and_disabled("is-enabled", "disabled")
+    expected = pytest.fail.Exception if present else pytest.skip.Exception
+    assert isinstance(
+        outcome_of(test_earlyoom_is_installed_and_disabled, "is-enabled", "disabled"), expected
+    )

@@ -29,7 +29,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.deploy.conftest import DEPLOY, pretend_node, read_installed, require_broker_node
+from tests.deploy.conftest import (
+    DEPLOY,
+    outcome_of,
+    pretend_node,
+    read_installed,
+    require_broker_node,
+)
 
 DROPIN = DEPLOY / "needrestart.conf.d" / "broker.conf"
 INSTALLED = Path("/etc/needrestart/conf.d/broker.conf")
@@ -103,8 +109,9 @@ def test_live_chain_skips_off_the_node_even_with_needrestart_installed(
     stock_needrestart, monkeypatch, tmp_path
 ) -> None:
     pretend_node(monkeypatch, tmp_path, present=False)
-    with pytest.raises(pytest.skip.Exception):
-        test_live_config_chain_resolves_to_list_only()
+    assert isinstance(
+        outcome_of(test_live_config_chain_resolves_to_list_only), pytest.skip.Exception
+    )
 
 
 def test_live_chain_fails_on_the_node_without_the_dropin(
@@ -115,19 +122,18 @@ def test_live_chain_fails_on_the_node_without_the_dropin(
     if shutil.which("perl") is None:
         pytest.skip("perl not available on this host")
     pretend_node(monkeypatch, tmp_path, present=True)
-    with pytest.raises(AssertionError, match="undef"):
-        test_live_config_chain_resolves_to_list_only()
+    outcome = outcome_of(test_live_config_chain_resolves_to_list_only)
+    assert isinstance(outcome, AssertionError)
+    assert "undef" in str(outcome)
 
 
 def test_installed_copy_fails_on_the_node_when_absent(
     stock_needrestart, monkeypatch, tmp_path
 ) -> None:
     pretend_node(monkeypatch, tmp_path, present=True)
-    with pytest.raises(pytest.fail.Exception):
-        test_installed_copy_matches_tracked()
+    assert isinstance(outcome_of(test_installed_copy_matches_tracked), pytest.fail.Exception)
 
 
 def test_installed_copy_skips_off_the_node(stock_needrestart, monkeypatch, tmp_path) -> None:
     pretend_node(monkeypatch, tmp_path, present=False)
-    with pytest.raises(pytest.skip.Exception):
-        test_installed_copy_matches_tracked()
+    assert isinstance(outcome_of(test_installed_copy_matches_tracked), pytest.skip.Exception)

@@ -2,14 +2,18 @@
 (CannObserv/broker#4).
 
 Same shape as ``test_bus_health_units.py``: content asserted on the repo copy
-everywhere, byte-parity against ``/etc/systemd/system/`` where installed.
+everywhere, byte-parity against ``/etc/systemd/system/`` on the node, where a
+missing unit fails rather than skips (CannObserv/broker#81).
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
+
+from tests.deploy.conftest import outcome_of, pretend_node, read_installed
 
 _DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
 REPO_SERVICE = _DEPLOY / "broker-backup.service"
@@ -17,15 +21,6 @@ REPO_TIMER = _DEPLOY / "broker-backup.timer"
 REPO_PROBE_SERVICE = _DEPLOY / "broker-bus-health.service"
 INSTALLED_SERVICE = Path("/etc/systemd/system/broker-backup.service")
 INSTALLED_TIMER = Path("/etc/systemd/system/broker-backup.timer")
-
-
-def _read_if_installed(path: Path) -> str | None:
-    """Only ``FileNotFoundError`` means "not installed" - a ``PermissionError``
-    propagates rather than silently passing."""
-    try:
-        return path.read_text()
-    except FileNotFoundError:
-        return None
 
 
 def _directive(text: str, key: str) -> list[str]:
@@ -141,9 +136,7 @@ def test_the_probe_is_told_where_the_backup_state_lives() -> None:
 
 
 def test_installed_service_matches_repo() -> None:
-    installed = _read_if_installed(INSTALLED_SERVICE)
-    if installed is None:
-        pytest.skip(f"{INSTALLED_SERVICE} not present - not a host running the backup")
+    installed = read_installed(INSTALLED_SERVICE)
     assert installed == REPO_SERVICE.read_text(), (
         f"{INSTALLED_SERVICE} has drifted from {REPO_SERVICE}.\n"
         "Reinstall with:\n"
@@ -152,11 +145,31 @@ def test_installed_service_matches_repo() -> None:
 
 
 def test_installed_timer_matches_repo() -> None:
-    installed = _read_if_installed(INSTALLED_TIMER)
-    if installed is None:
-        pytest.skip(f"{INSTALLED_TIMER} not present - not a host running the backup")
+    installed = read_installed(INSTALLED_TIMER)
     assert installed == REPO_TIMER.read_text(), (
         f"{INSTALLED_TIMER} has drifted from {REPO_TIMER}.\n"
         "Reinstall with:\n"
         f"  sudo cp {REPO_TIMER} {INSTALLED_TIMER} && sudo systemctl daemon-reload"
     )
+
+
+# --- the node signal the installed checks above skip on (broker#81) ---
+
+
+@pytest.mark.parametrize("present", [True, False], ids=["on-node", "off-node"])
+@pytest.mark.parametrize(
+    ("constant", "test"),
+    [
+        ("INSTALLED_SERVICE", test_installed_service_matches_repo),
+        ("INSTALLED_TIMER", test_installed_timer_matches_repo),
+    ],
+    ids=["service", "timer"],
+)
+def test_an_absent_unit_fails_on_the_node_and_skips_off_it(
+    monkeypatch, tmp_path, constant: str, test, present: bool
+) -> None:
+    """Keyed on the unit itself, removing the backup would skip its own parity check."""
+    monkeypatch.setattr(sys.modules[__name__], constant, tmp_path / "absent")
+    pretend_node(monkeypatch, tmp_path, present=present)
+    expected = pytest.fail.Exception if present else pytest.skip.Exception
+    assert isinstance(outcome_of(test), expected)

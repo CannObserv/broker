@@ -19,8 +19,8 @@ they are here:
     of the module. Until CannObserv/broker#52 this was the probe's
     ``brokeradmin``, which then had to carry every grant these tests read with.
     ``BROKER_REDIS_URL`` supplies the address alone. Skips off the node: without
-    the URL, without passwordless sudo, without the credential, or when the
-    broker does not answer.
+    the URL, without passwordless sudo, or when the broker does not answer; and
+    without the credential only off the node, where on it that fails.
 
 Each lived in the module that first needed it until
 ``test_live_acl_matches_tracked_acl.py`` needed both *in one test* - which is
@@ -30,8 +30,9 @@ what it is, and the test that compares the two is exactly where a reader must
 not have to guess which is which.
 
 ``on_broker_node`` is the one answer to "is this the node?" for a test whose
-subject is an installed file (CannObserv/broker#79), and ``read_installed`` the
-read that uses it.
+subject is an installed file (CannObserv/broker#79), ``read_installed`` the read
+that uses it, and ``sudo_installed`` the same for a file only root reads
+(CannObserv/broker#81).
 
 Both throwaway servers - ``tracked_acl_broker``'s, and the one that loads the
 node's *saved* ACL to compare it with the live one (CannObserv/broker#54) - are
@@ -316,6 +317,22 @@ def pretend_node(monkeypatch, tmp_path: Path, *, present: bool) -> None:
     monkeypatch.setattr(sys.modules[__name__], "NODE_MARKERS", (marker,))
 
 
+def outcome_of(test, *args) -> BaseException | None:
+    """The skip, fail or assertion ``test(*args)`` ends in, or ``None`` if it returns.
+
+    For the pins around ``require_broker_node``. Written as
+    ``pytest.raises(pytest.fail.Exception)``, a pin whose test skips does not
+    fail: the skip escapes the ``raises`` and skips the pin, so "fails on the
+    node" regressing to "skips on the node" - the hazard the pins exist for -
+    reads as one more skip (CannObserv/broker#81).
+    """
+    try:
+        test(*args)
+    except (pytest.skip.Exception, pytest.fail.Exception, AssertionError) as outcome:
+        return outcome
+    return None
+
+
 def read_installed(path: Path) -> str:
     """``path``'s contents on the broker node; a skip anywhere else.
 
@@ -359,6 +376,22 @@ def _sudo_status(*argv: str) -> int:
     return subprocess.run(["sudo", "-n", *argv], capture_output=True, check=False).returncode
 
 
+def sudo_installed(path: Path) -> Path:
+    """``path``, a file only root reads, present on the broker node; a skip elsewhere.
+
+    ``read_installed`` for what needs ``sudo -n`` to see. No passwordless sudo
+    is a skip. Working sudo is not a node signal - GitHub's runners have it - so
+    an absent ``path`` is decided by ``on_broker_node``: a skip off the node, a
+    failure on it (CannObserv/broker#81).
+    """
+    if _sudo_status("true"):
+        pytest.skip("no passwordless sudo - not the broker node")
+    if _sudo_status("test", "-f", str(path)):
+        require_broker_node()
+        pytest.fail(f"{path} is not installed on the broker node")
+    return path
+
+
 def _operator_client(url: str) -> redis_pkg.Redis | None:
     """``acladmin`` at the broker ``url`` names, or ``None`` off the node.
 
@@ -392,15 +425,14 @@ def live_client():
     # without it never reaches here - and redis is a hard dependency of the
     # project, not an extra.
     #
-    # Skips only where the node's prerequisites are ABSENT. Once sudo works and
-    # the credential file exists, a credential that will not decrypt or that
-    # the broker refuses is a finding - the half-done rotation
+    # Skips only off the node. Once sudo works and the credential file exists,
+    # a credential that will not decrypt or that the broker refuses is a
+    # finding - the half-done rotation
     # test_each_node_credential_authenticates_its_user exists for, and a skip
-    # would hide it behind the very fixture that test depends on.
-    if _sudo_status("true"):
-        pytest.skip("no passwordless sudo - not the broker node")
-    if _sudo_status("test", "-f", str(OPERATOR_CREDENTIAL)):
-        pytest.skip(f"{OPERATOR_CREDENTIAL} absent - not the broker node")
+    # would hide it behind the very fixture that test depends on. An ABSENT one
+    # is a finding on the node too (CannObserv/broker#81): the rotation never
+    # leaves the path empty, and the mint runs before the first render.
+    sudo_installed(OPERATOR_CREDENTIAL)
     client = _operator_client(url)
     if client is None:
         pytest.fail(f"{OPERATOR_CREDENTIAL} exists but does not decrypt through sudo -n")

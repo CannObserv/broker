@@ -3,16 +3,20 @@
 Same failure class as the drop-in parity test: the deployed thing quietly
 diverging from the documented thing. Both units are asserted for content in the
 repo copy (runs everywhere) and for byte-parity against ``/etc/systemd/system/``
-(skips on hosts that do not run the timer).
+on the node. Off it they skip, by ``on_broker_node`` rather than by the unit's own
+absence: on the node a missing unit, or ``/etc/broker/.env``, fails
+(CannObserv/broker#81).
 """
 
 import re
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
 from src.broker.bus_health import BROKER_CREDENTIAL
+from tests.deploy.conftest import outcome_of, pretend_node, read_installed
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DEPLOY = _ROOT / "deploy"
@@ -28,15 +32,6 @@ WHEELHOUSE_KEY = "GOOGLE_APPLICATION_CREDENTIALS"
 # systemd's own search path for encrypted credentials, 0700 root. The probe's
 # password is here, encrypted to this host (CannObserv/broker#52).
 CREDSTORE = Path("/etc/credstore.encrypted")
-
-
-def _read_if_installed(path: Path) -> str | None:
-    """Only ``FileNotFoundError`` means "not installed" - a ``PermissionError``
-    propagates rather than silently passing."""
-    try:
-        return path.read_text()
-    except FileNotFoundError:
-        return None
 
 
 def _comment_block_holding(text: str, phrase: str) -> str:
@@ -68,18 +63,15 @@ def _directive(text: str, key: str) -> list[str]:
     return [ln.split("=", 1)[1] for ln in text.splitlines() if ln.startswith(f"{key}=")]
 
 
-def _names_assigned_in(path: Path) -> set[str] | None:
-    """The variable names an ``EnvironmentFile`` assigns, or ``None`` if absent.
+def _names_assigned_in(path: Path) -> set[str]:
+    """The variable names an ``EnvironmentFile`` assigns.
 
     A helper rather than inline, so the file's text - which held a password in
     ``BROKER_REDIS_URL`` until CannObserv/broker#52, and would again were it put
     back - is never a local of the test frame: ``pytest -l`` prints a failing
     test's locals, and this frame has returned by then.
     """
-    try:
-        text = path.read_text()
-    except FileNotFoundError:
-        return None
+    text = path.read_text()
     return {
         line.split("=", 1)[0].strip()
         for line in text.splitlines()
@@ -93,10 +85,7 @@ def _url_carries_a_password(path: Path, name: str) -> bool | None:
     A helper for the same reason as ``_names_assigned_in``: the value never
     becomes a local of the test frame, and only the verdict crosses back.
     """
-    try:
-        text = path.read_text()
-    except FileNotFoundError:
-        return None
+    text = path.read_text()
     # Commented lines count: a copy "kept as the rollback" is still plaintext
     # at rest. A comment with no password in it is prose and says nothing.
     assignment = re.compile(rf"^\s*(?P<comment>#\s*)?(?:export\s+)?{name}\s*=\s*(?P<value>\S*)")
@@ -180,9 +169,7 @@ def test_timer_ticks_periodically() -> None:
 
 
 def test_installed_service_matches_repo() -> None:
-    installed = _read_if_installed(INSTALLED_SERVICE)
-    if installed is None:
-        pytest.skip(f"{INSTALLED_SERVICE} not present - not a host running the timer")
+    installed = read_installed(INSTALLED_SERVICE)
     assert installed == REPO_SERVICE.read_text(), (
         f"{INSTALLED_SERVICE} has drifted from {REPO_SERVICE}.\n"
         "Reinstall with:\n"
@@ -191,9 +178,7 @@ def test_installed_service_matches_repo() -> None:
 
 
 def test_installed_timer_matches_repo() -> None:
-    installed = _read_if_installed(INSTALLED_TIMER)
-    if installed is None:
-        pytest.skip(f"{INSTALLED_TIMER} not present - not a host running the timer")
+    installed = read_installed(INSTALLED_TIMER)
     assert installed == REPO_TIMER.read_text(), (
         f"{INSTALLED_TIMER} has drifted from {REPO_TIMER}.\n"
         "Reinstall with:\n"
@@ -317,9 +302,8 @@ def test_every_variable_the_probe_inherits_is_one_it_reads() -> None:
     assigns is either read by ``src/broker/bus_health.py`` or unset by the unit.
     Names only: no value leaves the file, pass or fail.
     """
+    read_installed(SHARED_ENV)
     assigned = _names_assigned_in(SHARED_ENV)
-    if assigned is None:
-        pytest.skip(f"{SHARED_ENV} not present - not the node")
     unset = set(" ".join(_directive(REPO_SERVICE.read_text(), "UnsetEnvironment")).split())
     unused = sorted(assigned - unset - _variables_the_probe_reads())
     assert not unused, (
@@ -358,9 +342,13 @@ def test_the_shared_env_carries_no_redis_password() -> None:
     would silently win - and be readable by the account again. The verdict
     alone leaves the file.
     """
+    read_installed(SHARED_ENV)
     carries = _url_carries_a_password(SHARED_ENV, "BROKER_REDIS_URL")
-    if carries is None:
-        pytest.skip(f"{SHARED_ENV} absent or without BROKER_REDIS_URL - not the node")
+    assert carries is not None, (
+        f"{SHARED_ENV} assigns no BROKER_REDIS_URL: the probe starts, logs "
+        '"nothing to probe" and checks nothing. Restore '
+        "BROKER_REDIS_URL=redis://brokeradmin@<host>:6379/0 (deploy/README.md)."
+    )
     assert not carries, (
         f"BROKER_REDIS_URL in {SHARED_ENV} carries a password. It overrides the unit's "
         f"encrypted credential and is readable without sudo: make it "
@@ -408,3 +396,40 @@ def test_a_url_password_is_detected_in_any_assignment_form(tmp_path, lines, carr
     env = tmp_path / ".env"
     env.write_text("\n".join(["OTHER=x", *lines]) + "\n")
     assert _url_carries_a_password(env, "BROKER_REDIS_URL") is carries
+
+
+# --- the node signal the installed checks above skip on (broker#81) ---
+
+
+@pytest.mark.parametrize("present", [True, False], ids=["on-node", "off-node"])
+@pytest.mark.parametrize(
+    ("constant", "test"),
+    [
+        ("INSTALLED_SERVICE", test_installed_service_matches_repo),
+        ("INSTALLED_TIMER", test_installed_timer_matches_repo),
+        ("SHARED_ENV", test_every_variable_the_probe_inherits_is_one_it_reads),
+        ("SHARED_ENV", test_the_shared_env_carries_no_redis_password),
+    ],
+    ids=["service", "timer", "env-names", "env-password"],
+)
+def test_an_absent_file_fails_on_the_node_and_skips_off_it(
+    monkeypatch, tmp_path, constant: str, test, present: bool
+) -> None:
+    """Each check reads one file the node installs. Keyed on that file, deleting
+    it would skip the one check that guards it, on the one host it is for."""
+    monkeypatch.setattr(sys.modules[__name__], constant, tmp_path / "absent")
+    pretend_node(monkeypatch, tmp_path, present=present)
+    expected = pytest.fail.Exception if present else pytest.skip.Exception
+    assert isinstance(outcome_of(test), expected)
+
+
+def test_a_shared_env_without_the_url_fails_on_the_node(monkeypatch, tmp_path) -> None:
+    """A separate finding from an absent file: the probe starts, logs
+    "nothing to probe" and checks nothing, every tick."""
+    env = tmp_path / ".env"
+    env.write_text("OTHER=x\n# BROKER_REDIS_URL=redis://brokeradmin@localhost:6379/0\n")
+    monkeypatch.setattr(sys.modules[__name__], "SHARED_ENV", env)
+    pretend_node(monkeypatch, tmp_path, present=True)
+    outcome = outcome_of(test_the_shared_env_carries_no_redis_password)
+    assert isinstance(outcome, AssertionError)
+    assert "assigns no BROKER_REDIS_URL" in str(outcome)

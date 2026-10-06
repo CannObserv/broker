@@ -57,7 +57,8 @@ wrong-in-both-places is a test over the *taxonomy* - see
 preferring wherever a grant has a derivable source.
 
 The live tests skip unless ``BROKER_REDIS_URL`` is set and the broker answers,
-and the ``sudo -n`` ones also skip off the node, so CI and dev clones pass. The
+and the ``sudo -n`` ones also skip off the node, so CI and dev clones pass. On
+the node, a file they read that is absent fails instead (``sudo_installed``). The
 stand-in test for #54 needs only ``redis-server``, and so runs there too. On
 the broker node, source the env first - and as
 ``set -a; . /etc/broker/.env; set +a``, never ``export $(cat ... | xargs)``.
@@ -81,7 +82,10 @@ from tests.deploy.conftest import (
     RENDER_SCRIPT,
     acl_server,
     node_credential,
+    outcome_of,
     parse_users,
+    pretend_node,
+    sudo_installed,
 )
 from tests.deploy.test_installed_redis_config_matches_repo import (
     REPO_REDIS_CONF,
@@ -357,24 +361,10 @@ def _sudo(*argv: str, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(["sudo", "-n", *argv], capture_output=True, check=False, **kwargs)
 
 
-def _on_the_node(path: Path) -> Path:
-    """``path``, reachable through ``sudo -n``, or a skip.
-
-    Every fixture calling this takes ``live_client`` first, so a host with sudo
-    but no broker credentials - a CI runner - skips before any ``sudo`` is
-    attempted.
-    """
-    if _sudo("true").returncode:
-        pytest.skip("no passwordless sudo - not the broker node")
-    if _sudo("test", "-f", str(path)).returncode:
-        pytest.skip(f"{path} absent - not the broker node")
-    return path
-
-
 @pytest.fixture(scope="module")
 def node_passwords(live_client) -> Path:
-    """The node's passwords file, reachable through ``sudo -n``, or a skip."""
-    return _on_the_node(NODE_PASSWORDS)
+    """The node's passwords file, reachable through ``sudo -n``; a skip off the node."""
+    return sudo_installed(NODE_PASSWORDS)
 
 
 def _plaintext_line(user: str) -> str:
@@ -627,7 +617,8 @@ def test_the_live_acl_declares_no_user_the_tracked_file_does_not(live_client) ->
 
 @pytest.fixture(scope="module")
 def node_saved_acl(live_client) -> str:
-    """The broker's ACL as ``ACL SAVE`` last wrote it, read through ``sudo -n``, or a skip.
+    """The broker's ACL as ``ACL SAVE`` last wrote it, read through ``sudo -n``; a skip
+    off the node.
 
     The path is the tracked ``aclfile`` directive, not ``CONFIG GET aclfile``:
     ``+config|get`` also reads ``requirepass``, so its callers are kept to the one
@@ -638,7 +629,7 @@ def node_saved_acl(live_client) -> str:
     plaintext password, and ``_digests_only`` refuses the file unread if
     something else did.
     """
-    path = _on_the_node(Path(parse_directives(REPO_REDIS_CONF.read_text())["aclfile"]))
+    path = sudo_installed(Path(parse_directives(REPO_REDIS_CONF.read_text())["aclfile"]))
     result = _sudo("cat", str(path), text=True)
     assert result.returncode == 0, f"cannot read {path} through sudo -n:\n{result.stderr}"
     return _digests_only(
@@ -815,3 +806,31 @@ def test_a_node_credential_is_read_the_way_the_probe_reads_it(monkeypatch, tmp_p
     monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
     from_tests = node_credential(Path("/etc/credstore.encrypted") / BROKER_CREDENTIAL)
     assert from_tests == _unit_credential(BROKER_CREDENTIAL) == "minted-value"
+
+
+# --- the node signal the sudo -n reads above skip on (broker#81) ---
+
+
+@pytest.mark.parametrize(
+    ("sudo", "node", "expected"),
+    [
+        (True, True, pytest.fail.Exception),
+        (True, False, pytest.skip.Exception),
+        (False, True, pytest.skip.Exception),
+    ],
+    ids=["on-node", "sudo-off-node", "no-sudo"],
+)
+def test_a_file_absent_behind_sudo_fails_on_the_node(
+    monkeypatch, tmp_path, sudo: bool, node: bool, expected
+) -> None:
+    """``live_client``'s operator credential, ``node_passwords`` and
+    ``node_saved_acl`` all decide through ``sudo_installed``. GitHub's runners
+    have passwordless sudo, so working sudo says nothing about the host; and on
+    the node none of the three is ever absent by design - the rotation in
+    docs/NODE-CREDENTIALS.md replaces the credential by ``mv`` - so absence is an
+    install not finished, or one undone."""
+    monkeypatch.setattr(
+        conftest, "_sudo_status", lambda *argv: 0 if sudo and argv == ("true",) else 1
+    )
+    pretend_node(monkeypatch, tmp_path, present=node)
+    assert isinstance(outcome_of(sudo_installed, tmp_path / "absent"), expected)

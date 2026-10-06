@@ -29,10 +29,11 @@ Assertions, deliberately split by what they can run against:
 
 - **Pure, always in CI** - the tracked config declares a non-zero cap, carries
   no secret, and agrees with the drop-in about this node's tailnet address.
-- **Installed parity, skips when absent** - the two files under
+- **Installed parity, skips off the node** - the two files under
   ``/etc/systemd/system`` and ``/usr/local/sbin`` match their tracked copies, so
   CI and dev clones pass and only a host actually running the broker is
-  asserted on.
+  asserted on. "Off the node" is ``on_broker_node``, never the file's own
+  absence: on the node a missing copy fails (CannObserv/broker#81).
 
 **Scope limit, and where it is covered.** All of this compares *files*. It
 cannot see a broker whose running config was changed by ``CONFIG SET``, which is
@@ -50,11 +51,12 @@ content through ``CONFIG GET`` instead, which catches more.
 """
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
-from tests.deploy.conftest import DEPLOY
+from tests.deploy.conftest import DEPLOY, outcome_of, pretend_node, read_installed
 
 REPO_REDIS_CONF = DEPLOY / "redis.conf.broker"
 REPO_DROPIN = DEPLOY / "redis-server.service.d" / "broker.conf"
@@ -173,13 +175,11 @@ def test_the_dropin_does_not_override_execstart() -> None:
     assert "ExecStart=/" not in REPO_DROPIN.read_text()
 
 
-# --- installed parity: skips off the broker node ---
+# --- installed parity: skips off the broker node, fails on it when absent ---
 
 
 def _assert_installed_matches(installed: Path, repo_copy: Path) -> None:
-    if not installed.exists():
-        pytest.skip(f"{installed} absent - not the broker node")
-    assert installed.read_text() == repo_copy.read_text(), (
+    assert read_installed(installed) == repo_copy.read_text(), (
         f"{installed} has drifted from {repo_copy.name}"
     )
 
@@ -199,6 +199,29 @@ def test_installed_wait_script_is_executable() -> None:
     """A non-executable ExecStartPre fails 203/EXEC, which is the same symptom
     Ubuntu's NoExecPaths=/ sandbox produces and would send the next person
     reading this down the wrong path (broker#1 Phase 2 F3)."""
-    if not INSTALLED_WAIT_SCRIPT.exists():
-        pytest.skip(f"{INSTALLED_WAIT_SCRIPT} absent - not the broker node")
+    read_installed(INSTALLED_WAIT_SCRIPT)
     assert INSTALLED_WAIT_SCRIPT.stat().st_mode & 0o111
+
+
+# --- the node signal the installed checks above skip on (broker#81) ---
+
+
+@pytest.mark.parametrize("present", [True, False], ids=["on-node", "off-node"])
+@pytest.mark.parametrize(
+    ("constant", "test"),
+    [
+        ("INSTALLED_DROPIN", test_installed_dropin_matches_repo),
+        ("INSTALLED_WAIT_SCRIPT", test_installed_wait_script_matches_repo),
+        ("INSTALLED_WAIT_SCRIPT", test_installed_wait_script_is_executable),
+    ],
+    ids=["dropin", "wait-script", "wait-script-executable"],
+)
+def test_an_absent_file_fails_on_the_node_and_skips_off_it(
+    monkeypatch, tmp_path, constant: str, test, present: bool
+) -> None:
+    """The drop-in is itself one of ``NODE_MARKERS``, so its absence alone does
+    not make a host "not the node": another marker keeps the check running."""
+    monkeypatch.setattr(sys.modules[__name__], constant, tmp_path / "absent")
+    pretend_node(monkeypatch, tmp_path, present=present)
+    expected = pytest.fail.Exception if present else pytest.skip.Exception
+    assert isinstance(outcome_of(test), expected)

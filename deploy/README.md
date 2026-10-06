@@ -26,9 +26,7 @@ through `CONFIG GET` so a `CONFIG SET` that no file records still gets caught.
 Off the node they skip, so CI and dev clones pass. "Off the node" is
 `on_broker_node()` in `tests/deploy/conftest.py`, never the absence of the file
 under test: on the node a missing copy **fails**, so deleting a drop-in cannot
-quiet its own guard (broker#79). The memory-protection and needrestart rows
-follow that rule; the units and the redis-server drop-in still skip on their own
-absence until broker#81.
+quiet its own guard (broker#79).
 
 ## The ACL users need a restart, and that was not obvious
 
