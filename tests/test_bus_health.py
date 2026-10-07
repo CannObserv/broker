@@ -894,7 +894,7 @@ def test_one_missed_republish_is_absorbed_and_two_are_not(set_size: int) -> None
     direction, where the probe stays loud rather than going quiet. The 10%
     margin covers exactly one missed republish at `RETAINED_FULL_SETS` of 10,
     and only because the reading is ceilinged; two warn. Parametrized over the
-    set sizes docs/BUS-HEALTH.md says it was measured at, so the claim there
+    set sizes docs/LWW-CAP.md says it was measured at, so the claim there
     has an artifact rather than a memory.
 
     Two missed republishes is ten minutes of silence and `stream-age` needs
@@ -1119,7 +1119,7 @@ def test_the_carried_baseline_round_trips_through_the_state_file() -> None:
 
 # A replay of the producer against a model of `MAXLEN ~`, ticked the way the
 # timer ticks, with the state carried between ticks the way the collector
-# carries it. The tables in docs/BUS-HEALTH.md, "A window that is not uniform",
+# carries it. The tables in docs/LWW-CAP.md, "A window that is not uniform",
 # are this simulation's output, so the claims there have an artifact.
 
 # Entries per macro node, and so the most `MAXLEN ~` overshoots a cap by. The
@@ -2704,7 +2704,8 @@ def _registry_continuity(**kw) -> list[bus_health.Finding]:
 def test_the_registry_row_carries_its_publish_cap() -> None:
     """One cap, one spelling: the ceiling's `warn_length` and the floor's scope
     are both `REGISTRY_PRODUCER_MAXLEN`. The only row: `info.changes` is
-    XTRIMmed by archiver, and the LWW streams sit at their cap by design."""
+    XTRIMmed by archiver, and once the LWW floor governs their cap is read as
+    an upper bound, so a stream at its true cap would read as under it."""
     assert {c.topic for c in STREAM_CHECKS if c.publish_maxlen is not None} == {INFO_REGISTRY}
     assert _check_for(INFO_REGISTRY).publish_maxlen == REGISTRY_PRODUCER_MAXLEN
 

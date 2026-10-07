@@ -95,7 +95,7 @@ Per tick it probes:
   instead, `ARCHIVER_REGISTRY_STREAM_MAXLEN`), and for the two LWW streams
   `max(500, 10 x the set Watcher republishes)` + 10% - the 550 while the sets are small,
   which is the state the node is in today, and the floor past ~50 entries per
-  set. See *Mirrored constants* and *The one cap that is read, not mirrored*
+  set. See [LWW-CAP.md](LWW-CAP.md) and *Mirrored constants*
   below. **The eight `content.*` streams get no length threshold**: nothing trims
   them, so there is no cap to mirror and a breach could only mean traffic grew.
   `maxmemory` is their only bound and the memory check above is the finding for
@@ -228,14 +228,10 @@ one under load.** That was not hypothetical - a `databases 1` restart on
 holding 4% of its entries, and the probe ticked twice reporting
 `finding_count: 0`, correctly by its own rules.
 
-**Length cannot be the signal.** Three streams shrink as normal operation:
-`info.changes` rides archiver's periodic `XTRIM`; `info.registry` is capped on
-every publish (CannObserv/archiver#141) and can drop most of itself in a single
-tick - it sat at ~2,600 entries in early September and at 116 by the 10th,
-entirely legitimately, one generation per item with older generations
-superseded; and the two LWW streams carry a producer-side `maxlen`. Any
-percentage threshold would either miss a wipe or fire on `info.registry` every
-snapshot.
+**Length cannot be the signal.** `info.changes` rides archiver's periodic
+`XTRIM` and the two LWW streams sit at a producer-side `maxlen`, so both shrink
+as normal operation, and a percentage threshold would either miss a wipe or
+fire on them.
 
 **`entries-added` is what separates them.** It is monotonic for the life of a
 stream *object*: a trim removes entries while it keeps climbing, and it can only
@@ -254,6 +250,21 @@ is not diagnosing a cause, it is refusing to call an empty broker healthy.
 
 `content.replicate` additionally gets the cheaper rule - it is carved out of
 every trim path, so **any** decrease in its length is a fault.
+
+**`info.registry` gets a precise one** (`entries-removed`, CannObserv/broker#42).
+Its only removal is archiver's `XADD MAXLEN` - nobody can `XTRIM` it since
+CannObserv/broker#41 or holds `+xdel` on it - and `MAXLEN ~ N` never leaves
+fewer than N. So `entries-added - length`, every entry ever removed, rising
+between ticks while the stream is under `REGISTRY_PRODUCER_MAXLEN` is a fault,
+even when growth hid it from the length. The rise has no threshold: the 2,605
+a hand-run trim took on 2026-09-08 (CannObserv/archiver#247) is a constant
+baseline. `max-deleted-entry-id` names the removal: `XTRIM` leaves it `0-0`
+and `XDEL` moves it (7.0.15). The cap bounds the scope because the ceiling
+cannot: cap + 10% sits above where `MAXLEN ~` holds the stream, so unbounded,
+every trim at the cap would be a finding. Not the LWW streams: once their
+floor governs, the cap in force is read as an upper bound
+([LWW-CAP.md](LWW-CAP.md)), so at their true cap they read as under it, and
+every republish's trim would be a finding.
 
 Both baselines are carried between oneshot runs in the same `StateDirectory`
 file as the pending counters, under `@`-prefixed keys, and an unreachable broker
@@ -286,114 +297,15 @@ other two caps.
 goes stale-*low* and warns early. Lowered, it goes stale-*high* and can hide the
 backlog the cut was for (CannObserv/broker#40: watcher#292's 29,770 is under
 55k).
+`REGISTRY_PRODUCER_MAXLEN` alone is loud both ways: it also bounds
+`entries-removed`, which fires at a lowered cap.
 
-## The one cap that is read, not mirrored
-
-`LWW_PRODUCER_MAXLEN` is a **default, not the whole rule**. Watcher's
-`resolve_stream_maxlen` floors each LWW cap at `RETAINED_FULL_SETS` (10) copies
-of the set it is about to republish, so the cap in force is
-`max(500, 10 x set)`. The sets were 3 (`content.fetch-policy`) and 4
-(`info.watch-status`) on 2026-09-22 and the default governs; from about 54
-entries per set a threshold of 550 would have said *the retention cap for this
-stream is not being applied* while the cap was being applied correctly, just
-higher - and a standing WARN with the wrong cause trains an operator to ignore
-the LWW rows, which is the blindness CannObserv/broker#40 closed
-(CannObserv/broker#44).
-
-**The third term cannot be mirrored.** It is the size of Watcher's corpus, it
-changes with no edit anywhere, and that is precisely the failure a mirror cannot
-cover. So the probe reads it off the stream. The first reading,
-`republished_set_size`, needs one `XINFO STREAM` reply - the one the length and
-age checks already make - and is `length / the republishes the span holds`.
-Three properties carry it:
-
-- it is entries per republish **whether or not the cap is applied**, because an
-  untrimmed stream grows its span in step with its length, so a broken cap still
-  climbs through the threshold instead of carrying it along;
-- it **rounds up twice** - the oldest retained entries are a partial set, and
-  the division charges that fragment to the whole ones before the remainder is
-  ceilinged. Up delays a real breach by a tick or two; down would invent one;
-- it **never lowers the threshold**: `max(default, floor)` is Watcher's rule and
-  the probe's.
-
-**What it reads on this node.** Measured 2026-09-22, against the live broker as
-`brokeradmin` - `XINFO STREAM` is the read the length and age checks already
-make, so this needs no grant nobody holds and no round trip nobody pays:
-
-| Stream | `XLEN` | span | set read | cap in force |
-|---|---|---|---|---|
-| `content.fetch-policy` | 500 | 830 min (166 republishes) | 4, for a 3-host set | the mirrored 500 |
-| `info.watch-status` | 504 | 625 min (125 republishes) | 5, for a 4-item set | the mirrored 500 |
-
-One over the true set in both rows, which is the rounding working: the reading
-is an upper bound on the set and therefore on the cap, and at these sizes it
-changes nothing at all - `10 x 5` is far under 500.
-
-### A window that is not uniform
-
-The span reading has two unknowns - the set size and the republishes per
-period - and one equation, closed by assuming the second is 1. Three things
-break that:
-
-- **a gap** - republishes that did not happen, counted as if they had: reads
-  low, warns early (CannObserv/broker#45);
-- **a set that steps up** - the window averages old sets and new: low (#45).
-  A bulk import or a restore does it; growth an item at a time does not;
-- **republishing more often than the period** - watcher's mutation-deferred
-  republishes on top of the `*/5` cron, `R` per period: reads `R` times high,
-  so a cap that stops being applied is silent until the stream is `R` times
-  over (CannObserv/broker#51). `R` was 1.00 when #51 measured it, but its
-  trigger - a registry filling past 50 items - is also what makes the floor
-  govern.
-
-`read_set_size` takes the largest of three readings, and refuses the span where
-it cannot be read:
-
-| Reading | Read off | Wrong for |
-|---|---|---|
-| **span** | one reply | a gap, a step up (low, for most of a window); `R > 1` (high) |
-| **since the last tick** | `entries-added` and the newest id, this tick and last, on the ids' clock | the tick straddling a producer's return (low); `R > 1` (high); after a mid-burst tick (up to half a set high, one tick) |
-| **remembered** | a span in the state file, anchored to its window's newest entry | nothing it outlives: it expires when its anchor trims out, which after a gap is when the gap leaves |
-
-The anchor moves on every tick whose window is no wider than
-`RETAINED_FULL_SETS` periods, and otherwise only for a larger reading - moving
-it only for a larger one pinned it to the fencepost's high reading until it
-expired before the tick it was kept for. The same refresh stops a remembered set
-outliving a shrink.
-
-**A narrow window is refused, not read.** A stream that has been trimmed
-(`entries-added` past its length) is at its cap, and at one republish a period
-ten full sets cannot fit in fewer than nine periods - the fencepost, not a
-chosen margin. At its cap the length is a second equation, so a since-last-tick
-reading still stands if ten of it fit in the length: a shrink passes, `R > 1`
-fails by `R`. With nothing left, the first tick is withheld (a shrink past one
-republish cuts every anchor in one `XADD`) and from the second the mirrored
-default governs, the finding naming the faster republish. A broken cap loses
-nothing to that tick: narrow means under nine periods, and a threshold only
-reports it past eleven. A stream still filling towards its cap is never refused.
-
-**Replayed** in `tests/test_bus_health.py`: watcher's producer against a model
-of `MAXLEN ~`, the probe ticking every 10 minutes with its state carried. The
-model's macro node is 13 entries, as measured 2026-09-24 (`content.fetch-policy`
-506 entries in 39 nodes, `info.watch-status` 500 in 63, `radix-tree-keys`): the
-4096-byte limit binds, not the 100-entry one. A node smaller than one set keeps
-the overshoot inside the 10% margin. *Before* is #44's span alone.
-
-| Scenario | Before | Now |
-|---|---|---|
-| 1 missed republish | silent | silent |
-| 2, 3, 6 or 24 missed | 5 ticks of `stream-length`, **after** the producer is back | silent |
-| set steps up 1.1x, 1.25x | silent | silent |
-| steps up 1.5x / 2x / 3x, 10x | 2 / 3 / 4 ticks | silent |
-| set shrinks 2x, 3x, 10x | silent | silent |
-| cap stops being applied | reported 2.5 periods later | the same tick |
-| cap lost 2 periods after a 9x shrink | reported 10.5 periods later | 0.5 |
-| `R` = 2, 3, 5, 10 | silent, the threshold `R` x the cap | a standing, named finding from 8.5, 6.5, 4.5, 4.5 periods |
-
-The *before* gap row is worse than #45 recorded: `stream-age` clears once the
-producer is back, and the length finding then stood alone until the gap trimmed
-out, whatever its length. A period *lengthened* at home and not here reads the
-set low permanently, the same mirror failure as any other.
+**A named source is not enough: name its movers.** Both archiver caps move
+with no commit in either repo - `ARCHIVER_REDIS_STREAM_MAXLEN` and
+`ARCHIVER_REGISTRY_STREAM_MAXLEN`, from `/etc/archiver/.env`, the unit, or
+archiver's gitignored repo `.env`, which loads last and wins. All unset
+2026-09-23; archiver's `docs/DEPLOYMENT.md` obliges a note here
+(CannObserv/archiver#254). Each docstring names them (CannObserv/broker#42).
 
 ## Who watches what, after the split
 

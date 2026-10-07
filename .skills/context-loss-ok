@@ -156,3 +156,28 @@ AGENTS.md :: tighten :: semantic search: tools, prefetch, graph health, index sc
 docs/STREAMS.md :: retarget :: answered under *Who drains a DLQ* below.
 docs/STREAMS.md :: disproven :: once its persist loop is enabled (CannObserv/broker#64), Observo will write
 docs/STREAMS.md :: disproven :: deletion grant, and for five of the six queues below the named drainer could
+
+# 2026-10-07 (broker#42): BUS-HEALTH.md -> + LWW-CAP.md
+# AGENTS.md - Mirrored constants rewritten to name movers, net-zero; --claims
+# drops 0 atoms; the LWW formula lives in docs/LWW-CAP.md and docs/BUS-HEALTH.md
+AGENTS.md :: tighten :: are copies of numbers owned elsewhere, each with its source named. A mirrored
+AGENTS.md :: tighten :: default is not always the whole rule: the LWW cap is `max(500, 10 x the set
+AGENTS.md :: tighten :: watcher republishes)`, and the set size is **read off the stream** each tick
+AGENTS.md :: tighten :: rather than mirrored, because a corpus size changes with no edit anywhere -
+AGENTS.md :: tighten :: the one failure a mirror cannot cover (broker#44, #45, #51). Group names are
+AGENTS.md :: tighten :: **derived** via co-core's `group_name()`, never spelled - that is the point of
+AGENTS.md :: tighten :: cannobserv#384 and the reason this repo depends on co-core at all. See
+# AGENTS.md - "The one cap that is read, not mirrored" moved to docs/LWW-CAP.md
+AGENTS.md :: retarget :: mirrored".
+# docs/BUS-HEALTH.md - pointer into the section this change moved to docs/LWW-CAP.md
+docs/BUS-HEALTH.md :: retarget :: set. See *Mirrored constants* and *The one cap that is read, not mirrored*
+# docs/BUS-HEALTH.md - refuted by CannObserv/archiver#247 (gh issue view): the
+# 2026-09-08 drop was a hand-run trim, not "entirely legitimately" the cap
+docs/BUS-HEALTH.md :: disproven :: **Length cannot be the signal.** Three streams shrink as normal operation:
+docs/BUS-HEALTH.md :: disproven :: `info.changes` rides archiver's periodic `XTRIM`; `info.registry` is capped on
+docs/BUS-HEALTH.md :: disproven :: every publish (CannObserv/archiver#141) and can drop most of itself in a single
+docs/BUS-HEALTH.md :: disproven :: tick - it sat at ~2,600 entries in early September and at 116 by the 10th,
+docs/BUS-HEALTH.md :: disproven :: entirely legitimately, one generation per item with older generations
+docs/BUS-HEALTH.md :: disproven :: superseded; and the two LWW streams carry a producer-side `maxlen`. Any
+docs/BUS-HEALTH.md :: disproven :: percentage threshold would either miss a wipe or fire on `info.registry` every
+docs/BUS-HEALTH.md :: disproven :: snapshot.

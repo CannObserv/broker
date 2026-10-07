@@ -148,3 +148,11 @@ tests/deploy/test_redis_acl.py :: Read off ../docs/STREAMS.md for the reason the
 tests/deploy/test_redis_acl.py :: which ../docs/STREAMS.md "
 tests/test_bus_health.py :: `content.blobs` broadcasts (docs/STREAMS.md), and there a group beside the
 src/broker/bus_health.py :: # docs/STREAMS.md's `DLQ (writer / drainer)` column, the rule behind it in
+# 2026-10-07 (broker#42): BUS-HEALTH.md -> + LWW-CAP.md. The new doc points back
+# at what stayed; UNDELIVERED-CONSUMERS points at the probe, which stayed; the
+# test comments name the moved title beside its new path, or alone as a label.
+docs/LWW-CAP.md :: and the caps that are mirrored whole, are [BUS-HEALTH.md](BUS-HEALTH.md).
+docs/LWW-CAP.md :: Moved out of BUS-HEALTH.md on 2026-10-07, when it ran past the per-doc
+docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md); which stream carries which group
+tests/test_bus_health.py :: # --- a window that is not uniform (CannObserv/broker#45, #51) ---
+tests/test_bus_health.py :: # carries it. The tables in docs/LWW-CAP.md, "A window that is not uniform",

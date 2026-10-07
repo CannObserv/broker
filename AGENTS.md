@@ -123,15 +123,13 @@ nothing. The ACL declares no CI identity (#53).
   `docs/MEMORY-PROTECTION.md`, *`noeviction` is load-bearing beyond refusing writes*;
   tests pin it on the config and on the live keyspace.
 - **Mirrored constants.** The retention caps in `src/broker/bus_health.py`
-  are copies of numbers owned elsewhere, each with its source named. A mirrored
-  default is not always the whole rule: the LWW cap is `max(500, 10 x the set
-  watcher republishes)`, and the set size is **read off the stream** each tick
-  rather than mirrored, because a corpus size changes with no edit anywhere -
-  the one failure a mirror cannot cover (broker#44, #45, #51). Group names are
-  **derived** via co-core's `group_name()`, never spelled - that is the point of
-  cannobserv#384 and the reason this repo depends on co-core at all. See
-  `docs/BUS-HEALTH.md`, "Mirrored constants" and "The one cap that is read, not
-  mirrored".
+  copy numbers owned elsewhere, each naming its source **and its movers**: an
+  env var or gitignored `.env` moves one with no commit (broker#42,
+  watcher#319). The LWW set size is **read off the stream**, a corpus size
+  being the one mover no mirror covers (broker#44, #45, #51). Group names are
+  **derived** via co-core's `group_name()`, never spelled - the point of
+  cannobserv#384 and why this repo depends on co-core. See
+  `docs/BUS-HEALTH.md`, "Mirrored constants".
 - **No em dashes.** ASCII `-`.
 - **No inline module imports.** Ruff `PLC0415`.
 - All UTC, ISO 8601.
@@ -202,6 +200,7 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - the measured latency from each participant, the path beside every number, and the accepted DERP risk
 - [docs/CONSUMER-REGISTRATIONS.md](docs/CONSUMER-REGISTRATIONS.md) - the one-time reap of orphaned consumer registrations, and why it cannot recur
 - [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
+- [docs/LWW-CAP.md](docs/LWW-CAP.md) - the LWW length threshold, read off the stream
 - [docs/MEMORY-PROTECTION.md](docs/MEMORY-PROTECTION.md) - the `maxmemory` cap: that all three producers survive it, and why `noeviction` is load-bearing beyond refusing writes
 - [docs/UNDELIVERED-CONSUMERS.md](docs/UNDELIVERED-CONSUMERS.md) - a consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and what the probe compares instead
 - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record

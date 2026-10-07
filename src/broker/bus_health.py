@@ -995,7 +995,7 @@ def republished_set_size(
     What it assumes is a **uniform** window: every republish in it the same
     size, one per period. A gap, a set that changed size, and a producer
     republishing more often than its period each break that; ``read_set_size``
-    is where each is answered, and docs/BUS-HEALTH.md, *A window that is not
+    is where each is answered, and docs/LWW-CAP.md, *A window that is not
     uniform*, has the replayed numbers.
     """
     whole_sets = _periods_spanned(floor, first_entry_ms=first_entry_ms, last_entry_ms=last_entry_ms)
@@ -1176,7 +1176,7 @@ def read_set_size(
     since-last-tick reading low for one tick; a step up reads the span low for
     most of an hour. Each high failure is bounded as well, since a remembered
     reading dies with its anchor and a broken cap grows the stream past any
-    fixed reading. The replayed numbers are in docs/BUS-HEALTH.md, *A window that
+    fixed reading. The replayed numbers are in docs/LWW-CAP.md, *A window that
     is not uniform*.
 
     **A narrow trimmed window refuses the span** (CannObserv/broker#51). It

@@ -18,7 +18,12 @@
     {
       "name": "bus-health-contract",
       "path": "./docs/BUS-HEALTH.md",
-      "description": "The WARN-only health probe: per-stream retention contracts and their mirrored constants, the one threshold read off the stream rather than mirrored, stream, group, DLQ, loss, memory, disk and backup-freshness checks."
+      "description": "The WARN-only health probe: per-stream retention contracts and their mirrored constants, stream, group, DLQ, loss, memory, disk and backup-freshness checks."
+    },
+    {
+      "name": "lww-cap-doc",
+      "path": "./docs/LWW-CAP.md",
+      "description": "The one length threshold read off the stream rather than mirrored: the LWW streams' max(500, 10 x set) cap, the set-size readings, a non-uniform window (gaps, step-ups, faster republishes), and the replay that pins them."
     },
     {
       "name": "memory-protection-doc",
