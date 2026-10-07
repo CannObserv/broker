@@ -156,3 +156,16 @@ docs/LWW-CAP.md :: Moved out of BUS-HEALTH.md on 2026-10-07, when it ran past th
 docs/UNDELIVERED-CONSUMERS.md :: [BUS-HEALTH.md](BUS-HEALTH.md); which stream carries which group
 tests/test_bus_health.py :: # --- a window that is not uniform (CannObserv/broker#45, #51) ---
 tests/test_bus_health.py :: # carries it. The tables in docs/LWW-CAP.md, "A window that is not uniform",
+# 2026-10-07: STREAMS.md -> + NETWORK-PATHS.md, + NON-STREAM-KEYS.md. Each hit
+# below points at the stream table or its column notes, which stayed, at
+# replicator's own docs/STREAMS.md, or is a new doc pointing back.
+docs/DLQ-DRAINING.md :: **For `*.dlq` keys only.** Every stream row of [STREAMS.md](STREAMS.md) but
+docs/NETWORK-PATHS.md :: produces and consumes each stream is [STREAMS.md](STREAMS.md). Both halves
+docs/NON-STREAM-KEYS.md :: lives, and what losing it costs. The streams are [STREAMS.md](STREAMS.md); why
+docs/NON-STREAM-KEYS.md :: Moved out of STREAMS.md on 2026-10-07, when it ran past the per-doc context
+docs/STREAMS.md :: | `content.blobs` | Replicator → Watcher | fact | one per consuming service | `XPENDING` + **undelivered age** per group
+deploy/redis-acl.conf :: # them. That is the exact hazard ../docs/STREAMS.md carves that stream out of
+deploy/redis-acl.conf :: # only the streams ../docs/STREAMS.md says it consumes in a group, the mirror of
+deploy/redis-acl.conf :: # docs/STREAMS.md fires (`XLEN content.blobs` past 25k, `XLEN
+deploy/redis-acl.conf :: # ../docs/STREAMS.md says **Never XTRIMmed**: a cap on a command stream deletes
+tests/deploy/test_redis_acl.py :: """``stream -> the service consuming it in a group``, off ../docs/STREAMS.md.

@@ -176,14 +176,13 @@ def test_the_dedupe_keys_are_the_only_volatile_keys_on_the_instance(live_client)
     assert expires == dedupe, (
         f"{expires} volatile keys but {dedupe} dedupe keys - "
         "another tenant now writes a key with a TTL, so replicator's namespace "
-        "is no longer the whole eviction candidate set; see docs/STREAMS.md, "
-        '"Non-stream keys on db0"'
+        "is no longer the whole eviction candidate set; see docs/NON-STREAM-KEYS.md"
     )
 
 
 # --- where the participants are --------------------------------------------
 
-STREAMS_MD = Path(__file__).resolve().parents[2] / "docs" / "STREAMS.md"
+PARTICIPANTS_MD = Path(__file__).resolve().parents[2] / "docs" / "NETWORK-PATHS.md"
 PARTICIPANTS_HEADING = "## Participants, hosts and paths"
 _TAILNET_ADDR = re.compile(r"`(100\.\d{1,3}\.\d{1,3}\.\d{1,3})`")
 
@@ -196,8 +195,8 @@ def documented_addresses() -> dict[str, str]:
     than mirrored in a constant, because the table is what an operator reads
     and a constant beside it would be a second copy to go stale.
     """
-    text = STREAMS_MD.read_text()
-    assert PARTICIPANTS_HEADING in text, f"{STREAMS_MD.name} has no {PARTICIPANTS_HEADING!r}"
+    text = PARTICIPANTS_MD.read_text()
+    assert PARTICIPANTS_HEADING in text, f"{PARTICIPANTS_MD.name} has no {PARTICIPANTS_HEADING!r}"
     section = text.split(PARTICIPANTS_HEADING, 1)[1].split("\n## ", 1)[0]
     found: dict[str, str] = {}
     for line in section.splitlines():
@@ -241,6 +240,6 @@ def test_every_connected_participant_is_where_the_docs_say(live_client) -> None:
         if peer != documented[user]:
             wrong.add(f"{user} connects from {peer}, documented at {documented[user]}")
     assert not wrong, (
-        f"{STREAMS_MD.name}, {PARTICIPANTS_HEADING[3:]!r}, no longer describes the cluster: "
+        f"{PARTICIPANTS_MD.name}, {PARTICIPANTS_HEADING[3:]!r}, no longer describes the cluster: "
         + "; ".join(sorted(wrong))
     )

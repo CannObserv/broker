@@ -18,7 +18,7 @@ bottom.
 - replicator's `replicator:cmd:*` expiring state - the namespace, not one
   segment of it: there is one per command stream, and naming only `fetch` is
   the mistake broker#9 corrected in the ACL. Inventoried in
-  [STREAMS.md](STREAMS.md), *Non-stream keys on `db0`*.
+  [NON-STREAM-KEYS.md](NON-STREAM-KEYS.md).
 
 A group's position is recoverable from nowhere else. Losing it means every
 group re-provisions at `ensure_group`'s default `$`, which is silent and skips

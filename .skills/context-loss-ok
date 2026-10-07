@@ -181,3 +181,10 @@ docs/BUS-HEALTH.md :: disproven :: entirely legitimately, one generation per ite
 docs/BUS-HEALTH.md :: disproven :: superseded; and the two LWW streams carry a producer-side `maxlen`. Any
 docs/BUS-HEALTH.md :: disproven :: percentage threshold would either miss a wipe or fire on `info.registry` every
 docs/BUS-HEALTH.md :: disproven :: snapshot.
+
+# 2026-10-07: STREAMS.md -> + NETWORK-PATHS.md (Participants, hosts and paths),
+# + NON-STREAM-KEYS.md (Non-stream keys on db0); pointers into what moved
+AGENTS.md :: retarget :: `docs/STREAMS.md`, *Non-stream keys on `db0`*. There is exactly one today,
+docs/STREAMS.md :: retarget :: health primitive applies, who writes its DLQ - and who drains it. Plus the one
+docs/STREAMS.md :: retarget :: thing on this instance that is not a stream, under *Non-stream keys on `db0`*.
+docs/STREAMS.md :: retarget :: the accepted DERP risk: [NETWORK-PATHS.md](NETWORK-PATHS.md).

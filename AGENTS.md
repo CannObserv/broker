@@ -115,7 +115,7 @@ nothing. The ACL declares no CI identity (#53).
   `deploy/redis-server.dropin.conf` in Phase 5, and archiver's half was
   repointed at the new path by CannObserv/archiver#196.
 - **A non-stream key pattern is inventoried before it is written.**
-  `docs/STREAMS.md`, *Non-stream keys on `db0`*. There is exactly one today,
+  `docs/NON-STREAM-KEYS.md`. There is exactly one today,
   Replicator's `replicator:cmd:*` dedupe keys, and they are the **only volatile
   keys on the instance** - which is what makes `noeviction` load-bearing beyond
   refusing writes, since any `volatile-*` policy would make that one namespace
@@ -195,9 +195,10 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Detail Docs
 
-- [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each; non-stream keys; where each participant runs
+- [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each
+- [docs/NON-STREAM-KEYS.md](docs/NON-STREAM-KEYS.md) - keys that are not streams: Replicator's dedupe keys
 - [docs/DLQ-DRAINING.md](docs/DLQ-DRAINING.md) - who writes, triages and backstops each `*.dlq`, the capture, and the `XTRIM MINID` drain
-- [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - the measured latency from each participant, the path beside every number, and the accepted DERP risk
+- [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - where each participant runs, its measured latency and path, and the accepted DERP risk
 - [docs/CONSUMER-REGISTRATIONS.md](docs/CONSUMER-REGISTRATIONS.md) - the one-time reap of orphaned consumer registrations, and why it cannot recur
 - [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
 - [docs/LWW-CAP.md](docs/LWW-CAP.md) - the LWW length threshold, read off the stream

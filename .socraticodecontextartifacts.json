@@ -13,7 +13,12 @@
     {
       "name": "stream-inventory",
       "path": "./docs/STREAMS.md",
-      "description": "The cluster stream inventory: every stream on db0, who produces, consumes and drains each, the DLQ suffixes, and the non-stream key patterns (replicator's volatile dedupe keys). Authoritative for stream ownership across the cohort."
+      "description": "The cluster stream inventory: every stream on db0, who produces, consumes and drains each, and the DLQ suffixes. Authoritative for stream ownership across the cohort."
+    },
+    {
+      "name": "non-stream-keys",
+      "path": "./docs/NON-STREAM-KEYS.md",
+      "description": "Every key on db0 that is not a stream: replicator's volatile replicator:cmd:* dedupe keys, the one namespace per command stream, what losing them costs, and why the ACL grants the namespace rather than one segment."
     },
     {
       "name": "bus-health-contract",

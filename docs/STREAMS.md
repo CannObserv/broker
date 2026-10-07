@@ -1,8 +1,8 @@
 # The cluster stream inventory
 
 Every Redis Stream on this broker: who produces it, who consumes it, which
-health primitive applies, who writes its DLQ - and who drains it. Plus the one
-thing on this instance that is not a stream, under *Non-stream keys on `db0`*.
+health primitive applies, who writes its DLQ - and who drains it. The one
+thing on this instance that is not a stream is [NON-STREAM-KEYS.md](NON-STREAM-KEYS.md).
 
 Moved here from `CannObserv/archiver:deploy/README.md` under
 [archiver#193](https://github.com/CannObserv/archiver/issues/193) D6. It was
@@ -117,91 +117,14 @@ second process in the group silently takes half the revisions.
 
 ## Participants, hosts and paths
 
-Where each participant runs, and how its packets reach this broker. The four
-live nodes are in `pdx` since 2026-09-15, which closes the cross-region interval
-broker#1 R6 made unavoidable (CannObserv/broker#8). Processor's VM is a
-fifth, consuming since 2026-10-02 (CannObserv/broker#75, which re-homed the
-role #62 had declared for Observo): `co-processor`, on the tailnet as
-`tag:processor` since 2026-09-29, admitted to `tag:broker` on 6379 by a policy
-rule the same day. It runs Tailscale with `--accept-dns=true` since
-CannObserv/processor#8, so its bus URL names the broker as `broker`, like the
-other three.
-
-| Service | Tailnet node | VM | Region | Tailnet address | Path to broker |
-|---|---|---|---|---|---|
-| `archiver` | `archiver` | `co-registrar` | pdx | `100.109.138.101` | direct |
-| `watcher` | `watcher` | `co-watcher` | pdx | `100.66.24.24` | direct |
-| `replicator` | `replicator` | `co-replicator` | pdx | `100.114.136.20` | direct |
-| `processor` | `co-processor` *(consuming since 2026-10-02, CannObserv/processor#1)* | `co-processor` | not recorded | `100.110.22.56` | direct - a hairpin through the exe.dev NAT both VMs share, both ways since the service runs (CannObserv/processor#15, [NETWORK-PATHS.md](NETWORK-PATHS.md)) |
-| broker | `broker` | `co-broker` | pdx | `100.97.91.19` | - |
-
-**This table is checked against the live broker.** `CLIENT LIST` reports each
-connection's peer address and `user=`, so a participant that moves reconnects
-from an address this table does not name and
-`test_every_connected_participant_is_where_the_docs_say` goes red on the node
-until the row follows. A host table here has rotted silently before: the one in
-[ACL-CUTOVER.md](ACL-CUTOVER.md) kept watcher in `lax` and replicator on
-watcher's VM for days after both had moved.
-
-The measured latency from each participant, the path beside every number, and
-the accepted DERP risk: [NETWORK-PATHS.md](NETWORK-PATHS.md).
+Moved to [NETWORK-PATHS.md](NETWORK-PATHS.md) when this file passed its context
+budget again (2026-10-07): where each participant runs, and the table the live
+broker's `CLIENT LIST` is checked against.
 
 ## Non-stream keys on `db0`
 
-Provenance: CannObserv/broker#9, CannObserv/replicator#80.
-
-This file had no row for anything that is not a stream, which is how an audit
-came to find these by scanning the keyspace rather than by reading.
-
-| Pattern | Owner | Kind | Lifetime | Commands used | What it is |
-|---|---|---|---|---|---|
-| `replicator:cmd:<stream suffix>:<command_id>` | Replicator | string, **volatile** | `REPLICATOR_DEDUPE_TTL_SECONDS`, default 86400 | `SET .. NX EX`, `EXISTS` | De-duplication of `content.fetch` / `content.replicate` / `content.persist` commands. Written **after** the handler completes; read by an `EXISTS` **before** the next one runs. Reasoning: [`CannObserv/replicator:docs/CONVENTIONS.md#the-replicatorcmd-keys`](https://github.com/CannObserv/replicator/blob/main/docs/CONVENTIONS.md#the-replicatorcmd-keys) |
-
-**This is the only non-stream key pattern any service writes here.** A new one
-belongs in this table before it belongs on the broker. Processor adds none
-(CannObserv/broker#62, #75): it keeps no dedupe keys, because a redelivered
-command re-runs a deterministic extraction whose output is written
-content-addressed and if-absent - and its ACL user holds neither `+set` nor
-`+exists`, which is what keeps that a property of the broker rather than of
-Processor's source.
-
-**One namespace per command stream**, and the suffix is the same one co-core's
-`group_name` puts after the service - so `content.fetch` gives both the group
-`replicator.fetch` and the keys `replicator:cmd:fetch:<id>`. Today that means
-two namespaces, `fetch` and `replicate`.
-
-*Losing them costs re-work, never correctness.* Set-after-success means a key
-can only short-circuit work already known to have finished, so an empty
-namespace costs a re-fetch, a content-addressed re-store that is a no-op, and a
-duplicate fact the issuer contract already requires consumers to tolerate. The
-framing that matters: a `db0` that has lost these has lost the streams and the
-groups' **PELs** with them, and the PEL is Replicator's only durable record of
-intent - it has no database and no outbox. These keys are the cheapest thing in
-that blast radius.
-
-> **The plural is load-bearing, and getting it wrong is silent.** The ACL granted
-> `~replicator:cmd:fetch:*` until broker#9 - one segment of the namespace rather
-> than the namespace. Nothing could have observed the gap: the replicate loop
-> completes no commands while no alias table is provisioned, so its namespace is
-> **empty rather than absent**, and a grant derived from what was seen on the
-> wire cannot see a namespace with no traffic. The moment that loop completes
-> one - which is what broker#7 exists to make happen - the `EXISTS` before the
-> handler is denied, replicator#82 classifies `NOPERM` transient, and the loop
-> backs off and retries forever without ever running a handler. Nothing lost,
-> nothing progressing. Fixed live 2026-09-10 to `~replicator:cmd:*`;
-> `tests/deploy/test_redis_acl.py` now derives the namespaces from co-core's
-> command taxonomy, so a third command stream cannot arrive without a grant or
-> a red test. Same lesson as the `+exists` omission that wedged the fetch loop
-> the same day: **an observed inventory is only as good as its attribution**,
-> and a namespace with no traffic yet is the blind spot.
-
-Measured on this broker 2026-09-10: **37 keys on `db0`, 27 of them dedupe keys
-with TTLs and 10 streams without**, average TTL remaining ~13.5 h; every dedupe
-key under the `fetch` segment, the `replicate` segment empty. Replicator's own
-audit the day before found the same 27 with TTLs spanning 534 s to 84,713 s.
-The counts come from `INFO keyspace` and `SCAN MATCH`, which is all the probe's
-`brokeradmin` and the operator's `acladmin` hold for this - neither has `+ttl`
-or `+type`, deliberately, and the average is the one `INFO` reports.
+Moved to [NON-STREAM-KEYS.md](NON-STREAM-KEYS.md) the same day: Replicator's
+`replicator:cmd:*` dedupe keys, the only non-stream pattern on the instance.
 
 ## Who drains a DLQ
 

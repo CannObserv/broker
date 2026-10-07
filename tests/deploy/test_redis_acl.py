@@ -333,7 +333,7 @@ def test_replicator_can_name_every_dedupe_namespace(users) -> None:
     `content.process`, CannObserv/broker#62 - and its worker pool is processor
     (CannObserv/broker#75), which keeps no dedupe keys: its writes are content-addressed and
     write-if-absent, so a redelivery is idempotent by construction and needs no
-    key here (../docs/STREAMS.md, *Non-stream keys on `db0`*). Over every
+    key here (../docs/NON-STREAM-KEYS.md). Over every
     command stream this would demand a namespace nothing writes. The fourth,
     `content.persist` (CannObserv/broker#64), is replicator's again, and its
     `persist` namespace joined this assertion through the probe row with no
@@ -2348,7 +2348,7 @@ def test_the_tracked_acl_declares_no_ci_identity(users) -> None:
     keys a test could name, not the memory under `noeviction`, the event loop or
     the `ACL LOG` it shared with production. So no test credential exists here:
     every user is a participant (`SERVICE_USERS`, each with a row in
-    docs/STREAMS.md) or one a node rebuild mints. Tests run against a throwaway
+    docs/NETWORK-PATHS.md) or one a node rebuild mints. Tests run against a throwaway
     `redis-server` of their own - `tests/deploy/` here, each sibling's suite
     there. The database-index axis is `databases 1`
     (`test_tracked_config_closes_the_database_index_axis`)."""

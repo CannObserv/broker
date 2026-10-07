@@ -140,7 +140,7 @@ deleted by CannObserv/broker#53.
 ### 3. Note where each service lives
 
 The rolling steps happen on each service's host, not here. **Current hosts are
-in [STREAMS.md](STREAMS.md), *Participants, hosts and paths*** - that table is
+in [NETWORK-PATHS.md](NETWORK-PATHS.md), *Participants, hosts and paths*** - that table is
 checked against `CLIENT LIST` on the live broker, so it cannot drift the way
 this section's own table did. The env files are each service's:
 

@@ -1,11 +1,42 @@
 # How each participant reaches this broker
 
-The measured latency between every participant and this node, the path each
-number was taken on, and the one risk that path carries. Who produces and
-consumes each stream, and where each participant runs, is
-[STREAMS.md](STREAMS.md), *Participants, hosts and paths* - this is the
-measurement half of that section, moved out when STREAMS.md ran past the
-per-doc context budget (CannObserv/broker#14 review, finding 8).
+Where each participant runs, the measured latency between it and this node,
+the path each number was taken on, and the one risk that path carries. Who
+produces and consumes each stream is [STREAMS.md](STREAMS.md). Both halves
+moved out of it when it ran past the per-doc context budget: the measurements
+first (CannObserv/broker#14 review, finding 8), the participant table on
+2026-10-07.
+
+## Participants, hosts and paths
+
+Where each participant runs, and how its packets reach this broker. The four
+live nodes are in `pdx` since 2026-09-15, which closes the cross-region interval
+broker#1 R6 made unavoidable (CannObserv/broker#8). Processor's VM is a
+fifth, consuming since 2026-10-02 (CannObserv/broker#75, which re-homed the
+role #62 had declared for Observo): `co-processor`, on the tailnet as
+`tag:processor` since 2026-09-29, admitted to `tag:broker` on 6379 by a policy
+rule the same day. It runs Tailscale with `--accept-dns=true` since
+CannObserv/processor#8, so its bus URL names the broker as `broker`, like the
+other three.
+
+| Service | Tailnet node | VM | Region | Tailnet address | Path to broker |
+|---|---|---|---|---|---|
+| `archiver` | `archiver` | `co-registrar` | pdx | `100.109.138.101` | direct |
+| `watcher` | `watcher` | `co-watcher` | pdx | `100.66.24.24` | direct |
+| `replicator` | `replicator` | `co-replicator` | pdx | `100.114.136.20` | direct |
+| `processor` | `co-processor` *(consuming since 2026-10-02, CannObserv/processor#1)* | `co-processor` | not recorded | `100.110.22.56` | direct - a hairpin through the exe.dev NAT both VMs share, both ways since the service runs (CannObserv/processor#15, [NETWORK-PATHS.md](NETWORK-PATHS.md)) |
+| broker | `broker` | `co-broker` | pdx | `100.97.91.19` | - |
+
+**This table is checked against the live broker.** `CLIENT LIST` reports each
+connection's peer address and `user=`, so a participant that moves reconnects
+from an address this table does not name and
+`test_every_connected_participant_is_where_the_docs_say` goes red on the node
+until the row follows. A host table here has rotted silently before: the one in
+[ACL-CUTOVER.md](ACL-CUTOVER.md) kept watcher in `lax` and replicator on
+watcher's VM for days after both had moved.
+
+The measured latency from each participant, the path beside every number, and
+the accepted DERP risk: the two sections below.
 
 ## Latency, with the path beside every number
 
