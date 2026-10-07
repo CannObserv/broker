@@ -24,7 +24,7 @@ other three.
 | `archiver` | `archiver` | `co-registrar` | pdx | `100.109.138.101` | direct |
 | `watcher` | `watcher` | `co-watcher` | pdx | `100.66.24.24` | direct |
 | `replicator` | `replicator` | `co-replicator` | pdx | `100.114.136.20` | direct |
-| `processor` | `co-processor` *(consuming since 2026-10-02, CannObserv/processor#1)* | `co-processor` | not recorded | `100.110.22.56` | direct - a hairpin through the exe.dev NAT both VMs share, both ways since the service runs (CannObserv/processor#15, [NETWORK-PATHS.md](NETWORK-PATHS.md)) |
+| `processor` | `co-processor` *(consuming since 2026-10-02, CannObserv/processor#1)* | `co-processor` | not recorded | `100.110.22.56` | direct - a hairpin through the exe.dev NAT both VMs share, both ways since the service runs (CannObserv/processor#15, *Latency, with the path beside every number* below) |
 | broker | `broker` | `co-broker` | pdx | `100.97.91.19` | - |
 
 **This table is checked against the live broker.** `CLIENT LIST` reports each

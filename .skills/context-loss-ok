@@ -193,3 +193,6 @@ docs/STREAMS.md :: retarget :: This file had no row for anything that is not a s
 # CR 2 - refuted by `rcli acladmin --scan --pattern 'replicator:cmd:persist:*'`
 # (1 key, 2026-10-07) and the table above it: content.persist is the third
 docs/STREAMS.md :: disproven :: two namespaces, `fetch` and `replicate`.
+# CR 3 - the processor row's link pointed at NETWORK-PATHS.md from outside it;
+# moved into that file it linked to itself, so it names the section instead
+docs/STREAMS.md :: retarget :: | `processor` | `co-processor` *(consuming since 2026-10-02, CannObserv/processor#1)*
