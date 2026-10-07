@@ -301,8 +301,8 @@ Feeds the ceiling (``REGISTRY_WARN_LENGTH``) and bounds the scope of the
 ``entries-removed`` floor, whose trigger carries no threshold: a removal under
 this cap cannot be the cap (CannObserv/broker#42). The ceiling alone cannot
 report the cap reached, since ``MAXLEN ~`` holds the stream under cap + 10%.
-Moved down underneath this mirror, the floor fires at the real cap; moved up,
-the ceiling does."""
+Moved down underneath this mirror, the floor fires at the real cap; moved up
+past the 10% margin, the ceiling does. Within the margin, neither."""
 
 LWW_PRODUCER_MAXLEN = 500
 """Mirrors watcher's ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN`` (``src/core/fetch_policy.py``)
@@ -568,7 +568,9 @@ class StreamCheck:
         threshold on a row with no group at all, a ``warn_length`` on a
         never-trimmed row, and a ``full_set_floor`` that either sits on a
         never-trimmed row or disagrees with ``warn_length`` about the mirrored
-        cap.
+        cap. A ``publish_maxlen`` is refused on the same three grounds as a
+        floor: a never-trimmed row, a row whose cap is read off the stream, and
+        a ``warn_length`` stating the cap a second way.
 
         A never-trimmed row with a ``warn_length`` is a threshold mirroring a
         cap that does not exist, which is CannObserv/broker#60: a breach could
@@ -1456,7 +1458,8 @@ def evaluate_stream_continuity(
             how = (
                 "a trim, since max-deleted-entry-id is 0-0"
                 if max_deleted_entry_id == "0-0"
-                else f"an XDEL at some point (max-deleted-entry-id {max_deleted_entry_id})"
+                else "a trim or an XDEL - one XDEL has run in the stream's life "
+                f"(max-deleted-entry-id {max_deleted_entry_id})"
                 if max_deleted_entry_id
                 else "a trim or an XDEL, max-deleted-entry-id unread"
             )
@@ -1466,8 +1469,9 @@ def evaluate_stream_continuity(
                     subject=check.topic,
                     message=f"{removed} entries removed since the last tick, leaving "
                     f"{length} - under the {check.publish_maxlen} publish MAXLEN that "
-                    f"is this stream's only removal, so not that cap: {how}. Nothing "
-                    "on the instance may XTRIM it (CannObserv/broker#41)",
+                    f"is this stream's only removal: {how}. Nothing on the instance "
+                    "may XTRIM it (CannObserv/broker#41), so either someone did, or "
+                    "the producer's cap is set lower than this mirror of it",
                 )
             )
     return findings

@@ -297,8 +297,8 @@ other two caps.
 goes stale-*low* and warns early. Lowered, it goes stale-*high* and can hide the
 backlog the cut was for (CannObserv/broker#40: watcher#292's 29,770 is under
 55k).
-`REGISTRY_PRODUCER_MAXLEN` alone is loud both ways: it also bounds
-`entries-removed`, which fires at a lowered cap.
+`REGISTRY_PRODUCER_MAXLEN` alone is loud both ways past the margin: it also
+bounds `entries-removed`, which fires at a lowered cap.
 
 **A named source is not enough: name its movers.** Both archiver caps move
 with no commit in either repo - `ARCHIVER_REDIS_STREAM_MAXLEN` and
