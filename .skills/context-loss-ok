@@ -188,3 +188,5 @@ AGENTS.md :: retarget :: `docs/STREAMS.md`, *Non-stream keys on `db0`*. There is
 docs/STREAMS.md :: retarget :: health primitive applies, who writes its DLQ - and who drains it. Plus the one
 docs/STREAMS.md :: retarget :: thing on this instance that is not a stream, under *Non-stream keys on `db0`*.
 docs/STREAMS.md :: retarget :: the accepted DERP risk: [NETWORK-PATHS.md](NETWORK-PATHS.md).
+# CR 1: "This file" meant STREAMS.md, and stopped doing so when the section moved
+docs/STREAMS.md :: retarget :: This file had no row for anything that is not a stream, which is how an audit

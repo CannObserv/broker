@@ -12,7 +12,7 @@ budget.
 
 Provenance: CannObserv/broker#9, CannObserv/replicator#80.
 
-This file had no row for anything that is not a stream, which is how an audit
+STREAMS.md had no row for anything that is not a stream, which is how an audit
 came to find these by scanning the keyspace rather than by reading.
 
 | Pattern | Owner | Kind | Lifetime | Commands used | What it is |
