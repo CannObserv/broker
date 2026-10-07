@@ -282,11 +282,27 @@ CHANGES_PRODUCER_MAXLEN = 100_000
 
 Reaches ``info.changes`` only - it was ``FACT_PRODUCER_MAXLEN`` until the name
 got it applied to four ``content.*`` streams it never trims
-(CannObserv/broker#60)."""
+(CannObserv/broker#60).
+
+**Movers, which no commit records:** ``ARCHIVER_REDIS_STREAM_MAXLEN`` in
+``/etc/archiver/.env``, the unit, or archiver's gitignored repo ``.env``, which
+loads last and wins. All unset 2026-09-23 (CannObserv/broker#42); archiver's
+``docs/DEPLOYMENT.md`` obliges a note here when one is set."""
 
 REGISTRY_PRODUCER_MAXLEN = 50_000
 """Mirrors ``DEFAULT_REGISTRY_STREAM_MAXLEN`` in archiver's
-``src/core/changes/registry_snapshot.py``."""
+``src/core/changes/registry_snapshot.py``.
+
+**Movers, which no commit records:** ``ARCHIVER_REGISTRY_STREAM_MAXLEN`` in
+``/etc/archiver/.env``, the unit, or archiver's gitignored repo ``.env``, which
+loads last and wins. All unset 2026-09-23.
+
+Feeds the ceiling (``REGISTRY_WARN_LENGTH``) and bounds the scope of the
+``entries-removed`` floor, whose trigger carries no threshold: a removal under
+this cap cannot be the cap (CannObserv/broker#42). The ceiling alone cannot
+report the cap reached, since ``MAXLEN ~`` holds the stream under cap + 10%.
+Moved down underneath this mirror, the floor fires at the real cap; moved up,
+the ceiling does."""
 
 LWW_PRODUCER_MAXLEN = 500
 """Mirrors watcher's ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN`` (``src/core/fetch_policy.py``)
@@ -541,6 +557,11 @@ class StreamCheck:
     # republishes, so `warn_length` above is the threshold only while the set is
     # small enough for the mirrored default to win (CannObserv/broker#44).
     full_set_floor: FullSetFloor | None = None
+    # The producer's XADD MAXLEN is this stream's only removal: no identity can
+    # XTRIM it (CannObserv/broker#41) and none holds +xdel on it. That MAXLEN
+    # never leaves fewer than this many entries, so an entry removed while the
+    # stream is shorter is a fault (CannObserv/broker#42).
+    publish_maxlen: int | None = None
 
     def __post_init__(self) -> None:
         """Refuse a ``pending_group`` on a config/state stream, an undelivered
@@ -616,6 +637,21 @@ class StreamCheck:
                     f"{self.warn_length} - the row and the floor disagree about the "
                     f"mirrored cap (expected {expected})"
                 )
+        if self.publish_maxlen is not None:
+            if self.never_trimmed:
+                raise ValueError(
+                    f"{self.topic} is never trimmed by design and carries a publish_maxlen"
+                )
+            if self.full_set_floor is not None:
+                raise ValueError(
+                    f"{self.topic} carries a full-set floor, so the cap in force is read "
+                    "off the stream and a publish_maxlen would misstate it"
+                )
+            if self.warn_length != with_margin(self.publish_maxlen):
+                raise ValueError(
+                    f"{self.topic} carries publish_maxlen {self.publish_maxlen} but a "
+                    f"warn_length of {self.warn_length} - the row states one cap twice"
+                )
         if self.pending_group is None:
             if self.warn_undelivered_age_seconds is not None:
                 raise ValueError(
@@ -651,6 +687,7 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         INFO_REGISTRY,
         warn_length=REGISTRY_WARN_LENGTH,
         warn_last_entry_age_seconds=REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS,
+        publish_maxlen=REGISTRY_PRODUCER_MAXLEN,
     ),
     # The four content.* rows below and content.blobs further down carry no
     # warn_length: nothing trims them. No producer passes a maxlen
@@ -1352,6 +1389,7 @@ def evaluate_stream_continuity(
     entries_added_prev: int | None,
     length: int,
     length_prev: int | None,
+    max_deleted_entry_id: str | None = None,
 ) -> list[Finding]:
     """Warn when a stream has lost entries rather than grown past a cap.
 
@@ -1361,11 +1399,10 @@ def evaluate_stream_continuity(
     the broker came up with 4% of its entries and this probe reported
     `finding_count: 0` twice, correctly by its own rules.
 
-    Length alone cannot be the signal. Three streams shrink as normal operation
-    - `info.changes` rides archiver's periodic `XTRIM`, `info.registry` is capped
-    on every publish and can drop most of itself in one tick (archiver#141), and
-    the LWW streams carry a producer-side `maxlen`. A percentage threshold would
-    either miss the wipe or cry wolf on `info.registry` every snapshot.
+    Length alone cannot be the signal. `info.changes` rides archiver's periodic
+    `XTRIM` and the LWW streams sit at a producer-side `maxlen`, so both shrink
+    as normal operation. A percentage threshold would either miss the wipe or
+    cry wolf on them.
 
     ``entries-added`` is the signal that separates them, because it is monotonic
     for the life of a stream *object*: a trim removes entries while it keeps
@@ -1377,6 +1414,14 @@ def evaluate_stream_continuity(
 
     ``never_trimmed`` streams get the cheaper rule as well: nothing legitimate
     shortens them, so any decrease is a fault.
+
+    A ``publish_maxlen`` stream gets the precise one: ``entries-added - length``
+    counts every entry ever removed, so a rise since the last tick is a removal
+    even when growth hid it from the length, and one that leaves the stream
+    under the cap cannot be the cap. No threshold on the rise: the 2,605 that
+    `info.registry` lost on 2026-09-08 (CannObserv/archiver#247) is a constant
+    baseline, not a reading. ``max-deleted-entry-id`` tells the two removals
+    apart: `XTRIM` leaves it at ``0-0`` and `XDEL` moves it.
     """
     if entries_added_prev is None or length_prev is None:
         # First tick after a deploy, a state-file loss, or a new stream. The
@@ -1405,6 +1450,26 @@ def evaluate_stream_continuity(
                 "never trimmed by design - nothing legitimate shortens it",
             )
         )
+    elif check.publish_maxlen is not None and length < check.publish_maxlen:
+        removed = (entries_added - length) - (entries_added_prev - length_prev)
+        if removed > 0:
+            how = (
+                "a trim, since max-deleted-entry-id is 0-0"
+                if max_deleted_entry_id == "0-0"
+                else f"an XDEL at some point (max-deleted-entry-id {max_deleted_entry_id})"
+                if max_deleted_entry_id
+                else "a trim or an XDEL, max-deleted-entry-id unread"
+            )
+            findings.append(
+                Finding(
+                    check="entries-removed",
+                    subject=check.topic,
+                    message=f"{removed} entries removed since the last tick, leaving "
+                    f"{length} - under the {check.publish_maxlen} publish MAXLEN that "
+                    f"is this stream's only removal, so not that cap: {how}. Nothing "
+                    "on the instance may XTRIM it (CannObserv/broker#41)",
+                )
+            )
     return findings
 
 
@@ -1832,6 +1897,7 @@ async def _collect_stream(
             entries_added_prev=previous_state.get(entries_key),
             length=length,
             length_prev=previous_state.get(length_key),
+            max_deleted_entry_id=_decode(info.get("max-deleted-entry-id", b"")) or None,
         )
     )
     pending[entries_key] = entries_added
