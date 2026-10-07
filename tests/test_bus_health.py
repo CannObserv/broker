@@ -2674,17 +2674,141 @@ async def test_half_configured_is_reported_not_ignored(fake_redis, tmp_path, mon
 def test_a_trim_is_not_a_loss() -> None:
     """The tolerance question, and why raw length cannot be the signal.
 
-    Three streams shrink as normal operation: `info.changes` rides archiver's
-    periodic XTRIM, `info.registry` is capped on every publish (archiver#141)
-    and can drop a large fraction in one tick, and the LWW streams carry a
-    producer-side maxlen. A length-based rule either misses the wipe or cries
-    wolf on all three.
+    `info.changes` rides archiver's periodic XTRIM and the LWW streams carry a
+    producer-side maxlen, so both shrink as normal operation. A length-based
+    rule either misses the wipe or cries wolf on them.
     """
-    check = _check_for(INFO_REGISTRY)
     findings = bus_health.evaluate_stream_continuity(
-        check, entries_added=2721, entries_added_prev=2600, length=116, length_prev=2605
+        _check_for(INFO_CHANGES),
+        entries_added=120_000,
+        entries_added_prev=119_000,
+        length=100_000,
+        length_prev=109_000,
     )
     assert findings == []
+
+
+# --- info.registry: removed entries under its publish cap (CannObserv/broker#42) ---
+#
+# Nothing on the instance may XTRIM it (broker#41) and nobody holds +xdel on
+# it, so its only removal is archiver's XADD MAXLEN - which leaves a stream at
+# or above the cap. `entries-added - length` is every entry ever removed; it
+# stood at 2,605 on 2026-10-07 from one hand-run trim on 2026-09-08
+# (CannObserv/archiver#247), and the check must be quiet on that baseline.
+
+
+def _registry_continuity(**kw) -> list[bus_health.Finding]:
+    return bus_health.evaluate_stream_continuity(_check_for(INFO_REGISTRY), **kw)
+
+
+def test_the_registry_row_carries_its_publish_cap() -> None:
+    """One cap, one spelling: the ceiling's `warn_length` and the floor's scope
+    are both `REGISTRY_PRODUCER_MAXLEN`. The only row: `info.changes` is
+    XTRIMmed by archiver, and the LWW streams sit at their cap by design."""
+    assert {c.topic for c in STREAM_CHECKS if c.publish_maxlen is not None} == {INFO_REGISTRY}
+    assert _check_for(INFO_REGISTRY).publish_maxlen == REGISTRY_PRODUCER_MAXLEN
+
+
+def test_the_live_registry_gap_is_quiet() -> None:
+    """The 2026-10-07 reading: 2,605 removed long ago, none since."""
+    assert (
+        _registry_continuity(
+            entries_added=5441,
+            entries_added_prev=5437,
+            length=2836,
+            length_prev=2832,
+            max_deleted_entry_id="0-0",
+        )
+        == []
+    )
+
+
+def test_a_registry_trim_under_its_cap_is_a_finding() -> None:
+    """The 2026-09-08 shape: a hand-run trim to one snapshot."""
+    findings = _registry_continuity(
+        entries_added=5445,
+        entries_added_prev=5441,
+        length=4,
+        length_prev=2836,
+        max_deleted_entry_id="0-0",
+    )
+    assert [f.check for f in findings] == ["entries-removed"]
+    assert "2836 entries removed" in findings[0].message
+    assert "a trim" in findings[0].message
+
+
+def test_a_registry_trim_hidden_by_growth_is_a_finding() -> None:
+    """Length grew, so a length rule sees nothing; the gap still rose."""
+    findings = _registry_continuity(
+        entries_added=5541,
+        entries_added_prev=5441,
+        length=2836,
+        length_prev=2836,
+        max_deleted_entry_id="0-0",
+    )
+    assert [f.check for f in findings] == ["entries-removed"]
+    assert "100 entries removed" in findings[0].message
+
+
+def test_an_xdel_is_named_as_one() -> None:
+    """XTRIM leaves max-deleted-entry-id at 0-0 and XDEL moves it (Redis
+    7.0.15, verified), so a non-zero id is an XDEL at some point."""
+    findings = _registry_continuity(
+        entries_added=5441,
+        entries_added_prev=5441,
+        length=2835,
+        length_prev=2836,
+        max_deleted_entry_id="1788906916516-0",
+    )
+    assert [f.check for f in findings] == ["entries-removed"]
+    assert "XDEL" in findings[0].message
+
+
+def test_the_registry_at_its_cap_is_trimmed_legitimately() -> None:
+    """`MAXLEN ~ N` never leaves fewer than N entries, so a removal that leaves
+    the stream at or over the cap is the cap. The ceiling (cap + 10%) cannot
+    say so: it sits above the length the cap holds the stream at."""
+    assert (
+        _registry_continuity(
+            entries_added=60_100,
+            entries_added_prev=60_000,
+            length=REGISTRY_PRODUCER_MAXLEN,
+            length_prev=REGISTRY_PRODUCER_MAXLEN + 90,
+            max_deleted_entry_id="0-0",
+        )
+        == []
+    )
+
+
+def test_a_publish_cap_must_agree_with_its_row() -> None:
+    with pytest.raises(ValueError, match="publish_maxlen"):
+        StreamCheck("t", warn_length=10, publish_maxlen=100)
+    with pytest.raises(ValueError, match="never trimmed"):
+        StreamCheck("t", never_trimmed=True, publish_maxlen=100)
+    with pytest.raises(ValueError, match="full-set floor"):
+        StreamCheck(
+            "t",
+            warn_length=with_margin(LWW_PRODUCER_MAXLEN),
+            full_set_floor=bus_health.LWW_FULL_SET_FLOOR,
+            publish_maxlen=LWW_PRODUCER_MAXLEN,
+        )
+
+
+async def test_collect_reports_a_registry_trim_across_ticks(fake_redis) -> None:
+    """End to end: the gap and max-deleted-entry-id come out of the one
+    `XINFO STREAM` reply the collector already reads."""
+    for _ in range(8):
+        await fake_redis.xadd(INFO_REGISTRY, {"k": "v"})
+    _, state = await collect_broker_findings(fake_redis, previous_state={})
+
+    await fake_redis.xadd(INFO_REGISTRY, {"k": "v"})
+    quiet, state = await collect_broker_findings(fake_redis, previous_state=state)
+    assert not any(f.check == "entries-removed" for f in quiet)
+
+    await fake_redis.xtrim(INFO_REGISTRY, maxlen=4)
+    await fake_redis.xadd(INFO_REGISTRY, {"k": "v"})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
+    assert [f.check for f in findings if f.subject == INFO_REGISTRY] == ["entries-removed"]
 
 
 def test_entries_added_going_backwards_is_a_reset() -> None:
