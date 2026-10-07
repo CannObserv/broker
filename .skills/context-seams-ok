@@ -169,3 +169,4 @@ deploy/redis-acl.conf :: # only the streams ../docs/STREAMS.md says it consumes 
 deploy/redis-acl.conf :: # docs/STREAMS.md fires (`XLEN content.blobs` past 25k, `XLEN
 deploy/redis-acl.conf :: # ../docs/STREAMS.md says **Never XTRIMmed**: a cap on a command stream deletes
 tests/deploy/test_redis_acl.py :: """``stream -> the service consuming it in a group``, off ../docs/STREAMS.md.
+docs/NON-STREAM-KEYS.md :: STREAMS.md had no row for anything that is not a stream, which is how an audit
