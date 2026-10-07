@@ -30,7 +30,7 @@ Processor's source.
 **One namespace per command stream**, and the suffix is the same one co-core's
 `group_name` puts after the service - so `content.fetch` gives both the group
 `replicator.fetch` and the keys `replicator:cmd:fetch:<id>`. Today that means
-two namespaces, `fetch` and `replicate`.
+three namespaces, `fetch`, `replicate` and `persist`.
 
 *Losing them costs re-work, never correctness.* Set-after-success means a key
 can only short-circuit work already known to have finished, so an empty

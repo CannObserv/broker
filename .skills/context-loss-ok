@@ -190,3 +190,6 @@ docs/STREAMS.md :: retarget :: thing on this instance that is not a stream, unde
 docs/STREAMS.md :: retarget :: the accepted DERP risk: [NETWORK-PATHS.md](NETWORK-PATHS.md).
 # CR 1: "This file" meant STREAMS.md, and stopped doing so when the section moved
 docs/STREAMS.md :: retarget :: This file had no row for anything that is not a stream, which is how an audit
+# CR 2 - refuted by `rcli acladmin --scan --pattern 'replicator:cmd:persist:*'`
+# (1 key, 2026-10-07) and the table above it: content.persist is the third
+docs/STREAMS.md :: disproven :: two namespaces, `fetch` and `replicate`.
