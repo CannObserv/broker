@@ -45,14 +45,17 @@ from redis.asyncio import Redis as AsyncRedis
 
 from src.broker.bus_health import (
     GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    PROVISIONER_GROUP,
+    PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS,
     STREAM_CHECKS,
     collect_broker_findings,
 )
 from tests.deploy.conftest import PASSWORD, _free_port
 
-#: The one stream these run against, and its group as the probe derives it.
+#: The one stream these run against, and archiver's group on it as the probe
+#: derives it - the first of its two since CannObserv/broker#78.
 CHECK = next(c for c in STREAM_CHECKS if c.topic == CONTENT_REVISIONS)
-GROUP = CHECK.pending_group
+GROUP = CHECK.groups[0].name
 
 
 @pytest.fixture
@@ -226,6 +229,51 @@ async def test_a_fresh_entry_is_not_a_finding(probe, seeder) -> None:
     seeder.xadd(CONTENT_REVISIONS, {"k": "v"})
 
     assert await undelivered(probe) == []
+
+
+# --- the entry-age rule: provisioner's stuck-entry alarm (CannObserv/broker#78) ---
+
+
+async def pending_age(probe) -> list:
+    """This tick's ``pending-age`` findings, through the timer's own path."""
+    findings, _ = await collect_broker_findings(probe, previous_state={})
+    return [f for f in findings if f.check == "pending-age"]
+
+
+async def test_the_oldest_pending_entry_is_read_without_a_new_grant(probe, seeder) -> None:
+    """``XINFO STREAM ... FULL`` as the real ``brokeradmin``.
+
+    The two things fakeredis cannot say: that this server answers ``FULL``
+    under the probe's ``+xinfo`` with no ``+xpending`` beside it, and that each
+    group's pending list comes back oldest first - so its head is the oldest
+    entry and not merely the first one delivered. The newer entry is
+    delivered first here, to make the second half falsifiable.
+    """
+    held = PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS + 60
+    old = f"{_ms_ago(held)}-0"
+    new = f"{_ms_ago(1)}-0"
+    seeder.xgroup_create(CONTENT_REVISIONS, PROVISIONER_GROUP, id="0", mkstream=True)
+    seeder.xadd(CONTENT_REVISIONS, {"k": "v"}, id=old)
+    seeder.xgroup_setid(CONTENT_REVISIONS, PROVISIONER_GROUP, id=old)
+    seeder.xadd(CONTENT_REVISIONS, {"k": "v"}, id=new)
+    seeder.xreadgroup(PROVISIONER_GROUP, "co-provisioner", {CONTENT_REVISIONS: ">"})
+    seeder.xgroup_setid(CONTENT_REVISIONS, PROVISIONER_GROUP, id="0")
+    seeder.xreadgroup(PROVISIONER_GROUP, "co-provisioner", {CONTENT_REVISIONS: ">"}, count=1)
+
+    (finding,) = await pending_age(probe)
+    assert finding.subject == f"{CONTENT_REVISIONS}/{PROVISIONER_GROUP}"
+    assert f"oldest PENDING entry {old}" in finding.message, finding.message
+    assert "held by co-provisioner; 2 pending" in finding.message, finding.message
+
+
+async def test_a_held_entry_inside_the_hold_is_not_a_finding(probe, seeder) -> None:
+    """Pending on purpose - its text not yet written - is normal operation, and
+    the rule exists so that it stays quiet."""
+    seeder.xgroup_create(CONTENT_REVISIONS, PROVISIONER_GROUP, id="0", mkstream=True)
+    seeder.xadd(CONTENT_REVISIONS, {"k": "v"}, id=f"{_ms_ago(60)}-0")
+    seeder.xreadgroup(PROVISIONER_GROUP, "co-provisioner", {CONTENT_REVISIONS: ">"})
+
+    assert await pending_age(probe) == []
 
 
 # --- why not `lag`: the reload the incident began with ---

@@ -108,13 +108,15 @@ Per tick it probes:
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
   is empty - the corpus-size guard);
-- the `pending` count of **all eight** consumer groups on the node -
+- the `pending` count of **all nine** consumer groups on the node -
   `archiver.revisions`, `archiver.artifacts`, `watcher.blobs`,
   `replicator.fetch`, `replicator.replicate`, the processing pair's
-  `processor.process` and `watcher.derived` (CannObserv/broker#62, #75), and
-  `replicator.persist` (CannObserv/broker#64), the last three declared ahead
-  of their consumers - WARN on non-zero across two consecutive ticks, with
-  the count carried in `StateDirectory=broker-bus-health`. Widened from
+  `processor.process` and `watcher.derived` (CannObserv/broker#62, #75),
+  `replicator.persist` (CannObserv/broker#64), and `provisioner.revisions`
+  (CannObserv/broker#78), `content.revisions`' second group - WARN on non-zero
+  across two consecutive ticks, with the count carried in
+  `StateDirectory=broker-bus-health`. `provisioner.revisions` alone takes an
+  entry age instead (*Pending age* below). Widened from
   Archiver's two by CannObserv/broker#1 Phase 5: the exclusion was inherited
   from a probe running on Archiver's own host, where a downstream service's
   group lag was plausibly its own alerting problem. On a neutral node it is not
@@ -151,9 +153,12 @@ Per tick it probes:
   cannot trip it: `info.changes` until its consumer exists, and the config/state
   streams, where `StreamCheck` refuses a group at import time. A missing group
   records no pending count, so when it comes back its two-tick rule starts
-  again from zero;
+  again from zero. A group declared **dormant until seen**
+  (`provisioner.revisions`, until its consumer's first `ensure-group`) is not
+  this finding while it has never existed; once seen, its pending count rides
+  the state file and its absence is this finding every tick;
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
-  minutes on each of the eight groups. The check a pending count cannot make,
+  minutes on each of the nine groups. The check a pending count cannot make,
   and the one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
@@ -210,6 +215,28 @@ abstention, installed-copy parity, and what the unit inherits (broker#37).
 Why a pending count cannot see a consumer that stopped calling
 `XREADGROUP`, and what the probe compares instead, are
 [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md).
+
+## Pending age - a consumer that holds entries on purpose
+
+`provisioner.revisions` (CannObserv/broker#78) has no dead-letter queue, by
+its owner's choice: an entry it cannot process stays pending, unacknowledged,
+and this probe is its alarm. It also holds entries on purpose - a revision
+whose derived text Processor has not written yet, until CannObserv/watcher#326
+- so two ticks of pending are normal and the two-tick rule would fire on them.
+
+Its rule is the **age of its oldest pending entry, by the entry's id**
+(`pending-age`): WARN once that entry was published longer ago than
+`PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS`, the text's latest legitimate
+arrival plus one full reclaim cycle (*Mirrored constants* below). Not idle
+time: the consumer re-claims a held entry every 10 minutes, each claim resets
+idle, so a poison entry never looks older than one window. The finding quotes
+the delivery count and the consumer holding it; the reason is in that
+consumer's journal.
+
+Read from `XINFO STREAM <stream> FULL`, which lists each group's pending
+entries oldest first, ten at most, inside `brokeradmin`'s `+xinfo` - no new
+grant.
+Only on a tick where the group's `XINFO GROUPS` row shows something pending.
 
 ## Behaviour under the `noeviction` cap
 
@@ -287,6 +314,8 @@ of:
 | `LWW_PRODUCER_MAXLEN` (500) | Watcher's two `DEFAULT_*_STREAM_MAXLEN`, `src/core/{fetch_policy,watch_status}.py` (CannObserv/watcher#292) |
 | `LWW_RETAINED_FULL_SETS` (10) | `RETAINED_FULL_SETS`, `CannObserv/watcher:src/core/bus.py` (CannObserv/watcher#292) - the multiplier on the floor the line above is only the *default* of |
 | `LWW_REPUBLISH_PERIOD_SECONDS` (300) | Watcher's `*/5 * * * *` republish (CannObserv/watcher#264, #265; `info.watch-status` reads `WATCHER_WATCH_STATUS_REPUBLISH_CRON` and defaults to it) - already load-bearing as 3x the LWW age threshold before it was spelled out |
+| `PROVISIONER_TEXT_WAIT_SECONDS` (1800) | **Provisional, until the owner supplies its own number on CannObserv/broker#78.** Watcher's `DEFAULT_PROCESS_COMMAND_TIMEOUT_SECONDS`, `src/core/process_commands.py`: past it Watcher re-issues an unanswered process command. Mover: `WATCHER_PROCESS_COMMAND_TIMEOUT_SECONDS`, `/etc/watcher/.env` |
+| `PROVISIONER_RECLAIM_MIN_IDLE_SECONDS` (600), `PROVISIONER_RECLAIM_INTERVAL_SECONDS` (60) | provisioner's `reclaim_min_idle_ms` and `reclaim_interval_s` settings. Movers: `PROVISIONER_RECLAIM_MIN_IDLE_MS`, `PROVISIONER_RECLAIM_INTERVAL_S`, `/etc/provisioner/consumer.env`. The three sum to `provisioner.revisions`' entry-age threshold, 2460 s |
 | `DLQ_DRAINERS` (who triages each `*.dlq`) | the `DLQ (writer / drainer)` column of [STREAMS.md](STREAMS.md), the rule in [DLQ-DRAINING.md](DLQ-DRAINING.md) - an assignment, so it has no computable source; the keys are still derived through co-core's `dlq_name()` |
 
 `LWW_PRODUCER_MAXLEN` was already a mirror before the split - there was never an

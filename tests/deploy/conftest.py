@@ -73,10 +73,11 @@ DIGEST_PLACEHOLDERS = ("__ARCHIVER_PW__",)
 # the participants table; both facts are asserted from this one tuple.
 # `processor` was declared ahead of its consumer (CannObserv/broker#75, which
 # re-homed #62's `observo` user), so CannObserv/processor#1 shipped against a
-# grant rather than a NOPERM; it has consumed since 2026-10-02. The live tests
-# that read `CLIENT LIST` assert only on the participants that are connected,
-# so a declared one that is not yet is no finding.
-SERVICE_USERS = ("archiver", "watcher", "replicator", "processor")
+# grant rather than a NOPERM; it has consumed since 2026-10-02. `provisioner`
+# is declared ahead of its go-live the same way (CannObserv/broker#78). The live
+# tests that read `CLIENT LIST` assert only on the participants that are
+# connected, so a declared one that is not yet is no finding.
+SERVICE_USERS = ("archiver", "watcher", "replicator", "processor", "provisioner")
 
 
 def parse_users(text: str) -> dict[str, list[str]]:

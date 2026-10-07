@@ -83,6 +83,8 @@ CannObserv/broker#62, `processor.process` (re-homed from Observo by #75) and
 through co-core-aio's driver, which Processor confirmed for its loop when it
 went live (broker#75, 2026-10-03) - and CannObserv/processor#1 and watcher#325
 are where a different loop would be stated.
+`provisioner.revisions` (CannObserv/broker#78) takes it on the same
+assumption, read off its source: the driver's blocking read, 5 s, one entry.
 `replicator.persist` (CannObserv/broker#64) took it on `content.replicate`'s
 measurement and keeps it on its own (CannObserv/broker#76). Replicator timed
 the first three persists once CannObserv/archiver#283 switched issuance on:

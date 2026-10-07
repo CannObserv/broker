@@ -39,7 +39,9 @@ The checks, per tick:
   which are invisible to any pending-based check.
 - the ``pending`` count of every consumer group on this node, warning only on
   two consecutive non-zero ticks - a healthy steady state is pending 0, and one
-  tick of in-flight delivery is normal.
+  tick of in-flight delivery is normal. A group whose consumer holds entries
+  on purpose, with no dead-letter queue, warns instead on the age of its
+  oldest pending entry by id (``pending-age``, CannObserv/broker#78).
 - the age of the oldest entry each group has **not been delivered**, by
   comparing its ``last-delivered-id`` with the stream's ``last-generated-id``.
   The pending count starts at delivery, so a consumer that has stopped calling
@@ -360,6 +362,60 @@ DERIVED_GROUP = group_name(CONTENT_DERIVED, "watcher")
 # (CannObserv/replicator#114), and carrying commands since archiver switched
 # issuance on, 2026-10-01 (CannObserv/archiver#283).
 PERSIST_GROUP = group_name(CONTENT_PERSIST, "replicator")
+# The cohort's infrastructure service (CannObserv/broker#78): content.revisions'
+# second group, beside archiver's - one per consuming service, never a second
+# process in `archiver.revisions`.
+PROVISIONER_GROUP = group_name(CONTENT_REVISIONS, "provisioner")
+
+
+# --- the one group whose pending rule is an entry age (CannObserv/broker#78) ---
+#
+# provisioner keeps no dead-letter queue by its owner's choice: an entry it
+# cannot process stays pending, unacknowledged, and the alarm for it is this
+# probe's. The two-tick rule would fire in normal operation - an entry whose
+# text Processor has not written yet is held on purpose and reclaimed later -
+# so its group alarms on the AGE OF ITS OLDEST PENDING ENTRY instead, past the
+# longest an entry can legitimately be held. Three terms, each mirrored with its
+# movers, summed below.
+
+PROVISIONER_TEXT_WAIT_SECONDS = 1800.0
+"""How long the derived text an entry names can legitimately lag the entry.
+
+**PROVISIONAL: the consumer's owner supplies this number, and has not yet.**
+Until it does it mirrors ``DEFAULT_PROCESS_COMMAND_TIMEOUT_SECONDS`` in
+watcher's ``src/core/process_commands.py``: past it Watcher re-issues a process
+command Processor has not answered, so a text later than that is a stall by
+Watcher's own reckoning. The lag exists until CannObserv/watcher#326, when the
+revision stops preceding Processor's write.
+
+**Movers, which no commit records:** ``WATCHER_PROCESS_COMMAND_TIMEOUT_SECONDS``
+in ``/etc/watcher/.env``. Replaced by the owner's number when it is posted on
+CannObserv/broker#78."""
+
+PROVISIONER_RECLAIM_MIN_IDLE_SECONDS = 600.0
+"""Mirrors ``reclaim_min_idle_ms`` (600 000) in provisioner's settings: an entry
+is reclaimed only once idle this long, so a text that arrives just after a claim
+waits this long for the next.
+
+**Movers, which no commit records:** ``PROVISIONER_RECLAIM_MIN_IDLE_MS`` in
+``/etc/provisioner/consumer.env``, the consumer unit's env file."""
+
+PROVISIONER_RECLAIM_INTERVAL_SECONDS = 60.0
+"""Mirrors ``reclaim_interval_s`` (60) in provisioner's settings: how often the
+reclaim walks the pending list.
+
+**Movers, which no commit records:** ``PROVISIONER_RECLAIM_INTERVAL_S`` in
+``/etc/provisioner/consumer.env``."""
+
+PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS = (
+    PROVISIONER_TEXT_WAIT_SECONDS
+    + PROVISIONER_RECLAIM_MIN_IDLE_SECONDS
+    + PROVISIONER_RECLAIM_INTERVAL_SECONDS
+)
+"""The text's latest legitimate arrival, plus one full reclaim cycle to pick it
+up. An entry older than this has failed at least one reclaim after its text
+existed. A tick that lands mid-catch-up after an outage can see an old entry in
+flight; ``group-undelivered`` will already have fired for that outage."""
 
 
 # --- who owes each DLQ its triage (CannObserv/broker#1 Phase 5) ---
@@ -533,18 +589,53 @@ class FlooredCap:
 
 
 @dataclass(frozen=True)
+class GroupCheck:
+    """One consumer group on a stream, and the rules its consumer is held to.
+
+    A stream carries several since CannObserv/broker#78: ``content.revisions``
+    has one group per consuming service, and each keeps its own pending rule,
+    its own undelivered age and its own ``group-missing``. A second row for the
+    same stream was the other shape, and it would have read the stream twice
+    and written its continuity baselines twice under one key.
+    """
+
+    name: str
+    # How stale the oldest entry this group has not been delivered may be. The
+    # contract is the consumer's read loop, not this stream's retention - which
+    # is why `content.blobs` carries one while stating no opinion on its length
+    # or its age (CannObserv/broker#20).
+    warn_undelivered_age_seconds: float | None = None
+    # Replaces the two-tick rule with an ENTRY age: how old, by its id, the
+    # group's oldest pending entry may be. For a consumer that holds entries
+    # pending on purpose, with no dead-letter queue, where two ticks of pending
+    # is normal operation (CannObserv/broker#78). Idle time cannot be the
+    # measure: every reclaim resets it, so it never grows on a stuck entry.
+    warn_pending_entry_age_seconds: float | None = None
+    # Absent before it has ever been seen is dormancy, not `group-missing`: a
+    # group declared ahead of the consumer that creates it. Seen once, its
+    # pending count rides the state file, and absence after that is the finding,
+    # every tick.
+    dormant_until_seen: bool = False
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("undelivered", self.warn_undelivered_age_seconds),
+            ("pending-entry age", self.warn_pending_entry_age_seconds),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"{self.name}'s {label} threshold must be positive, got {value}")
+
+
+@dataclass(frozen=True)
 class StreamCheck:
     """Per-stream expectations, mirroring the ``docs/STREAMS.md`` inventory."""
 
     topic: str
     warn_length: int | None = None
     warn_last_entry_age_seconds: float | None = None
-    pending_group: str | None = None
-    # How stale the oldest entry this group has not been delivered may be. The
-    # contract is the consumer's read loop, not this stream's retention - which
-    # is why `content.blobs` carries one while stating no opinion on its length
-    # or its age (CannObserv/broker#20).
-    warn_undelivered_age_seconds: float | None = None
+    # Every group probed on this stream, each with its own rules. Read with one
+    # ``XINFO GROUPS`` per stream however many there are (CannObserv/broker#29).
+    groups: tuple[GroupCheck, ...] = ()
     # In no trim path - absent from archiver's `trim_topics` allowlist
     # (CannObserv/archiver#239) and from every `+xtrim` selector in
     # deploy/redis-acl.conf (CannObserv/broker#14): capping a command stream
@@ -564,9 +655,8 @@ class StreamCheck:
     publish_maxlen: int | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a ``pending_group`` on a config/state stream, an undelivered
-        threshold on a row with no group at all, a ``warn_length`` on a
-        never-trimmed row, and a ``full_set_floor`` that either sits on a
+        """Refuse a group on a config/state stream, one group named twice, a
+        ``warn_length`` on a never-trimmed row, and a ``full_set_floor`` that either sits on a
         never-trimmed row or disagrees with ``warn_length`` about the mirrored
         cap. A ``publish_maxlen`` is refused on the same three grounds as a
         floor: a never-trimmed row, a row whose cap is read off the stream, and
@@ -586,13 +676,11 @@ class StreamCheck:
         CannObserv/broker#44 in miniature, at a scale where nothing downstream
         would report the disagreement.
 
-        The second is the cheaper guard and it is here for the same reason as
-        the first. ``evaluate_undelivered`` builds its subject as
-        ``<topic>/<group>``, so a threshold without a group would put the string
-        ``t/None`` in front of whoever reads the alert. The collector cannot
-        reach that state - it evaluates only where ``XPENDING`` found the group
-        - but the evaluator is public, and an invariant asserted in one
-        direction only is one half-held.
+        An undelivered threshold with no group cannot be written at all since
+        CannObserv/broker#78, which moved every threshold onto a ``GroupCheck``.
+        A group named twice is refused because its pending count keys the state
+        file as ``<topic>/<group>``, and two rules writing one key is one rule
+        lost.
 
         A group on a config/state stream accumulates a PEL nothing drains:
         every worker needs every message, so no reader acks on behalf of the
@@ -654,13 +742,10 @@ class StreamCheck:
                     f"{self.topic} carries publish_maxlen {self.publish_maxlen} but a "
                     f"warn_length of {self.warn_length} - the row states one cap twice"
                 )
-        if self.pending_group is None:
-            if self.warn_undelivered_age_seconds is not None:
-                raise ValueError(
-                    f"{self.topic} carries an undelivered threshold "
-                    f"({self.warn_undelivered_age_seconds}) with no pending_group - there is "
-                    "no group whose position it could be measured against"
-                )
+        names = [group.name for group in self.groups]
+        if len(set(names)) != len(names):
+            raise ValueError(f"{self.topic} names a group twice: {names}")
+        if not names:
             return
         try:
             kind = stream_kind(self.topic)
@@ -669,7 +754,7 @@ class StreamCheck:
         if kind == "config_state":
             raise ValueError(
                 f"{self.topic} is a config_state stream and must not carry a "
-                f"consumer group (got {self.pending_group!r})"
+                f"consumer group (got {names[0]!r})"
             )
 
 
@@ -701,24 +786,50 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # threshold back with it, not before.
     StreamCheck(
         CONTENT_FETCH,
-        pending_group=FETCH_GROUP,
-        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        groups=(
+            GroupCheck(
+                FETCH_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
     ),
+    # content.revisions: one group per consuming service (CannObserv/broker#78).
+    # archiver's keeps the two-tick rule unchanged. provisioner's holds entries
+    # pending on purpose and has no dead-letter queue, so its pending rule is
+    # the entry age above; its undelivered age is the shared one on the shared
+    # assumption, a blocking XREADGROUP through co-core-aio's driver (5 s
+    # block, one entry per read). Dormant until first seen: the consumer
+    # creates it at `$` on its first run, and a group probed before that would
+    # be `group-missing` every tick until go-live.
     StreamCheck(
         CONTENT_REVISIONS,
-        pending_group=REVISIONS_GROUP,
-        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        groups=(
+            GroupCheck(
+                REVISIONS_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+            GroupCheck(
+                PROVISIONER_GROUP,
+                warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+                warn_pending_entry_age_seconds=PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS,
+                dormant_until_seen=True,
+            ),
+        ),
     ),
     StreamCheck(
         CONTENT_ARTIFACTS,
-        pending_group=ARTIFACTS_GROUP,
-        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        groups=(
+            GroupCheck(
+                ARTIFACTS_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
     ),
     StreamCheck(
         CONTENT_REPLICATE,
         never_trimmed=True,
-        pending_group=REPLICATE_GROUP,
-        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        groups=(
+            GroupCheck(
+                REPLICATE_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
     ),
     StreamCheck(
         CONTENT_FETCH_POLICY,
@@ -749,8 +860,11 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # other group row's is.
     StreamCheck(
         CONTENT_BLOBS,
-        pending_group=BLOBS_GROUP,
-        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        groups=(
+            GroupCheck(
+                BLOBS_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
     ),
     # The processing pair (CannObserv/broker#62), each row in the posture of the
     # stream it is shaped like.
@@ -775,13 +889,19 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     StreamCheck(
         CONTENT_PROCESS,
         never_trimmed=True,
-        pending_group=PROCESS_GROUP,
-        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        groups=(
+            GroupCheck(
+                PROCESS_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
     ),
     StreamCheck(
         CONTENT_DERIVED,
-        pending_group=DERIVED_GROUP,
-        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        groups=(
+            GroupCheck(
+                DERIVED_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
     ),
     # content.persist (CannObserv/broker#64): archiver issues one per observed
     # revision, replicator copies the bytes into its content-addressed permanent
@@ -806,8 +926,11 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     StreamCheck(
         CONTENT_PERSIST,
         never_trimmed=True,
-        pending_group=PERSIST_GROUP,
-        warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        groups=(
+            GroupCheck(
+                PERSIST_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
     ),
 )
 
@@ -1511,6 +1634,7 @@ def group_is_behind(*, last_generated_id: str | None, last_delivered_id: str | N
 
 def evaluate_undelivered(
     check: StreamCheck,
+    group: GroupCheck,
     *,
     last_generated_id: str | None,
     last_delivered_id: str | None,
@@ -1547,13 +1671,13 @@ def evaluate_undelivered(
     cannot tell those apart, and the message says so rather than naming the
     first (CannObserv/broker#30).
     """
-    if check.warn_undelivered_age_seconds is None:
+    if group.warn_undelivered_age_seconds is None:
         return []
     if not group_is_behind(
         last_generated_id=last_generated_id, last_delivered_id=last_delivered_id
     ):
         return []
-    subject = f"{check.topic}/{check.pending_group}"
+    subject = f"{check.topic}/{group.name}"
     if oldest_undelivered_id is None:
         return [
             Finding(
@@ -1566,11 +1690,11 @@ def evaluate_undelivered(
             )
         ]
     age = (now_ms - _entry_ms(oldest_undelivered_id)) / 1000.0
-    if age <= check.warn_undelivered_age_seconds:
+    if age <= group.warn_undelivered_age_seconds:
         return []
     head = (
         f"oldest UNDELIVERED entry {oldest_undelivered_id} is {age:.0f}s old "
-        f"(warn over {check.warn_undelivered_age_seconds:.0f}s) - the group is at "
+        f"(warn over {group.warn_undelivered_age_seconds:.0f}s) - the group is at "
         f"{last_delivered_id}, the stream at {last_generated_id}. "
     )
     if pending == 0:
@@ -1586,17 +1710,22 @@ def evaluate_undelivered(
             "retry instead of reading (the shape replicator had until "
             "CannObserv/replicator#98), or gone "
             "while holding it. A connected consumer is not the all-clear here; run "
-            f"`XPENDING {check.topic} {check.pending_group} - + 10` twice - a delivery count "
+            f"`XPENDING {check.topic} {group.name} - + 10` twice - a delivery count "
             "that climbs is a consumer alive and retrying"
         )
     tail = '; see docs/UNDELIVERED-CONSUMERS.md, "Consumers that stopped reading"'
     return [Finding(check="group-undelivered", subject=subject, message=head + body + tail)]
 
 
-def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int) -> list[Finding]:
+def evaluate_pending(
+    check: StreamCheck, group: GroupCheck, *, pending_now: int, pending_prev: int
+) -> list[Finding]:
     """Two-tick rule: one tick of non-zero pending is in-flight delivery;
     non-zero across two consecutive ticks means the consumer is wedged or its
     database is down.
+
+    Every group but one with a ``warn_pending_entry_age_seconds``, which holds
+    entries pending on purpose and takes ``evaluate_pending_age`` instead.
 
     The count is the group's ``pending`` field, which since CannObserv/broker#29
     comes out of the same ``XINFO GROUPS`` reply as its position rather than
@@ -1607,13 +1736,66 @@ def evaluate_pending(check: StreamCheck, *, pending_now: int, pending_prev: int)
         return [
             Finding(
                 check="pending",
-                subject=f"{check.topic}/{check.pending_group}",
+                subject=f"{check.topic}/{group.name}",
                 message=f"pending {pending_now} for two consecutive ticks "
                 f"(was {pending_prev}) - consumer wedged or DB down; messages "
                 "are accruing unconsumed while the stream keeps accepting them",
             )
         ]
     return []
+
+
+@dataclass(frozen=True)
+class OldestPending:
+    """A group's oldest pending entry, as ``XINFO STREAM ... FULL`` lists it."""
+
+    entry_id: str
+    consumer: str
+    delivery_count: int
+
+
+def evaluate_pending_age(
+    check: StreamCheck,
+    group: GroupCheck,
+    *,
+    oldest: OldestPending | None,
+    pending: int,
+    now_ms: int,
+) -> list[Finding]:
+    """The stuck-entry alarm for a consumer with no dead-letter queue
+    (CannObserv/broker#78).
+
+    Its owner never acknowledges an entry it cannot process and asked for this
+    alarm in place of a DLQ. It also holds entries pending on purpose - one
+    whose text is not written yet - so pending above zero is normal, and the
+    two-tick rule would fire on it. What separates the two is how long ago the
+    entry was published, which its id records: past the longest legitimate
+    hold, it is stuck.
+
+    Not idle time, which is what an ``XPENDING`` age reads: the consumer
+    re-claims a held entry every reclaim window, each claim resets idle, so a
+    poison entry never looks older than one window. The delivery count climbs
+    with every claim and is quoted, not judged: it says the consumer is alive
+    and retrying, which a stuck entry and a slow text both are.
+    """
+    if group.warn_pending_entry_age_seconds is None or oldest is None:
+        return []
+    age = (now_ms - _entry_ms(oldest.entry_id)) / 1000.0
+    if age <= group.warn_pending_entry_age_seconds:
+        return []
+    noun = "time" if oldest.delivery_count == 1 else "times"
+    return [
+        Finding(
+            check="pending-age",
+            subject=f"{check.topic}/{group.name}",
+            message=f"oldest PENDING entry {oldest.entry_id} was published {age:.0f}s ago "
+            f"(warn over {group.warn_pending_entry_age_seconds:.0f}s), delivered "
+            f"{oldest.delivery_count} {noun}, held by {oldest.consumer}; {pending} pending. "
+            "Its consumer keeps no dead-letter queue, so an entry it cannot process stays "
+            "here: the reason is in that consumer's journal. Idle time cannot show this - "
+            'every reclaim resets it; see docs/BUS-HEALTH.md, "Pending age"',
+        )
+    ]
 
 
 # --- the backup's freshness, and the persistence that feeds it (broker#4) ---
@@ -1857,7 +2039,10 @@ async def _collect_stream(
                 )
             )
         # The baseline is deliberately not carried forward, so this fires once
-        # rather than every tick until someone rewrites the stream.
+        # rather than every tick until someone rewrites the stream. A dormant
+        # group's arming is: once seen, it is never dormant again, and a stream
+        # that comes back without it is `group-missing` (CannObserv/broker#78).
+        pending.update(_armed_dormant_groups(check, previous_state))
         return findings, pending
 
     info = await client.xinfo_stream(check.topic)
@@ -1909,50 +2094,68 @@ async def _collect_stream(
     if set_reading is not None:
         pending.update(set_reading.carry.to_state(check.topic))
 
-    if check.pending_group is not None:
-        key = f"{check.topic}/{check.pending_group}"
-        # ONE reply for the group's whole state (CannObserv/broker#29).
-        # ``XINFO GROUPS`` has always carried ``pending`` beside
-        # ``last-delivered-id``, so the ``XPENDING`` that used to precede it was
-        # a second round trip reading the same group a moment later - the shape
-        # broker#13 took out of the DLQ scan, where two reads an ``XADD`` can
-        # land between are not one observation. Nothing compared the two here
-        # yet, so that half was cost rather than a bug; the finding below is the
-        # part that gets better.
+    if check.groups:
+        # ONE reply for every group's whole state (CannObserv/broker#29), however
+        # many groups the stream carries (CannObserv/broker#78). ``XINFO
+        # GROUPS`` has always carried ``pending`` beside ``last-delivered-id``,
+        # so the ``XPENDING`` that used to precede it was a second round trip
+        # reading the same group a moment later - the shape broker#13 took out
+        # of the DLQ scan, where two reads an ``XADD`` can land between are not
+        # one observation.
         #
         # The stream is known to exist. ``XINFO GROUPS`` raises "no such key" on
         # one deleted since the ``exists`` above, which is the race the
-        # ``XINFO STREAM`` two lines up already answers the same way: the tick
-        # ends as a ``broker`` finding with ``previous_state`` passed through
-        # untouched, so the next tick - which sees the key simply absent -
-        # reports the deletion as ``stream-reset`` off an intact baseline.
+        # ``XINFO STREAM`` above already answers the same way: the tick ends as
+        # a ``broker`` finding with ``previous_state`` passed through untouched,
+        # so the next tick - which sees the key simply absent - reports the
+        # deletion as ``stream-reset`` off an intact baseline.
         groups = await client.xinfo_groups(check.topic)
-        position = next(
-            (g for g in groups if _decode(g.get("name", "")) == check.pending_group), None
-        )
-        if position is None:
-            # Absence from the list, where it used to be ``XPENDING`` answering
-            # NOGROUP (a ResponseError on real Redis, an IndexError out of
-            # redis-py's parse_xpending on fakeredis - both the same condition).
-            # Both servers report a group-less stream the same way here - an
-            # empty list - which is why one branch now does: asserted against a
-            # real 7.0 server by ``tests/deploy/test_bus_health_group_positions
-            # .py::test_a_group_less_stream_answers_the_way_fakeredis_does``.
-            findings.append(_evaluate_group_missing(check, groups))
-        else:
+        by_name = {_decode(g.get("name", "")): g for g in groups}
+        oldest: dict[str, OldestPending] | None = None
+        for group in check.groups:
+            key = f"{check.topic}/{group.name}"
+            position = by_name.get(group.name)
+            if position is None:
+                if group.dormant_until_seen and key not in previous_state:
+                    continue
+                # Absence from the list, where it used to be ``XPENDING``
+                # answering NOGROUP. Both servers report a group-less stream the
+                # same way here - an empty list - asserted against a real 7.0
+                # server by ``tests/deploy/test_bus_health_group_positions.py
+                # ::test_a_group_less_stream_answers_the_way_fakeredis_does``.
+                findings.append(_evaluate_group_missing(check, group, groups))
+                if group.dormant_until_seen:
+                    pending[key] = previous_state[key]
+                continue
             pending_now = int(position["pending"])
             pending[key] = pending_now
-            findings.extend(
-                evaluate_pending(
-                    check,
-                    pending_now=pending_now,
-                    pending_prev=previous_state.get(key, 0),
+            if group.warn_pending_entry_age_seconds is None:
+                findings.extend(
+                    evaluate_pending(
+                        check,
+                        group,
+                        pending_now=pending_now,
+                        pending_prev=previous_state.get(key, 0),
+                    )
                 )
-            )
+            elif pending_now > 0:
+                # Read only when something is pending, and once per stream.
+                if oldest is None:
+                    oldest = await _read_oldest_pending(client, check.topic)
+                findings.extend(
+                    evaluate_pending_age(
+                        check,
+                        group,
+                        oldest=oldest.get(group.name),
+                        pending=pending_now,
+                        now_ms=int(time.time() * 1000),
+                    )
+                )
             findings.extend(
                 await _collect_undelivered(
                     client,
                     check,
+                    group,
                     position=position,
                     last_generated_id=info.get("last-generated-id"),
                 )
@@ -1960,7 +2163,41 @@ async def _collect_stream(
     return findings, pending
 
 
-def _evaluate_group_missing(check: StreamCheck, groups: list[dict[str, object]]) -> Finding:
+def _armed_dormant_groups(check: StreamCheck, previous_state: dict[str, int]) -> dict[str, int]:
+    """The state keys of this row's dormant groups that have been seen, carried
+    forward so a group seen once is never dormant again."""
+    keys = (f"{check.topic}/{g.name}" for g in check.groups if g.dormant_until_seen)
+    return {key: previous_state[key] for key in keys if key in previous_state}
+
+
+async def _read_oldest_pending(client: Redis, topic: str) -> dict[str, OldestPending]:
+    """Each group's oldest pending entry, out of one ``XINFO STREAM ... FULL``.
+
+    ``FULL`` lists every group's pending entries in id order, so the first is
+    the oldest by publication, and its default ``COUNT`` of 10 bounds every list
+    in the reply - the entries, each group's pending, each consumer's - whatever
+    the stream's length. Under ``brokeradmin``'s ``+xinfo``: no new grant
+    (CannObserv/broker#78) - ``+xpending`` would have answered the same question
+    as a second command on the probe's line. Read only for a group whose rule is
+    an entry age, on a tick where it holds something.
+    """
+    info = await client.xinfo_stream(topic, full=True)
+    found: dict[str, OldestPending] = {}
+    for group in info.get("groups", []):
+        listed = group.get("pending") or []
+        if listed:
+            entry_id, consumer, _delivered_ms, delivery_count = listed[0]
+            found[_decode(group["name"])] = OldestPending(
+                entry_id=_decode(entry_id),
+                consumer=_decode(consumer),
+                delivery_count=int(delivery_count),
+            )
+    return found
+
+
+def _evaluate_group_missing(
+    check: StreamCheck, group: GroupCheck, groups: list[dict[str, object]]
+) -> Finding:
     """The group is absent from its stream's group list - and what else is on it.
 
     Three causes, and the old message could pick none of them: it asked
@@ -1984,7 +2221,7 @@ def _evaluate_group_missing(check: StreamCheck, groups: list[dict[str, object]])
     """
     present = sorted(_decode(g.get("name", "")) for g in groups)
     head = (
-        f"consumer group {check.pending_group!r} does not exist on a stream that does, "
+        f"consumer group {group.name!r} does not exist on a stream that does, "
         "so its lag cannot be read. "
     )
     if present:
@@ -2009,6 +2246,7 @@ def _evaluate_group_missing(check: StreamCheck, groups: list[dict[str, object]])
 async def _collect_undelivered(
     client: Redis,
     check: StreamCheck,
+    group: GroupCheck,
     *,
     position: dict[str, object],
     last_generated_id: str | bytes | None,
@@ -2032,7 +2270,7 @@ async def _collect_undelivered(
     Runs only where that row was found: a missing group is ``group-missing``,
     and saying so twice in two vocabularies helps nobody.
     """
-    if check.warn_undelivered_age_seconds is None:
+    if group.warn_undelivered_age_seconds is None:
         return []
     if position.get("last-delivered-id") is None:
         return []
@@ -2050,6 +2288,7 @@ async def _collect_undelivered(
 
     return evaluate_undelivered(
         check,
+        group,
         last_generated_id=generated,
         last_delivered_id=last_delivered_id,
         oldest_undelivered_id=oldest_undelivered_id,

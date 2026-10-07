@@ -13,6 +13,8 @@ their own coverage because the timer is stateless without them.
 
 from __future__ import annotations
 
+import ast
+import itertools
 import json
 import re
 import time
@@ -39,6 +41,7 @@ from co_core.pure.adapters.bus.streams import (
     INFO_WATCH_STATUS,
     StreamKind,
     dlq_name,
+    group_name,
     stream_kind,
 )
 from fakeredis import aioredis as fakeredis_aio
@@ -59,6 +62,7 @@ from src.broker.bus_health import (
     REGISTRY_PRODUCER_MAXLEN,
     STREAM_CHECKS,
     FullSetFloor,
+    GroupCheck,
     RememberedSet,
     SetBaseline,
     StreamCheck,
@@ -319,19 +323,19 @@ def test_stream_without_age_threshold_skips_age() -> None:
 
 
 def test_pending_first_tick_is_grace() -> None:
-    check = StreamCheck(topic="t", pending_group="g")
-    assert evaluate_pending(check, pending_now=5, pending_prev=0) == []
+    check = StreamCheck(topic="t", groups=(GroupCheck("g"),))
+    assert evaluate_pending(check, _only_group(check), pending_now=5, pending_prev=0) == []
 
 
 def test_pending_two_consecutive_ticks_warn() -> None:
-    check = StreamCheck(topic="t", pending_group="g")
-    findings = evaluate_pending(check, pending_now=5, pending_prev=3)
+    check = StreamCheck(topic="t", groups=(GroupCheck("g"),))
+    findings = evaluate_pending(check, _only_group(check), pending_now=5, pending_prev=3)
     assert [f.check for f in findings] == ["pending"]
 
 
 def test_pending_recovered_is_healthy() -> None:
-    check = StreamCheck(topic="t", pending_group="g")
-    assert evaluate_pending(check, pending_now=0, pending_prev=5) == []
+    check = StreamCheck(topic="t", groups=(GroupCheck("g"),))
+    assert evaluate_pending(check, _only_group(check), pending_now=0, pending_prev=5) == []
 
 
 def test_pending_message_names_no_specific_stream() -> None:
@@ -339,7 +343,7 @@ def test_pending_message_names_no_specific_stream() -> None:
     a wedged artifacts consumer must not be reported as lost revisions - wrong
     stream, wrong remedy. The subject already carries topic/group."""
     check = _check_for(CONTENT_ARTIFACTS)
-    (finding,) = evaluate_pending(check, pending_now=5, pending_prev=3)
+    (finding,) = evaluate_pending(check, _only_group(check), pending_now=5, pending_prev=3)
     assert finding.subject == f"{CONTENT_ARTIFACTS}/archiver.artifacts"
     assert "revision" not in finding.message.lower()
 
@@ -354,7 +358,7 @@ def test_pending_message_names_no_specific_stream() -> None:
 # age catches a stopped producer and exists only for the groupless streams; and
 # `lag` is wrong in both directions on this Redis.
 
-_GROUPED = StreamCheck(topic="t", pending_group="g", warn_undelivered_age_seconds=300.0)
+_GROUPED = StreamCheck(topic="t", groups=(GroupCheck("g", warn_undelivered_age_seconds=300.0),))
 
 
 def test_a_group_at_the_streams_last_id_is_caught_up() -> None:
@@ -363,6 +367,7 @@ def test_a_group_at_the_streams_last_id_is_caught_up() -> None:
     assert (
         evaluate_undelivered(
             _GROUPED,
+            _only_group(_GROUPED),
             last_generated_id="1000-0",
             last_delivered_id="1000-0",
             oldest_undelivered_id=None,
@@ -380,6 +385,7 @@ def test_a_group_behind_by_a_fresh_entry_is_healthy() -> None:
     assert (
         evaluate_undelivered(
             _GROUPED,
+            _only_group(_GROUPED),
             last_generated_id="9999999-0",
             last_delivered_id="9000000-0",
             oldest_undelivered_id=f"{now_ms - 1000}-0",
@@ -394,6 +400,7 @@ def test_a_group_behind_by_a_stale_entry_warns() -> None:
     now_ms = 10_000_000
     (finding,) = evaluate_undelivered(
         _GROUPED,
+        _only_group(_GROUPED),
         last_generated_id="9999999-0",
         last_delivered_id="9000000-0",
         oldest_undelivered_id=f"{now_ms - 301_000}-0",
@@ -415,6 +422,7 @@ def test_undelivered_entries_that_no_longer_exist_are_their_own_condition() -> N
     """
     (finding,) = evaluate_undelivered(
         _GROUPED,
+        _only_group(_GROUPED),
         last_generated_id="9999999-0",
         last_delivered_id="1000-0",
         oldest_undelivered_id=None,
@@ -425,10 +433,11 @@ def test_undelivered_entries_that_no_longer_exist_are_their_own_condition() -> N
 
 
 def test_a_group_row_without_a_threshold_says_nothing() -> None:
-    check = StreamCheck(topic="t", pending_group="g")
+    check = StreamCheck(topic="t", groups=(GroupCheck("g"),))
     assert (
         evaluate_undelivered(
             check,
+            _only_group(check),
             last_generated_id="9999999-0",
             last_delivered_id="1000-0",
             oldest_undelivered_id=None,
@@ -452,6 +461,7 @@ def test_a_group_ahead_of_the_last_id_the_probe_read_is_caught_up() -> None:
     assert (
         evaluate_undelivered(
             _GROUPED,
+            _only_group(_GROUPED),
             last_generated_id="1000-0",
             last_delivered_id="1001-0",
             oldest_undelivered_id=None,
@@ -473,6 +483,7 @@ def test_positions_are_compared_as_numbers_not_strings() -> None:
     now_ms = 10_000_000
     (finding,) = evaluate_undelivered(
         _GROUPED,
+        _only_group(_GROUPED),
         last_generated_id="10-0",
         last_delivered_id="9-0",
         oldest_undelivered_id=f"{now_ms - 301_000}-0",
@@ -494,6 +505,7 @@ def test_behind_and_holding_nothing_is_a_stopped_reader() -> None:
     now_ms = 10_000_000
     (finding,) = evaluate_undelivered(
         _GROUPED,
+        _only_group(_GROUPED),
         last_generated_id="9999999-0",
         last_delivered_id="9000000-0",
         oldest_undelivered_id=f"{now_ms - 301_000}-0",
@@ -518,6 +530,7 @@ def test_behind_a_held_delivery_is_not_called_a_stopped_reader() -> None:
     now_ms = 10_000_000
     (finding,) = evaluate_undelivered(
         _GROUPED,
+        _only_group(_GROUPED),
         last_generated_id="9999999-0",
         last_delivered_id="9000000-0",
         oldest_undelivered_id=f"{now_ms - 301_000}-0",
@@ -540,15 +553,30 @@ def test_behind_a_held_delivery_is_not_called_a_stopped_reader() -> None:
 def test_an_undelivered_threshold_without_a_group_is_refused() -> None:
     """CR 1. The invariant the test below states, in its other direction.
 
-    A threshold with no group is a row nothing can evaluate: the collector only
-    reaches ``evaluate_undelivered`` where ``XINFO GROUPS`` found the group, and the
-    evaluator would render ``subject`` as ``topic/None`` - a string an alert
-    rule would carry. Refused at import time for the reason the config_state
-    guard beside it is: this is a statement about the row, which cannot become
-    true at runtime.
+    A threshold with no group is a row nothing can evaluate, and the evaluator
+    would render ``subject`` as ``topic/None`` - a string an alert rule would
+    carry. Since CannObserv/broker#78 a threshold lives on a ``GroupCheck``, so
+    the row cannot be spelled at all: the refusal is the constructor's.
     """
-    with pytest.raises(ValueError, match="undelivered"):
-        StreamCheck(topic="t", warn_undelivered_age_seconds=300.0)
+    with pytest.raises(TypeError, match="warn_undelivered_age_seconds"):
+        StreamCheck(topic="t", warn_undelivered_age_seconds=300.0)  # type: ignore[call-arg]
+
+
+def test_a_group_named_twice_on_one_stream_is_refused() -> None:
+    """Its pending count keys the state file as ``<topic>/<group>``, so two
+    rules for one group write one key and one of them is lost
+    (CannObserv/broker#78)."""
+    with pytest.raises(ValueError, match="twice"):
+        StreamCheck(topic="t", groups=(GroupCheck("g"), GroupCheck("g")))
+
+
+@pytest.mark.parametrize(
+    "field", ["warn_undelivered_age_seconds", "warn_pending_entry_age_seconds"]
+)
+def test_a_group_threshold_must_be_positive(field) -> None:
+    """A zero threshold fires on every entry; it is a typo, refused at import."""
+    with pytest.raises(ValueError, match="positive"):
+        GroupCheck("g", **{field: 0.0})
 
 
 def test_every_probed_group_carries_an_undelivered_threshold() -> None:
@@ -559,11 +587,12 @@ def test_every_probed_group_carries_an_undelivered_threshold() -> None:
     that outlives the seven groups declared today.
     """
     missing = [
-        c.topic
+        f"{c.topic}/{g.name}"
         for c in STREAM_CHECKS
-        if c.pending_group is not None and c.warn_undelivered_age_seconds is None
+        for g in c.groups
+        if g.warn_undelivered_age_seconds is None
     ]
-    assert not missing, f"grouped streams with no undelivered threshold: {missing}"
+    assert not missing, f"groups with no undelivered threshold: {missing}"
 
 
 def test_content_blobs_carries_no_retention_opinion() -> None:
@@ -581,7 +610,7 @@ def test_content_blobs_carries_no_retention_opinion() -> None:
     check = _check_for("content.blobs")
     assert check.warn_length is None
     assert check.warn_last_entry_age_seconds is None
-    assert check.pending_group == "watcher.blobs"
+    assert [g.name for g in check.groups] == ["watcher.blobs"]
 
 
 def test_inventory_covers_every_consumer_group_on_the_node() -> None:
@@ -605,9 +634,11 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
     Pinned as an exact set rather than a subset, so a group silently dropped
     from the inventory fails here instead of going quiet in production.
     """
-    groups = {c.pending_group for c in STREAM_CHECKS if c.pending_group}
-    assert groups == {
+    groups = [g.name for c in STREAM_CHECKS for g in c.groups]
+    assert len(groups) == len(set(groups)), f"a group is probed twice: {groups}"
+    assert set(groups) == {
         "archiver.revisions",
+        "provisioner.revisions",
         "archiver.artifacts",
         "watcher.blobs",
         "watcher.derived",
@@ -636,18 +667,24 @@ def test_the_processing_pair_carries_its_groups_and_no_retention_opinion() -> No
     not claim nothing shortens it.
     """
     process = _check_for(CONTENT_PROCESS)
-    assert process.pending_group == "processor.process"
+    assert _only_group(process).name == "processor.process"
     assert process.never_trimmed is True
     assert process.warn_length is None
     assert process.warn_last_entry_age_seconds is None
-    assert process.warn_undelivered_age_seconds == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+    assert (
+        _only_group(process).warn_undelivered_age_seconds
+        == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+    )
 
     derived = _check_for(CONTENT_DERIVED)
-    assert derived.pending_group == "watcher.derived"
+    assert _only_group(derived).name == "watcher.derived"
     assert derived.never_trimmed is False
     assert derived.warn_length is None
     assert derived.warn_last_entry_age_seconds is None
-    assert derived.warn_undelivered_age_seconds == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+    assert (
+        _only_group(derived).warn_undelivered_age_seconds
+        == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+    )
 
 
 def test_the_processing_pairs_queues_are_owed_to_their_consumers() -> None:
@@ -671,12 +708,124 @@ def test_content_persist_is_a_never_trimmed_command_stream_with_one_pool() -> No
     (CannObserv/broker#30) plus a SHA-256 over the same bytes.
     """
     persist = _check_for(CONTENT_PERSIST)
-    assert persist.pending_group == "replicator.persist"
+    assert _only_group(persist).name == "replicator.persist"
     assert persist.never_trimmed is True
     assert persist.warn_length is None
     assert persist.warn_last_entry_age_seconds is None
-    assert persist.warn_undelivered_age_seconds == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+    assert (
+        _only_group(persist).warn_undelivered_age_seconds
+        == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+    )
     assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_PERSIST)] == "replicator"
+
+
+# --- content.revisions' second group: provisioner (CannObserv/broker#78) ---
+
+_PROVISIONER = GroupCheck(
+    "provisioner.revisions",
+    warn_undelivered_age_seconds=300.0,
+    warn_pending_entry_age_seconds=2460.0,
+)
+_REVISIONS = StreamCheck(CONTENT_REVISIONS, groups=(_PROVISIONER,))
+
+
+def test_content_revisions_carries_one_group_per_consuming_service() -> None:
+    """Archiver's group keeps exactly the rules it had; provisioner's is the
+    second, with its own.
+
+    `archiver.revisions` is the regression net the generalisation had to keep:
+    the two-tick rule (no entry-age threshold), the shared undelivered age, and
+    `group-missing` from the first tick. `provisioner.revisions` holds entries
+    pending on purpose and keeps no dead-letter queue, so its pending rule is an
+    entry age; it is dormant until its consumer first creates it at `$`.
+    """
+    archiver, provisioner = _check_for(CONTENT_REVISIONS).groups
+    assert archiver == GroupCheck(
+        "archiver.revisions",
+        warn_undelivered_age_seconds=bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    )
+    assert provisioner == GroupCheck(
+        group_name(CONTENT_REVISIONS, "provisioner"),
+        warn_undelivered_age_seconds=bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        warn_pending_entry_age_seconds=bus_health.PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS,
+        dormant_until_seen=True,
+    )
+
+
+def test_only_provisioner_trades_the_two_tick_rule_for_an_entry_age() -> None:
+    """An entry-age rule is a consumer's declaration that it holds entries on
+    purpose; every other group's pending is in-flight delivery or a wedge."""
+    aged = [g.name for c in STREAM_CHECKS for g in c.groups if g.warn_pending_entry_age_seconds]
+    assert aged == ["provisioner.revisions"]
+
+
+def test_the_provisioner_threshold_is_its_mirrored_terms_summed() -> None:
+    """The text's latest legitimate arrival, then one reclaim cycle to pick it
+    up: each term a mirror naming its movers (`docs/BUS-HEALTH.md`, "Mirrored
+    constants"), so the sum is never a third number to keep in step."""
+    assert bus_health.PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS == (
+        bus_health.PROVISIONER_TEXT_WAIT_SECONDS
+        + bus_health.PROVISIONER_RECLAIM_MIN_IDLE_SECONDS
+        + bus_health.PROVISIONER_RECLAIM_INTERVAL_SECONDS
+    )
+    assert bus_health.PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS == 2460.0
+    for name in ("TEXT_WAIT", "RECLAIM_MIN_IDLE", "RECLAIM_INTERVAL"):
+        doc = _constant_docstring(f"PROVISIONER_{name}_SECONDS")
+        assert "**Movers, which no commit records:**" in doc, name
+
+
+def test_a_held_entry_younger_than_the_hold_is_quiet() -> None:
+    now_ms = 10_000_000
+    oldest = bus_health.OldestPending(f"{now_ms - 2_000_000}-0", "co-provisioner", 4)
+    assert (
+        bus_health.evaluate_pending_age(
+            _REVISIONS, _PROVISIONER, oldest=oldest, pending=1, now_ms=now_ms
+        )
+        == []
+    )
+
+
+def test_an_entry_held_past_the_hold_is_the_stuck_entry_alarm() -> None:
+    """The alarm the owner chose in place of a dead-letter queue."""
+    now_ms = 10_000_000
+    oldest = bus_health.OldestPending(f"{now_ms - 2_461_000}-0", "co-provisioner", 5)
+    (finding,) = bus_health.evaluate_pending_age(
+        _REVISIONS, _PROVISIONER, oldest=oldest, pending=2, now_ms=now_ms
+    )
+    assert finding.check == "pending-age"
+    assert finding.subject == "content.revisions/provisioner.revisions"
+    assert "published 2461s ago (warn over 2460s)" in finding.message
+    assert "delivered 5 times, held by co-provisioner; 2 pending" in finding.message
+    assert "no dead-letter queue" in finding.message
+
+
+def test_the_entry_age_is_its_id_not_its_idle_time() -> None:
+    """A reclaim every ten minutes resets idle, so a poison entry never looks
+    older than one window by idle. Its id never changes: the age is read off it
+    and nothing else is an input."""
+    now_ms = 10_000_000_000
+    oldest = bus_health.OldestPending(f"{now_ms - 86_400_000}-3", "c", 144)
+    (finding,) = bus_health.evaluate_pending_age(
+        _REVISIONS, _PROVISIONER, oldest=oldest, pending=1, now_ms=now_ms
+    )
+    assert "published 86400s ago" in finding.message
+
+
+def test_nothing_pending_or_no_rule_says_nothing() -> None:
+    oldest = bus_health.OldestPending("1-0", "c", 1)
+    assert (
+        bus_health.evaluate_pending_age(
+            _REVISIONS, _PROVISIONER, oldest=None, pending=0, now_ms=10**12
+        )
+        == []
+    )
+    no_rule = GroupCheck("archiver.revisions", warn_undelivered_age_seconds=300.0)
+    assert (
+        bus_health.evaluate_pending_age(
+            _REVISIONS, no_rule, oldest=oldest, pending=1, now_ms=10**12
+        )
+        == []
+    )
 
 
 def test_group_names_are_derived_not_spelled() -> None:
@@ -691,15 +840,31 @@ def test_group_names_are_derived_not_spelled() -> None:
     exactly where a hand-typed literal would be tempting.
     """
     for check in STREAM_CHECKS:
-        if check.pending_group is None:
-            continue
-        service, _, _ = check.pending_group.partition(".")
-        assert check.pending_group == f"{service}.{check.topic.split('.', 1)[1]}"
+        for group in check.groups:
+            service, _, _ = group.name.partition(".")
+            assert group.name == f"{service}.{check.topic.split('.', 1)[1]}"
     assert bus_health.REVISIONS_GROUP == f"archiver.{CONTENT_REVISIONS.split('.', 1)[1]}"
 
 
 def _check_for(topic: str) -> StreamCheck:
     return next(c for c in STREAM_CHECKS if c.topic == topic)
+
+
+def _constant_docstring(name: str) -> str:
+    """The string literal after a module-level assignment in bus_health.py -
+    the docstring a mirrored constant carries, which Python does not keep."""
+    body = ast.parse(Path(bus_health.__file__).read_text()).body
+    for node, after in itertools.pairwise(body):
+        targets = node.targets if isinstance(node, ast.Assign) else []
+        if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+            assert isinstance(after, ast.Expr) and isinstance(after.value, ast.Constant), name
+            return after.value.value
+    raise AssertionError(f"{name} is not assigned in bus_health.py")
+
+
+def _only_group(check: StreamCheck) -> GroupCheck:
+    (group,) = check.groups
+    return group
 
 
 def test_registry_threshold_tracks_its_own_producer_cap() -> None:
@@ -1622,6 +1787,98 @@ async def test_collect_says_nothing_once_the_group_has_read(fake_redis) -> None:
     assert not any(f.check.startswith("group-undelivered") for f in findings)
 
 
+_PROVISIONER_KEY = f"{CONTENT_REVISIONS}/provisioner.revisions"
+
+
+async def test_a_dormant_group_is_silent_until_first_seen(fake_redis) -> None:
+    """Declared ahead of its consumer (CannObserv/broker#78): absent and never
+    seen is go-live not yet run, not a fault - while archiver's group, beside
+    it on the same stream, is still `group-missing` from the first tick."""
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
+    findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    missing = [f.message for f in findings if f.check == "group-missing"]
+    assert len(missing) == 1 and "'archiver.revisions'" in missing[0], missing
+    assert _PROVISIONER_KEY not in state
+
+
+async def test_a_dormant_group_seen_once_is_missing_every_tick_after(fake_redis) -> None:
+    """The first `ensure-group` arms it, through the state file, with no commit:
+    once seen, absence is the finding, and the arming survives the finding."""
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="$")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "provisioner.revisions", id="$")
+    findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    assert state[_PROVISIONER_KEY] == 0
+    assert not [f for f in findings if f.check == "group-missing"]
+
+    await fake_redis.xgroup_destroy(CONTENT_REVISIONS, "provisioner.revisions")
+    for _ in range(2):
+        findings, state = await collect_broker_findings(fake_redis, previous_state=state)
+        (finding,) = [f for f in findings if f.check == "group-missing"]
+        assert "'provisioner.revisions' does not exist" in finding.message
+        assert "'archiver.revisions'" in finding.message  # the group that IS there
+        assert _PROVISIONER_KEY in state
+
+
+async def test_a_dormant_groups_arming_survives_its_stream_going_missing(fake_redis) -> None:
+    """A stream deleted and rewritten without its groups: `stream-reset` the
+    tick it vanishes, and then both groups are missing - the dormant one too,
+    since it was seen before the deletion."""
+    seen = {
+        _PROVISIONER_KEY: 0,
+        CONTINUITY_ENTRIES_KEY.format(topic=CONTENT_REVISIONS): 5,
+    }
+    findings, state = await collect_broker_findings(fake_redis, previous_state=seen)
+    assert any(f.check == "stream-reset" and f.subject == CONTENT_REVISIONS for f in findings)
+    assert state[_PROVISIONER_KEY] == 0
+
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
+    missing = sorted(f.message.split("'")[1] for f in findings if f.check == "group-missing")
+    assert missing == ["archiver.revisions", "provisioner.revisions"]
+
+
+async def test_an_entry_age_group_takes_no_two_tick_finding(fake_redis, monkeypatch) -> None:
+    """provisioner holds an entry pending across ticks in normal operation;
+    the two-tick rule would fire on it. Its rule is the entry age, read only
+    when something is pending. fakeredis's `XINFO STREAM ... FULL` carries no
+    pending lists, so the read is stood in for here and exercised on a real server in
+    tests/deploy/test_bus_health_group_positions.py."""
+    reads: list[str] = []
+
+    async def oldest(_client, topic):
+        reads.append(topic)
+        return {"provisioner.revisions": bus_health.OldestPending("1000-0", "c", 3)}
+
+    monkeypatch.setattr(bus_health, "_read_oldest_pending", oldest)
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"}, id="1000-0")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="$")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "provisioner.revisions", id="0")
+    await fake_redis.xreadgroup("provisioner.revisions", "c", {CONTENT_REVISIONS: ">"})
+
+    findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
+    checks = {(f.check, f.subject) for f in findings}
+    assert ("pending", _PROVISIONER_KEY) not in checks
+    assert ("pending-age", _PROVISIONER_KEY) in checks  # entry 1000-0 is decades old
+    assert reads == [CONTENT_REVISIONS, CONTENT_REVISIONS]  # once per tick, not per group
+
+
+async def test_archivers_two_tick_rule_is_unchanged_beside_a_second_group(fake_redis) -> None:
+    """The regression net for archiver.revisions: a second group on its
+    stream changes nothing about its own finding."""
+    await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "archiver.revisions", id="0")
+    await fake_redis.xgroup_create(CONTENT_REVISIONS, "provisioner.revisions", id="$")
+    await fake_redis.xreadgroup("archiver.revisions", "c1", {CONTENT_REVISIONS: ">"})
+
+    _, state = await collect_broker_findings(fake_redis, previous_state={})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
+    (finding,) = [f for f in findings if f.check == "pending"]
+    assert finding.subject == f"{CONTENT_REVISIONS}/archiver.revisions"
+    assert not [f for f in findings if f.check == "pending-age"]
+
+
 async def test_collect_reports_undelivered_entries_that_were_trimmed_away(fake_redis) -> None:
     """The group is behind and what it is behind by is gone.
 
@@ -2270,7 +2527,7 @@ async def test_run_once_persists_state(fake_redis, tmp_path) -> None:
 
 # --- stream-kind invariants (cannobserv#384, co-core >=0.13.1) --------------
 #
-# ``pending_group`` was a hand-kept field whose correctness rested on the
+# The group was a hand-kept field whose correctness rested on the
 # author knowing the three-kind taxonomy. ``stream_kind`` makes that taxonomy
 # machine-readable, so the rule "a config/state stream never carries a group"
 # stops being a comment and becomes a constructor guard.
@@ -2284,7 +2541,7 @@ def test_stream_check_rejects_a_pending_group_on_a_config_state_stream() -> None
     this makes STREAM_CHECKS unable to express a violation of it.
     """
     with pytest.raises(ValueError, match="config_state"):
-        StreamCheck(INFO_REGISTRY, warn_length=10, pending_group="archiver.registry")
+        StreamCheck(INFO_REGISTRY, warn_length=10, groups=(GroupCheck("archiver.registry"),))
 
 
 def test_stream_check_allows_a_pending_group_on_a_fact_stream() -> None:
@@ -2295,8 +2552,8 @@ def test_stream_check_allows_a_pending_group_on_a_fact_stream() -> None:
     asserting with ``archiver.revisions`` would leave both behaviours
     consistent with a pass.
     """
-    check = StreamCheck(CONTENT_REVISIONS, warn_length=10, pending_group="not-a-convention")
-    assert check.pending_group == "not-a-convention"
+    check = StreamCheck(CONTENT_REVISIONS, warn_length=10, groups=(GroupCheck("not-a-convention"),))
+    assert _only_group(check).name == "not-a-convention"
 
 
 def test_stream_check_allows_a_pending_group_on_a_command_stream() -> None:
@@ -2306,8 +2563,10 @@ def test_stream_check_allows_a_pending_group_on_a_command_stream() -> None:
     guard keyed on the group's *spelling* rather than the stream's *kind* would
     pass an ``archiver.``- or ``replicator.``-prefixed name either way.
     """
-    check = StreamCheck(CONTENT_REPLICATE, warn_length=10, pending_group="also-not-a-convention")
-    assert check.pending_group == "also-not-a-convention"
+    check = StreamCheck(
+        CONTENT_REPLICATE, warn_length=10, groups=(GroupCheck("also-not-a-convention"),)
+    )
+    assert _only_group(check).name == "also-not-a-convention"
 
 
 @pytest.mark.parametrize("topic", [c.topic for c in STREAM_CHECKS])
@@ -3138,12 +3397,29 @@ async def _finding_with_a_doc_pointer(fake_redis, check: str) -> bus_health.Find
         previous_state[CONTINUITY_ENTRIES_KEY.format(topic=dlq)] = 1
     elif check == "group-missing":
         await fake_redis.xadd(CONTENT_REVISIONS, {"k": "v"})
+    elif check == "pending-age":
+        (finding,) = bus_health.evaluate_pending_age(
+            _REVISIONS,
+            _PROVISIONER,
+            oldest=bus_health.OldestPending("1000-0", "c", 2),
+            pending=1,
+            now_ms=int(time.time() * 1000),
+        )
+        return finding
     findings, _ = await collect_broker_findings(fake_redis, previous_state=previous_state)
     return next(f for f in findings if f.check == check)
 
 
 @pytest.mark.parametrize(
-    "check", ["eviction-policy", "dlq", "dlq-unobserved", "group-missing", "group-undelivered"]
+    "check",
+    [
+        "eviction-policy",
+        "dlq",
+        "dlq-unobserved",
+        "group-missing",
+        "group-undelivered",
+        "pending-age",
+    ],
 )
 async def test_the_doc_section_a_finding_points_at_exists(fake_redis, check) -> None:
     """A finding that says ``see docs/X.md, "Title"`` is the operator's first

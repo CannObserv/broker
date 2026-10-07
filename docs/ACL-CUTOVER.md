@@ -92,7 +92,10 @@ never having connected.)
 hash-only.** Since CannObserv/broker#72 the hourly backup refuses a plaintext
 line in the passwords file, so #62's order would fail every run until the
 service took its credential. `processor` (CannObserv/broker#75) is the first
-minted this way, in CannObserv/archiver#251's shape:
+minted this way, in CannObserv/archiver#251's shape, and `provisioner`
+(CannObserv/broker#78) the second. Its user went live ahead of the handoff on
+the digest of a value minted and discarded, as `default`'s is, so step 2 below
+is a swap, `"#<digest>" "!<the discarded digest>"`, not a create:
 
 1. **On the service's host**, the mint above into its env file - 40
    alphanumerics, length asserted - and to the password manager. The service
@@ -132,8 +135,8 @@ sudo shred -u /root/users.acl.check /root/aclcheck.log
 ```
 
 **`PING` must return `NOAUTH`.** If it returns `PONG`, stop - see *The `nopass`
-trap* below. `ACL LIST` must show seven users: `archiver`, `watcher`,
-`replicator`, `processor`, `brokeradmin`, `acladmin`, and `default` - **`off`**,
+trap* below. `ACL LIST` must show eight users: `archiver`, `watcher`,
+`replicator`, `processor`, `provisioner`, `brokeradmin`, `acladmin`, and `default` - **`off`**,
 `-@all`, still carrying a password hash. No test credential: `citest` was
 deleted by CannObserv/broker#53.
 
@@ -150,6 +153,7 @@ this section's own table did. The env files are each service's:
 | watcher | `/etc/watcher/.env` |
 | replicator | `/etc/replicator/.env` |
 | processor | `/etc/processor/.env`, on `co-processor`, as `CO_PROCESSOR_BUS_URL` - read by the `processor` unit since 2026-10-02 (CannObserv/broker#75) |
+| provisioner | `/etc/provisioner/consumer.env`, on `co-provisioner`, as `PROVISIONER_BUS_URL` (URL-encoded) - the `provisioner-consumer` unit's; not yet handed off (CannObserv/broker#78) |
 
 **As of the 2026-09-10 cutover, and no longer true:** watcher ran in `lax` on its
 own VM, and replicator shared that VM with no tailnet node of its own - inferred
@@ -258,7 +262,7 @@ Then verify every axis, not only the one that changed:
 redis-cli PING                                             # -> NOAUTH Authentication required.
 rcli acladmin ACL GETUSER default                          # -> flags off, one hash, commands -@all
 rcli brokeradmin INFO server | grep redis_version          # the probe's credential still answers
-for u in archiver watcher replicator processor; do
+for u in archiver watcher replicator processor provisioner; do
     echo "$u: held by digest on this node - verify from its own host"
 done
 rcli acladmin CLIENT LIST | grep -c 'flags=b'              # same count as before the flip

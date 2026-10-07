@@ -68,17 +68,18 @@ NON_STREAM_PATTERNS = frozenset({"*", "*.dlq", "replicator:cmd:*", "probe.*", "r
 COMMAND_STREAMS = tuple(s for s in sorted(CANONICAL_STREAMS) if stream_kind(s) == "command")
 
 
-def probed_consumer(topic: str) -> str | None:
-    """The service whose group the probe watches on ``topic``, or ``None``.
+def probed_consumers(topic: str) -> frozenset[str]:
+    """The services whose groups the probe watches on ``topic`` - one per
+    consuming service, so several on a broadcast stream (CannObserv/broker#78).
 
-    Read off ``STREAM_CHECKS`` - the group is derived there through co-core's
+    Read off ``STREAM_CHECKS`` - each group is derived there through co-core's
     ``group_name``, so its first segment is the service - rather than off the
     inventory's consumer cell, which is prose.
     """
     check = next((c for c in STREAM_CHECKS if c.topic == topic), None)
-    if check is None or check.pending_group is None:
-        return None
-    return check.pending_group.partition(".")[0]
+    if check is None:
+        return frozenset()
+    return frozenset(g.name.partition(".")[0] for g in check.groups)
 
 
 # The command streams replicator is the worker pool for, which is what makes
@@ -89,7 +90,7 @@ def probed_consumer(topic: str) -> str | None:
 # alone - a fourth command stream still cannot arrive without a grant or a red
 # test, whoever consumes it.
 REPLICATOR_COMMAND_STREAMS = tuple(
-    topic for topic in COMMAND_STREAMS if probed_consumer(topic) == "replicator"
+    topic for topic in COMMAND_STREAMS if probed_consumers(topic) == {"replicator"}
 )
 
 # What co-core-aio's group consumer issues on the stream it consumes: the
@@ -411,7 +412,11 @@ def test_a_dlq_writer_can_also_drain_it(users, user) -> None:
     """
     queues = [p for p in key_patterns(users[user]) if p.endswith(".dlq")]
     if not queues:
-        pytest.skip(f"{user} writes no DLQ")
+        # provisioner keeps none by its owner's choice (CannObserv/broker#78):
+        # then nothing may name it a queue's drainer either.
+        owed = sorted(q for q, drainer in DLQ_DRAINERS.items() if drainer == user)
+        assert not owed, f"{user} writes no DLQ and is named the drainer of {owed}"
+        return
     for queue in queues:
         for command in ("+xrange", "+xlen"):
             assert reaches(users[user], command, queue), (
@@ -672,7 +677,7 @@ GROUP_CELL = 3
 """The ``Consumer group`` column of the *Streams on this broker* table."""
 
 
-def documented_group_consumers() -> dict[str, str]:
+def documented_group_consumers() -> dict[str, frozenset[str]]:
     """``stream -> the service consuming it in a group``, off ../docs/STREAMS.md.
 
     The right half of the ``Producer → consumer`` cell, on the rows whose
@@ -681,13 +686,15 @@ def documented_group_consumers() -> dict[str, str]:
     no group command, and neither does a group that is only a target
     (``info.changes``). Parsed for the reason ``documented_producers`` is.
     """
-    found: dict[str, str] = {}
+    found: dict[str, frozenset[str]] = {}
     for topic, cells in inventory_rows().items():
         if cells[GROUP_CELL].strip(" *").lower().startswith("none"):
             continue
-        consumer = cells[PRODUCER_CELL].split("→")[1].split("*(")[0].strip(" *").split()[0]
-        assert consumer.lower() in SERVICE_USERS, f"{topic}'s consumer cell names {consumer!r}"
-        found[topic] = consumer.lower()
+        named = cells[PRODUCER_CELL].split("→")[1].split("*(")[0]
+        consumers = frozenset(c.strip(" *").split()[0].lower() for c in named.split(","))
+        unknown = sorted(consumers - set(SERVICE_USERS))
+        assert not unknown, f"{topic}'s consumer cell names {unknown}"
+        found[topic] = consumers
     return found
 
 
@@ -696,7 +703,7 @@ def test_the_inventory_and_the_probe_agree_on_who_consumes_each_group() -> None:
     stream, so the test below cannot be satisfied by a table the probe
     contradicts - or, with no grouped row parsed, by nothing at all."""
     consumers = documented_group_consumers()
-    probed = {c.topic: probed_consumer(c.topic) for c in STREAM_CHECKS if c.pending_group}
+    probed = {c.topic: probed_consumers(c.topic) for c in STREAM_CHECKS if c.groups}
     assert consumers, "the inventory names no grouped stream - has the table moved?"
     assert consumers == probed, f"inventory {consumers}, probe {probed}"
 
@@ -713,7 +720,7 @@ def test_a_group_command_reaches_exactly_the_streams_the_service_consumes(users,
     the inventory's consumer column, like the publish test from its producer
     column, so a new grouped stream cannot arrive without a grant or a red test.
     """
-    consumed = {topic for topic, c in documented_group_consumers().items() if c == user}
+    consumed = {topic for topic, cs in documented_group_consumers().items() if user in cs}
     for command in GROUP_CONSUMER_COMMANDS:
         reached = {s for s in CANONICAL_STREAMS if reaches(users[user], command, s)}
         assert reached == consumed, (
@@ -781,6 +788,9 @@ ANSWERED_READS: dict[str, dict[str, frozenset[str]]] = {
             }
         ),
     },
+    # Read off its source at main 03e7acf (CannObserv/broker#78): `rebuild`'s
+    # forward XRANGE and nothing else - the consumer reads in its group.
+    "provisioner": {"+xrange": frozenset({CONTENT_REVISIONS})},
 }
 
 #: The reads a service user is asked about, and how each is sent to a live
@@ -942,7 +952,8 @@ def test_a_producer_that_trims_nothing_holds_no_trim(users, user) -> None:
 
 @pytest.mark.parametrize("user", SERVICE_USERS)
 def test_a_service_publishes_through_one_selector(users, user) -> None:
-    """One `+xadd` selector per service, its streams and its queues together.
+    """One `+xadd` selector per service that produces, its streams and its
+    queues together; none for one that produces nothing.
 
     The publish set was split for one reason - `+xtrim` rode some of it and
     not the rest (broker#34 on archiver, broker#62's `content.process`,
@@ -953,6 +964,10 @@ def test_a_service_publishes_through_one_selector(users, user) -> None:
     """
     _root, selectors = split_rules(users[user])
     publishing = [selector for selector in selectors if "+xadd" in selector]
+    if user not in documented_producers().values():
+        # provisioner publishes nothing on the bus (CannObserv/broker#78).
+        assert not publishing, f"{user} produces nothing and holds {publishing}"
+        return
     assert len(publishing) == 1, f"{user} publishes through {len(publishing)} selectors"
     assert [rule for rule in publishing[0] if rule.startswith("+")] == ["+xadd"], (
         f"{user}'s publish selector grants more than +xadd: {publishing[0]}"
@@ -1068,6 +1083,52 @@ def test_processor_stanza_names_the_source_its_inventory_was_read_off(users) -> 
         assert needle in prose, f"processor's stanza does not name {needle}"
 
 
+# --- provisioner: content.revisions' read-only second consumer (CannObserv/broker#78) ---
+
+#: What provisioner issues, read off its source at main 03e7acf: co-core-aio's
+#: group consumer, `rebuild`'s XRANGE, redis-py's health-check PING, and the
+#: `+info` broker#43's root shape carries.
+PROVISIONER_COMMANDS = frozenset({*GROUP_CONSUMER_COMMANDS, "+xrange", "+info", "+ping"})
+
+#: The issue's first ask granted `+xlen` and `+xinfo|stream` as well; nothing
+#: issues either, so they are cut pending the owner's confirmation. The rest is
+#: what processor is withheld, plus every write: it publishes nothing.
+PROVISIONER_WITHHELD = frozenset(
+    {"+xlen", "+xinfo|stream", "+xinfo", "+xpending", "+xclaim", "+xread"}
+    | {"+xadd", "+xtrim", "+xdel", "+set", "+exists"}
+)
+
+
+def test_provisioner_can_name_content_revisions_and_nothing_else(users) -> None:
+    """One stream, by every route: no dead-letter queue (its owner's choice),
+    nothing it publishes, and no key on its root (broker#43's shape)."""
+    rules = users["provisioner"]
+    assert key_patterns(rules) == {CONTENT_REVISIONS}
+    assert not root_key_patterns(rules), f"provisioner's root names {root_key_patterns(rules)}"
+    assert not admits(key_patterns(rules), dlq_name(CONTENT_REVISIONS))
+
+
+def test_provisioner_holds_what_it_issues_and_no_more(users) -> None:
+    """Exact, both ways: the group commands in one consume selector, the
+    rebuild's XRANGE in a read selector of its own, `+info +ping` on the root."""
+    rules = users["provisioner"]
+    assert granted_commands(rules) == PROVISIONER_COMMANDS
+    assert not granted_commands(rules) & PROVISIONER_WITHHELD
+    for command in GROUP_CONSUMER_COMMANDS:
+        assert selector_patterns(rules, command) == {CONTENT_REVISIONS}, command
+    _root, selectors = split_rules(rules)
+    assert [r for s in selectors for r in s if r.startswith("+")].count("+xrange") == 1
+    assert ["+xrange", f"~{CONTENT_REVISIONS}"] in [list(s) for s in selectors]
+
+
+def test_provisioner_stanza_names_the_source_its_inventory_was_read_off(users) -> None:
+    """Read off source before it ran here, like processor's: the stanza says
+    so, names the commit, and names what was cut for its owner to confirm."""
+    prose = stanza("provisioner")
+    for needle in ("co-core-aio", "CannObserv/broker#78", "03e7acf", "+xlen", "+xinfo|stream"):
+        assert needle in prose, f"provisioner's stanza does not name {needle}"
+
+
 def test_observo_is_deleted_rather_than_retired(users) -> None:
     """`content.process`'s worker pool moved to processor (CannObserv/broker#75),
     and `observo` went with `ACL DELUSER`, not `off`: it never connected, and
@@ -1093,9 +1154,10 @@ def test_a_command_stream_has_one_probed_group_and_its_consumer_holds_the_group_
     """
     assert COMMAND_STREAMS, "co-core classified no stream as a command"
     for topic in COMMAND_STREAMS:
-        consumer = probed_consumer(topic)
-        assert consumer is not None, f"{topic} is a command stream the probe watches no group on"
-        groups = [c.pending_group for c in STREAM_CHECKS if c.topic == topic]
+        consumers = probed_consumers(topic)
+        assert len(consumers) == 1, f"{topic} is a command stream probed for {sorted(consumers)}"
+        (consumer,) = consumers
+        groups = [g.name for c in STREAM_CHECKS if c.topic == topic for g in c.groups]
         assert groups == [group_name(topic, consumer)], f"{topic} carries {groups}"
         rules = users[consumer]
         missing = [c for c in GROUP_CONSUMER_COMMANDS if not reaches(rules, c, topic)]
@@ -2186,6 +2248,42 @@ def test_processor_serves_the_processing_pair_and_is_refused_the_rest(tracked_ac
             refused()
 
 
+def test_provisioner_reads_its_group_and_is_refused_the_rest(tracked_acl_broker) -> None:
+    """The provisioner line exercised the way its consumer will: the group at
+    `$`, a blocking read, the reclaim and the ack; `rebuild`'s XRANGE; and the
+    health check. Every write is refused, and so is every read the ask listed
+    and the code does not issue (CannObserv/broker#78)."""
+    client = tracked_acl_broker("provisioner")
+    group = group_name(CONTENT_REVISIONS, "provisioner")
+    assert client.ping()
+    assert client.info("server")["redis_version"]
+    client.xgroup_create(CONTENT_REVISIONS, group, id="$", mkstream=True)
+    with _seeder(tracked_acl_broker) as seeder:
+        revision = seeder.xadd(CONTENT_REVISIONS, {"k": "v"})
+    ((_stream, [(delivered, _fields)]),) = client.xreadgroup(
+        group, "co-provisioner", {CONTENT_REVISIONS: ">"}, count=1, block=10
+    )
+    assert delivered == revision
+    client.xautoclaim(CONTENT_REVISIONS, group, "co-provisioner", min_idle_time=0, count=1)
+    assert client.xack(CONTENT_REVISIONS, group, revision) == 1
+    assert client.xrange(CONTENT_REVISIONS, min="-", max="+", count=100)
+
+    for refused in (
+        lambda: client.xadd(CONTENT_REVISIONS, {"k": "forged"}),
+        lambda: client.xadd(dlq_name(CONTENT_REVISIONS), {"k": "poison"}),
+        lambda: client.xtrim(CONTENT_REVISIONS, maxlen=0),
+        lambda: client.xdel(CONTENT_REVISIONS, revision),
+        lambda: client.xlen(CONTENT_REVISIONS),
+        lambda: client.xinfo_stream(CONTENT_REVISIONS),
+        lambda: client.xpending(CONTENT_REVISIONS, group),
+        lambda: client.xread({CONTENT_REVISIONS: "0-0"}, count=1),
+        lambda: client.xrange(CONTENT_BLOBS),
+        lambda: client.xreadgroup("provisioner.blobs", "c", {CONTENT_BLOBS: ">"}),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
+
+
 def test_watcher_issues_content_process_and_consumes_content_derived(tracked_acl_broker) -> None:
     """Watcher's half of the pair on redis's own matcher, ahead of
     CannObserv/watcher#325: the command it issues, the cap it is refused, the
@@ -2249,9 +2347,12 @@ def test_replicator_drains_content_persist_dlq_without_trimming_it(tracked_acl_b
             refused()
 
 
-@pytest.mark.parametrize("topic", sorted(documented_group_consumers()))
+@pytest.mark.parametrize(
+    ("topic", "consumer"),
+    sorted((t, c) for t, cs in documented_group_consumers().items() for c in cs),
+)
 def test_only_the_consumer_can_create_and_take_delivery_in_its_group(
-    fresh_acl_broker, topic
+    fresh_acl_broker, topic, consumer
 ) -> None:
     """The swallow broker#43 measured, refused by redis; the consumer served.
 
@@ -2262,9 +2363,9 @@ def test_only_the_consumer_can_create_and_take_delivery_in_its_group(
     refused first the early `XGROUP CREATE` at `$` under the consumer's own
     name, which would have skipped the backlog the consumer boots to, and then
     every group command on the live group; the consumer is delivered the entry
-    the intruder could not take.
+    the intruder could not take. Once per consuming service, so each of
+    `content.revisions`' two groups is asked (CannObserv/broker#78).
     """
-    consumer = documented_group_consumers()[topic]
     producer = documented_producers()[topic]
     group = group_name(topic, consumer)
     admin = fresh_acl_broker("acladmin")

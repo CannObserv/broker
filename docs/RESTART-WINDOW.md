@@ -55,7 +55,7 @@ be done one service at a time with a rollback after each.
 | | |
 |---|---|
 | **Expected downtime** | under a minute - one `systemctl restart` |
-| **Blast radius** | every participant loses the bus for that minute - four since Processor began consuming on 2026-10-02 (broker#75); Processor's reconnect across a broker restart is untested |
+| **Blast radius** | every participant loses the bus for that minute - four since Processor began consuming on 2026-10-02 (broker#75), five once Provisioner goes live (broker#78); Processor's reconnect across a broker restart is untested |
 | **Reversible** | yes, at every step |
 | **Data touched** | none by steps 1b to 1d and 2 to 4. Step 1a-bis rewrites the AOF and discards its history, deliberately, after a fresh snapshot has been shipped off-node |
 

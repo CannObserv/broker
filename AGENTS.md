@@ -178,8 +178,9 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - #41 and #43, live 2026-10-06: no service but archiver holds `+xtrim`, and
   archiver, watcher and replicator consume through a selector naming only their
   grouped streams, every read a selector, `+info +ping` alone on the root
-  (processor's root already named only its own stream and queue). Next on that
-  shape: #78 (the infrastructure service's read-only consumer).
+  (processor's root already named only its own stream and queue). #78
+  (provisioner, `content.revisions`' read-only second consumer) was minted on
+  that shape, 2026-10-07; its go-live is the operator's.
 - The history of #62, #64 (`content.persist` live 2026-10-01, #76), #75, #53
   and archiver#251: [README.md](README.md), *Provenance*.
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
