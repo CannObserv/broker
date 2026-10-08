@@ -21,11 +21,13 @@ other three.
 
 Provisioner's is a sixth, **declared, not yet connected** (CannObserv/broker#78):
 `co-provisioner`, on the tailnet as `provisioner`, `tag:provisioner`, since
-2026-10-07, per its owner's VM record. **Not yet a peer from here** - on
-2026-10-07 `tailscale status` on `co-broker` did not list it, since no policy
-rule admits `tag:provisioner` to `tag:broker` yet. That rule is the first of its
-go-live steps; its address and path are verified, and its latency rows added,
-once it connects.
+2026-10-07, admitted to `tag:broker` on 6379 by a policy rule the same day. Its
+`PING` as `provisioner` answered that evening (CannObserv/broker#78, step 4),
+but the consumer is not enabled: it has no source to watch until the Tailscale
+feed is registered (CannObserv/archiver#317 and the issues ahead of it). From
+`co-broker` the path is relayed so far - 20 of 20 via DERP (sea), p50 16 ms,
+2026-10-07, before any traffic, as `co-processor`'s was - and its latency rows
+are taken once the consumer runs.
 
 | Service | Tailnet node | VM | Region | Tailnet address | Path to broker |
 |---|---|---|---|---|---|
@@ -33,7 +35,7 @@ once it connects.
 | `watcher` | `watcher` | `co-watcher` | pdx | `100.66.24.24` | direct |
 | `replicator` | `replicator` | `co-replicator` | pdx | `100.114.136.20` | direct |
 | `processor` | `co-processor` *(consuming since 2026-10-02, CannObserv/processor#1)* | `co-processor` | not recorded | `100.110.22.56` | direct - a hairpin through the exe.dev NAT both VMs share, both ways since the service runs (CannObserv/processor#15, *Latency, with the path beside every number* below) |
-| `provisioner` | `provisioner` *(declared, not connected - CannObserv/broker#78)* | `co-provisioner` | pdx | `100.105.197.95` | not yet measured - no policy rule admits it yet |
+| `provisioner` | `provisioner` *(authenticated 2026-10-07, consumer not yet enabled - CannObserv/broker#78)* | `co-provisioner` | pdx | `100.105.197.95` | DERP (sea) so far, 20 of 20 from here before any traffic |
 | broker | `broker` | `co-broker` | pdx | `100.97.91.19` | - |
 
 **This table is checked against the live broker.** `CLIENT LIST` reports each

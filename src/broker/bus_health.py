@@ -381,8 +381,9 @@ PROVISIONER_GROUP = group_name(CONTENT_REVISIONS, "provisioner")
 PROVISIONER_TEXT_WAIT_SECONDS = 1800.0
 """How long the derived text an entry names can legitimately lag the entry.
 
-**PROVISIONAL: the consumer's owner supplies this number, and has not yet.**
-Until it does it mirrors ``DEFAULT_PROCESS_COMMAND_TIMEOUT_SECONDS`` in
+**The owner's number, chosen 2026-10-07 on CannObserv/broker#78**: it has no
+measurement of Processor's lag to put in its place, so it kept the value that
+mirrors ``DEFAULT_PROCESS_COMMAND_TIMEOUT_SECONDS`` in
 watcher's ``src/core/process_commands.py``: past it Watcher re-issues a process
 command Processor has not answered, so a text later than that is a stall by
 Watcher's own reckoning. The lag exists until CannObserv/watcher#326, when the
