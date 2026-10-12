@@ -3,7 +3,7 @@
 Operational code for the Cannabis Observer **change-bus broker** - the Redis
 Streams instance the cluster's services publish to and consume from: four,
 Processor the newest, consuming since 2026-10-02 (broker#62, #75), and a fifth,
-Provisioner, declared ahead of its go-live (broker#78).
+Provisioner, consuming since 2026-10-12 (broker#78).
 
 This repo owns the broker's *tuning*, its *monitoring*, and the *cluster stream
 inventory*. It owns no application logic and no data model. Nothing here is
@@ -96,8 +96,10 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   read off its source, live on the digest of a discarded value until its
   hash-only handoff; no DLQ by its owner's choice. The probe grew several groups
   per stream (`GroupCheck`), and this group's pending rule is an entry age, not
-  the two-tick rule; the group is dormant until first seen. Go-live is the
-  operator's list on the issue.
+  the two-tick rule; the group is dormant until first seen. Steps 1-4 of the
+  operator's go-live list ran 2026-10-07; the consumer connected 2026-10-12,
+  once the Tailscale feed was registered (archiver#317), and the probe armed
+  its group at the next tick, with no commit.
 - CannObserv/broker#64 - `content.persist` (archiver -> replicator, cannobserv
   #493), provisioned 2026-09-26 ahead of both ends: archiver's `+xadd` in a
   selector only, replicator's third worker pool, `replicator.persist` probed,

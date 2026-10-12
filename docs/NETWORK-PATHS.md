@@ -19,15 +19,15 @@ rule the same day. It runs Tailscale with `--accept-dns=true` since
 CannObserv/processor#8, so its bus URL names the broker as `broker`, like the
 other three.
 
-Provisioner's is a sixth, **declared, not yet connected** (CannObserv/broker#78):
+Provisioner's is a sixth, consuming since 2026-10-12 (CannObserv/broker#78):
 `co-provisioner`, on the tailnet as `provisioner`, `tag:provisioner`, since
 2026-10-07, admitted to `tag:broker` on 6379 by a policy rule the same day. Its
-`PING` as `provisioner` answered that evening (CannObserv/broker#78, step 4),
-but the consumer is not enabled: it has no source to watch until the Tailscale
-feed is registered (CannObserv/archiver#317 and the issues ahead of it). From
-`co-broker` the path is relayed so far - 20 of 20 via DERP (sea), p50 16 ms,
-2026-10-07, before any traffic, as `co-processor`'s was - and its latency rows
-are taken once the consumer runs.
+`PING` as `provisioner` answered that evening; its consumer connected about
+20:34Z on 2026-10-12, once the Tailscale feed was registered
+(CannObserv/archiver#317), and created `provisioner.revisions` at `$`. From
+`co-broker` the path was relayed before any traffic - 20 of 20 via DERP (sea),
+p50 16 ms, 2026-10-07 - and direct once the consumer ran, as `co-processor`'s
+went.
 
 | Service | Tailnet node | VM | Region | Tailnet address | Path to broker |
 |---|---|---|---|---|---|
@@ -35,7 +35,7 @@ are taken once the consumer runs.
 | `watcher` | `watcher` | `co-watcher` | pdx | `100.66.24.24` | direct |
 | `replicator` | `replicator` | `co-replicator` | pdx | `100.114.136.20` | direct |
 | `processor` | `co-processor` *(consuming since 2026-10-02, CannObserv/processor#1)* | `co-processor` | not recorded | `100.110.22.56` | direct - a hairpin through the exe.dev NAT both VMs share, both ways since the service runs (CannObserv/processor#15, *Latency, with the path beside every number* below) |
-| `provisioner` | `provisioner` *(authenticated 2026-10-07, consumer not yet enabled - CannObserv/broker#78)* | `co-provisioner` | pdx | `100.105.197.95` | DERP (sea) so far, 20 of 20 from here before any traffic |
+| `provisioner` | `provisioner` *(consuming since 2026-10-12, CannObserv/broker#78)* | `co-provisioner` | pdx | `100.105.197.95` | direct, `via 44.253.177.50:41641` from here since the consumer runs; DERP (sea) before it |
 | broker | `broker` | `co-broker` | pdx | `100.97.91.19` | - |
 
 **This table is checked against the live broker.** `CLIENT LIST` reports each
@@ -62,6 +62,7 @@ Client-side, from each participant's own host, as its own ACL user:
 | `replicator` -> broker | **4.05 ms** (n 6, 3.96-10.48) | **0.47 ms** (n 30, 0.44-0.56) | direct | 2026-09-11, `co-replicator` (CannObserv/replicator#88) |
 | `watcher` -> broker | **7.31 ms** (n 6, 5.17-9.94) | **1.55 ms** (n 30, 0.57-2.09) | direct | 2026-09-15, `co-watcher` (CannObserv/watcher#296) |
 | `archiver` -> broker | not taken | not taken | direct | - |
+| `provisioner` -> broker | not taken | not taken | direct | - (only `co-provisioner` can take these, as for archiver) |
 | `processor` -> broker | **4.5 ms** (n 5, 4.1-9.5) | **0.51 ms** (n 20, p95 0.66) | direct - a NAT hairpin, `via 16.145.19.221:13487` | 2026-10-03 18:45Z, `co-processor`, redis-py in the service's venv (CannObserv/broker#75); the service's own `XADD content.derived` took 2.0 ms (n 1, the first command's `publish_ms`) |
 
 Network-side, one vantage point and one method for all three, so the rows are
@@ -74,6 +75,7 @@ x20 from `co-broker`, 2026-09-15 21:01Z:
 | to `replicator` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 |
 | to `watcher` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 |
 | to `co-processor` | 1 ms | **1 ms** | 3 ms | direct, 20 of 20 - 2026-10-04 02:21Z, with the service running; DERP (sea) 20 of 20 at each of three runs before it, 2026-09-30 to 2026-10-02 |
+| to `provisioner` | 1 ms | **1 ms** | 1 ms | direct, 20 of 20 - 2026-10-12 20:38Z, with the consumer running; DERP (sea) 20 of 20, p50 16 ms, at two runs before it, 2026-10-07 |
 
 Archiver's client-side cold and warm cells were never taken with the method the
 other two used; its network path is confirmed direct above, and a Redis `PING`

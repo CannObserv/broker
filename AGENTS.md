@@ -180,7 +180,7 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   grouped streams, every read a selector, `+info +ping` alone on the root
   (processor's root already named only its own stream and queue). #78
   (provisioner, `content.revisions`' read-only second consumer) was minted on
-  that shape, 2026-10-07; its go-live is the operator's.
+  that shape, 2026-10-07, and consumes since 2026-10-12.
 - The history of #62, #64 (`content.persist` live 2026-10-01, #76), #75, #53
   and archiver#251: [README.md](README.md), *Provenance*.
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
