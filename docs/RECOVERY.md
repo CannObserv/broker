@@ -49,7 +49,7 @@ was recovered by replaying that history; that was margin, not design.
 | **Retained** | 30 days, by the **bucket's lifecycle rule**. The node's identity cannot delete |
 | **RPO** | the backup interval plus the save interval: under two hours worst case, about an hour typically |
 | **Credential** | `/etc/broker/co-broker-backup.json` (0400 root:root), `roles/storage.objectCreator` + `roles/storage.objectViewer` on that one bucket. **No Redis credential** - the job reads files, and a digest is not one (below) |
-| **Watched by** | the probe: `backup` findings (never completed, last attempt failed, last success too old) and `persistence` findings (`rdb_last_bgsave_status` and friends, and changes left unsaved for over three hours - the case where every hourly backup is the same stale file, judged from the server because only it can tell idle from broken), both reaching notifier |
+| **Watched by** | the probe: `backup` findings (never completed, last attempt failed, last success too old) and `persistence` findings (`rdb_last_bgsave_status` and friends, and changes left unsaved for over three hours - the case where every hourly backup is the same stale file, judged from the server because only it can tell idle from broken), both reaching co-status through the check-in |
 
 It holds no opinion on the AOF (never shipped - point in time is the contract),
 on configuration (this repo is the copy), or on secrets (step 0).
