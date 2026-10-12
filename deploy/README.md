@@ -591,14 +591,14 @@ X-API-Key: <key>
 broker#84): the sorted, duplicate-free `check:subject` of this tick's findings,
 `[]` on `ok`. Since 2026-10-09 co-status reports a run of `alert` check-ins
 once (`co-broker` has no `renotify_seconds` until CannObserv/status#39 sets a
-daily reminder), sends *has cleared* on the first
-`ok`, and opens a new fault - reporting at once, with no *cleared* for the old
-one - whenever this value changes. So a finding that arrives mid-fault reports,
-and so does one that clears while another stays open: that smaller report is
-the only notice a partial clear gets. A key that only grew until the next `ok`
-would hear additions alone, need its own state, and stay silent through a
-finding's flap after its first appearance; a flap here costs at most one
-report a tick, the rate every `alert` had before 2026-10-09.
+daily reminder), sends *has cleared* on the first `ok`, and opens a new fault -
+reporting at once, with no *cleared* for the old one - whenever this value
+changes. So a finding that arrives mid-fault reports, and so does one that
+clears while another stays open: that smaller report is the only notice a
+partial clear gets. A key that only grew until the next `ok` would hear
+additions alone, need its own state, and stay silent through a finding's flap
+after its first appearance; a flap here costs at most one report a tick, the
+rate every `alert` had before 2026-10-09.
 
 The monitor lived in notifier until CannObserv/notifier#83 moved dead-man's
 timers into co-status (`CannObserv/status`, tailnet node `status`). co-status
@@ -691,8 +691,9 @@ applied to an HTTP header).
 
 `last_checkin_at`, `last_status` and `last_variables` should reflect the most
 recent tick, and `fault_key` the last `alert`'s `metadata.fault` while a fault is
-open (`null` after an `ok`). This is the only end-to-end confirmation - a clean journald line
-proves the POST returned 2xx, not that co-status recorded anything useful.
+open (`null` after an `ok`). This is the only end-to-end confirmation - a clean
+journald line proves the POST returned 2xx, not that co-status recorded anything
+useful.
 
 **`enabled: false` means the dead-man's timer is not running.** co-status's
 sweep selects enabled monitors only, so a disabled monitor records check-ins and
