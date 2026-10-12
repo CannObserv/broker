@@ -2819,6 +2819,146 @@ async def test_checkin_reports_alert_and_carries_the_findings(
     assert {"check", "subject", "message"} <= finding.keys()
 
 
+# --- the fault key (CannObserv/broker#84, CannObserv/status#28) ---
+#
+# co-status reports a run of `alert` check-ins once, and `co-broker` has no
+# `renotify_seconds`, so without a key a finding that arrives while another is
+# open says nothing until everything clears. `metadata.fault` is the one value
+# co-status compares: a different one opens a new fault and reports at once.
+# The same one must stay the same, or every tick opens a "new fault" and pages.
+
+
+async def test_the_fault_key_holds_while_only_the_message_changes(
+    fake_redis, tmp_path, monkeypatch, checkin_env
+) -> None:
+    """A DLQ's depth is in its message and changes as it fills. The fault does
+    not, and a key that moved with it would report every tick - worse than no
+    key at all. A second queue IS a new finding, and has to move it."""
+    monkeypatch.setattr(bus_health.logger, "warning", MagicMock())
+    state_path = tmp_path / "state.json"
+
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+    await bus_health.run_once(fake_redis, state_path=state_path, disk_usage=_healthy_disk)
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+    await bus_health.run_once(fake_redis, state_path=state_path, disk_usage=_healthy_disk)
+    await fake_redis.xadd("content.revisions.dlq", {"k": "v"})
+    await bus_health.run_once(fake_redis, state_path=state_path, disk_usage=_healthy_disk)
+
+    first, second, third = (call["data"] for call in checkin_env)
+    assert first["variables"]["findings"] != second["variables"]["findings"]
+    assert first["metadata"]["fault"] == second["metadata"]["fault"] == ["dlq:content.fetch.dlq"]
+    assert third["metadata"]["fault"] == ["dlq:content.fetch.dlq", "dlq:content.revisions.dlq"]
+
+
+async def test_the_fault_key_is_sorted_and_duplicate_free(checkin_env) -> None:
+    """A set, sorted: the collectors' order is not the fault's identity, and two
+    findings on one check and subject are one entry. No collector emits such a
+    pair today; the key must not depend on that. The message is never in it."""
+    await bus_health.post_checkin(
+        [
+            bus_health.Finding(check="backup", subject="rdb", message="failed"),
+            bus_health.Finding(check="dlq", subject="content.fetch.dlq", message="depth 1"),
+            bus_health.Finding(check="backup", subject="rdb", message="stale"),
+        ]
+    )
+
+    assert checkin_env[0]["data"]["metadata"]["fault"] == [
+        "backup:rdb",
+        "dlq:content.fetch.dlq",
+    ]
+
+
+async def test_an_ok_checkin_carries_an_empty_fault_key(checkin_env) -> None:
+    """co-status ends the fault on `ok` and reads no key from it; empty says
+    the same thing on the wire, and keeps the payload one shape."""
+    await bus_health.post_checkin([])
+
+    sent = checkin_env[0]["data"]
+    assert sent["status"] == "ok"
+    assert sent["metadata"] == {"fault": []}
+
+
+# Every expression a `Finding`'s subject may be built from: a fixed resource or
+# INFO field, a configured topic, or a group name derived through co-core. Each
+# names a thing, never a reading of it.
+_STABLE_SUBJECTS = {
+    "'redis'",
+    "'rdb'",
+    "'rdb_changes_since_last_save'",
+    "DISK_PATH",
+    "check.topic",
+    "f'{check.topic}/{group.name}'",
+}
+# A bare name is only as stable as what binds it in the function that builds the
+# Finding: a `*.dlq` key the scan found or the state file named, a group's
+# topic/name, an INFO field from a fixed tuple.
+_STABLE_BINDINGS = {
+    "subject": {"= f'{check.topic}/{group.name}'"},
+    "topic": {
+        "= _decode(key)",
+        "= state_key.removeprefix(prefix)",
+        "param of _evaluate_dlq_continuity",  # its one caller passes _decode(key)
+    },
+    "field": {"in _PERSISTENCE_STATUS_FIELDS"},
+}
+
+
+def _bindings(function: ast.AST, name: str) -> set[str]:
+    found = set()
+    for node in ast.walk(function):
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+                found.add(f"= {ast.unparse(node.value)}" if node.value else "= <unbound>")
+        elif isinstance(node, ast.For | ast.AsyncFor | ast.comprehension):
+            if any(isinstance(t, ast.Name) and t.id == name for t in ast.walk(node.target)):
+                found.add(f"in {ast.unparse(node.iter)}")
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            arguments = node.args
+            every = arguments.posonlyargs + arguments.args + arguments.kwonlyargs
+            if any(a.arg == name for a in every):
+                found.add(f"param of {getattr(node, 'name', '<lambda>')}")
+    return found
+
+
+def test_every_finding_subject_is_an_identity_not_a_reading() -> None:
+    """The fault key is `check:subject`, so a subject that carried an id, an
+    age or a count would make every tick a new fault and page (#84).
+    Structural, over every `Finding(...)` in the module, keyword or positional:
+    a new site has to build its subject from one of these, or say here why it
+    is stable."""
+    source = Path(bus_health.__file__).read_text()
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    sites = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        named = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", None)
+        if named != "Finding":
+            continue
+        (subject,) = [k.value for k in node.keywords if k.arg == "subject"] or node.args[1:2]
+        function = node
+        while not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef | ast.Module):
+            function = parents[function]
+        sites.append((node.lineno, subject, function))
+
+    # Every textual call is one the walk understood, so none escapes by its form.
+    assert len(sites) == len(re.findall(r"\bFinding\(", source))
+    for lineno, subject, function in sites:
+        spelled = ast.unparse(subject)
+        if spelled in _STABLE_SUBJECTS:
+            continue
+        if isinstance(subject, ast.Name):
+            bindings = _bindings(function, subject.id)
+            assert bindings, f"line {lineno}: {spelled} is bound outside its function"
+            assert bindings <= _STABLE_BINDINGS.get(subject.id, set()), (lineno, bindings)
+        else:
+            raise AssertionError(f"line {lineno}: subject {spelled}")
+
+
 def test_the_checkin_url_cannot_be_pointed_at_the_dev_endpoint() -> None:
     """Structural, and it is the reason the base URL is a constant rather than
     configuration.
@@ -3298,6 +3438,26 @@ def test_persistence_recent_save_with_pending_changes_is_not_overdue() -> None:
         "rdb_last_save_time": int((_T0 - timedelta(minutes=10)).timestamp()),
     }
     assert evaluate_persistence(info, now=_T0) == []
+
+
+def test_each_persistence_condition_is_its_own_fault() -> None:
+    """The fault key is `check:subject` (#84). On one shared `redis` subject, an
+    AOF write going `err` - a broker about to refuse writes - while an overdue
+    save was already open would not move the key, and would report nothing.
+    Each condition names the INFO field it fired on."""
+    info = {
+        "rdb_last_bgsave_status": "err",
+        "aof_last_write_status": "err",
+        "aof_last_bgrewrite_status": "err",
+        "rdb_changes_since_last_save": 5,
+        "rdb_last_save_time": int((_T0 - timedelta(hours=4)).timestamp()),
+    }
+    assert [f.subject for f in evaluate_persistence(info, now=_T0)] == [
+        "rdb_last_bgsave_status",
+        "aof_last_write_status",
+        "aof_last_bgrewrite_status",
+        "rdb_changes_since_last_save",
+    ]
 
 
 async def test_run_once_reports_the_backup_when_told_where_its_state_is(

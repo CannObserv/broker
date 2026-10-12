@@ -583,8 +583,21 @@ Every tick, the probe posts to co-status whether or not it found anything:
 ```
 POST http://status:9000/api/v1/monitors/<id>/checkin
 X-API-Key: <key>
-{"status": "ok" | "alert", "variables": {"source", "finding_count", "findings"}}
+{"status": "ok" | "alert", "variables": {"source", "finding_count", "findings"},
+ "metadata": {"fault": ["<check>:<subject>", ...]}}
 ```
+
+**`metadata.fault` is the one field co-status reads** (CannObserv/status#28,
+broker#84): the sorted, duplicate-free `check:subject` of this tick's findings,
+`[]` on `ok`. Since 2026-10-09 co-status reports a run of `alert` check-ins
+once (`co-broker` has no `renotify_seconds`), sends *has cleared* on the first
+`ok`, and opens a new fault - reporting at once, with no *cleared* for the old
+one - whenever this value changes. So a finding that arrives mid-fault reports,
+and so does one that clears while another stays open: that smaller report is
+the only notice a partial clear gets. A key that only grew until the next `ok`
+would hear additions alone, need its own state, and stay silent through a
+finding's flap after its first appearance; a flap here costs at most one
+report a tick, the rate every `alert` had before 2026-10-09.
 
 The monitor lived in notifier until CannObserv/notifier#83 moved dead-man's
 timers into co-status (`CannObserv/status`, tailnet node `status`). co-status
@@ -676,14 +689,16 @@ expands into `curl`'s `argv`, readable from `ps` for as long as it runs.
 applied to an HTTP header).
 
 `last_checkin_at`, `last_status` and `last_variables` should reflect the most
-recent tick. This is the only end-to-end confirmation - a clean journald line
+recent tick, and `fault_key` the last `alert`'s `metadata.fault` while a fault is
+open (`null` after an `ok`). This is the only end-to-end confirmation - a clean journald line
 proves the POST returned 2xx, not that co-status recorded anything useful.
 
 **`enabled: false` means the dead-man's timer is not running.** co-status's
 sweep selects enabled monitors only, so a disabled monitor records check-ins and
 reports state while alarming on nothing when they stop. Its check-in route does
-*not* gate on the flag, so `status: alert` still dispatches - which makes the
-failure asymmetric and easy to miss: findings reach a person, silence does not.
+*not* gate on the flag, so an `alert` that opens a fault still dispatches -
+which makes the failure asymmetric and easy to miss: findings reach a person,
+silence does not.
 Silence is the half this probe exists for. The cutover relies on the same
 asymmetry: the monitor is imported disabled, the first check-in lands on it,
 and only then is it enabled.

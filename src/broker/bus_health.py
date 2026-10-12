@@ -1918,10 +1918,13 @@ def evaluate_persistence(info: dict, *, now: datetime) -> list[Finding]:
     server without the section (fakeredis), a probe limitation rather than a
     fault.
     """
+    # Each condition is its own subject, named for the INFO field it fired on:
+    # on one shared subject, an AOF write failing while an overdue save was
+    # already open would not move the fault key, and would report nothing (#84).
     findings = [
         Finding(
             check="persistence",
-            subject="redis",
+            subject=field,
             message=f"{field} is {info[field]!r} - see `INFO persistence` and the redis-server "
             "journal; while it stays that way the on-disk copy is not being refreshed",
         )
@@ -1936,7 +1939,7 @@ def evaluate_persistence(info: dict, *, now: datetime) -> list[Finding]:
             findings.append(
                 Finding(
                     check="persistence",
-                    subject="redis",
+                    subject="rdb_changes_since_last_save",
                     message=f"{changes} changes unsaved for {_hours(unsaved_for)} (warn over "
                     f"{_hours(SAVE_OVERDUE_WARN_SECONDS)}) - the save points are not firing, "
                     "so dump.rdb and every backup shipped since are the same stale file",
@@ -2575,6 +2578,12 @@ async def post_checkin(findings: list[Finding]) -> None:
                 {"check": f.check, "subject": f.subject, "message": f.message} for f in findings
             ],
         },
+        # The one value co-status compares: a different one is a new fault and
+        # reports at once (CannObserv/broker#84, CannObserv/status#28). Never the
+        # message, which carries ages and depths and would report every tick.
+        # A finding that clears while another stays open moves it too: that
+        # report is the only word the operator gets that the fault shrank.
+        "metadata": {"fault": sorted({f"{f.check}:{f.subject}" for f in findings})},
     }
     try:
         status = await asyncio.to_thread(
