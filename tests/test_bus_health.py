@@ -2954,8 +2954,9 @@ def test_every_finding_subject_is_an_identity_not_a_reading() -> None:
         named = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", None)
         if named != "Finding":
             continue
-        (subject,) = [k.value for k in node.keywords if k.arg == "subject"] or node.args[1:2]
-        sites.append((node.lineno, subject, enclosing(node)))
+        candidates = [k.value for k in node.keywords if k.arg == "subject"] or node.args[1:2]
+        assert len(candidates) == 1, f"line {node.lineno}: no subject the guard can read"
+        sites.append((node.lineno, candidates[0], enclosing(node)))
 
     # Every textual call is one the walk understood, so none escapes by its form.
     assert len(sites) == len(re.findall(r"\bFinding\(", source))
