@@ -522,7 +522,11 @@ STATUS_TIMEOUT_SECONDS = 10.0
 @dataclass(frozen=True)
 class Finding:
     """One WARN-worthy observation; ``check`` names the probe, ``subject`` the
-    stream/group/resource it fired on."""
+    stream/group/resource or INFO field it fired on.
+
+    ``subject`` is an identity, never a reading: ``check:subject`` is the
+    co-status fault key (CannObserv/broker#84), so an id, age or count in it
+    would make every tick a new fault. Readings go in ``message``."""
 
     check: str
     subject: str
