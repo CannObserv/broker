@@ -2897,7 +2897,8 @@ _STABLE_BINDINGS = {
     "topic": {
         "= _decode(key)",
         "= state_key.removeprefix(prefix)",
-        "param of _evaluate_dlq_continuity",  # its one caller passes _decode(key)
+        # Only as good as its callers' bindings, which the test checks in turn.
+        "param of _evaluate_dlq_continuity",
     },
     "field": {"in _PERSISTENCE_STATUS_FIELDS"},
 }
@@ -2931,6 +2932,20 @@ def test_every_finding_subject_is_an_identity_not_a_reading() -> None:
     tree = ast.parse(source)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
 
+    def enclosing(node: ast.AST) -> ast.AST:
+        while not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Module):
+            node = parents[node]
+        return node
+
+    def calls_to(name: str) -> list[ast.Call]:
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == name
+        ]
+
     sites = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -2940,10 +2955,7 @@ def test_every_finding_subject_is_an_identity_not_a_reading() -> None:
         if named != "Finding":
             continue
         (subject,) = [k.value for k in node.keywords if k.arg == "subject"] or node.args[1:2]
-        function = node
-        while not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef | ast.Module):
-            function = parents[function]
-        sites.append((node.lineno, subject, function))
+        sites.append((node.lineno, subject, enclosing(node)))
 
     # Every textual call is one the walk understood, so none escapes by its form.
     assert len(sites) == len(re.findall(r"\bFinding\(", source))
@@ -2955,6 +2967,28 @@ def test_every_finding_subject_is_an_identity_not_a_reading() -> None:
             bindings = _bindings(function, subject.id)
             assert bindings, f"line {lineno}: {spelled} is bound outside its function"
             assert bindings <= _STABLE_BINDINGS.get(subject.id, set()), (lineno, bindings)
+            # A parameter passes the question to every caller: each must hand
+            # over the same name, bound there to something stable itself.
+            for binding in bindings:
+                if not binding.startswith("param of "):
+                    continue
+                callee = binding.removeprefix("param of ")
+                (definition,) = [
+                    n
+                    for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == callee
+                ]
+                position = [a.arg for a in definition.args.args].index(subject.id)
+                callers = calls_to(callee)
+                assert callers, f"{callee} has no caller to check"
+                for call in callers:
+                    passed = [k.value for k in call.keywords if k.arg == subject.id] or call.args[
+                        position : position + 1
+                    ]
+                    assert len(passed) == 1 and isinstance(passed[0], ast.Name), call.lineno
+                    upstream = _bindings(enclosing(call), passed[0].id)
+                    allowed = _STABLE_BINDINGS.get(passed[0].id, set())
+                    assert upstream and upstream <= allowed - {binding}, (call.lineno, upstream)
         else:
             raise AssertionError(f"line {lineno}: subject {spelled}")
 
