@@ -372,26 +372,29 @@ PROVISIONER_GROUP = group_name(CONTENT_REVISIONS, "provisioner")
 #
 # provisioner keeps no dead-letter queue by its owner's choice: an entry it
 # cannot process stays pending, unacknowledged, and the alarm for it is this
-# probe's. The two-tick rule would fire in normal operation - an entry whose
-# text Processor has not written yet is held on purpose and reclaimed later -
-# so its group alarms on the AGE OF ITS OLDEST PENDING ENTRY instead, past the
-# longest an entry can legitimately be held. Three terms, each mirrored with its
-# movers, summed below.
+# probe's. The two-tick rule would fire in normal operation - an entry that
+# fails transiently is held on purpose and reclaimed a window later - so its
+# group alarms on the AGE OF ITS OLDEST PENDING ENTRY instead, past the longest
+# an entry can legitimately be held. Three terms, each mirrored with its movers,
+# summed below.
 
-PROVISIONER_TEXT_WAIT_SECONDS = 1800.0
+PROVISIONER_TEXT_WAIT_SECONDS = 0.0
 """How long the derived text an entry names can legitimately lag the entry.
 
-**The owner's number, chosen 2026-10-07 on CannObserv/broker#78**: it has no
-measurement of Processor's lag to put in its place, so it kept the value that
-mirrors ``DEFAULT_PROCESS_COMMAND_TIMEOUT_SECONDS`` in
-watcher's ``src/core/process_commands.py``: past it Watcher re-issues a process
-command Processor has not answered, so a text later than that is a stall by
-Watcher's own reckoning. The lag exists until CannObserv/watcher#326, when the
-revision stops preceding Processor's write.
+**Zero, the owner's number since 2026-10-12** (CannObserv/broker#78). Since
+CannObserv/watcher#326 Watcher publishes the revision only after Processor's
+``content.derived`` fact, and Processor stores the text before it publishes
+(CannObserv/processor#29: store, publish, ack) on a store read-after-write
+consistent. So the text exists before the entry does, and the consumer's
+``object_missing`` is a fault, not a wait. It was 1800 s while the revision
+could precede the write: Watcher's re-issue timeout, kept for want of a
+measurement.
 
-**Movers, which no commit records:** ``WATCHER_PROCESS_COMMAND_TIMEOUT_SECONDS``
-in ``/etc/watcher/.env``. Replaced by the owner's number when it is posted on
-CannObserv/broker#78."""
+**Movers, which no commit records:** ``WATCHER_EXTRACT_MODE`` in
+``/etc/watcher/.env``. #326's rollback, ``shadow`` then ``local``, publishes
+the revision from Watcher's own extraction again, ahead of Processor's write,
+and stays available until CannObserv/watcher#350 deletes the variable. A
+rollback brings the lag back, and this term with it."""
 
 PROVISIONER_RECLAIM_MIN_IDLE_SECONDS = 600.0
 """Mirrors ``reclaim_min_idle_ms`` (600 000) in provisioner's settings: an entry

@@ -724,7 +724,7 @@ def test_content_persist_is_a_never_trimmed_command_stream_with_one_pool() -> No
 _PROVISIONER = GroupCheck(
     "provisioner.revisions",
     warn_undelivered_age_seconds=300.0,
-    warn_pending_entry_age_seconds=2460.0,
+    warn_pending_entry_age_seconds=660.0,
 )
 _REVISIONS = StreamCheck(CONTENT_REVISIONS, groups=(_PROVISIONER,))
 
@@ -768,7 +768,10 @@ def test_the_provisioner_threshold_is_its_mirrored_terms_summed() -> None:
         + bus_health.PROVISIONER_RECLAIM_MIN_IDLE_SECONDS
         + bus_health.PROVISIONER_RECLAIM_INTERVAL_SECONDS
     )
-    assert bus_health.PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS == 2460.0
+    # The owner's hold window is 0 since watcher#326: the text is stored before
+    # the revision is published (CannObserv/broker#78, 2026-10-12).
+    assert bus_health.PROVISIONER_TEXT_WAIT_SECONDS == 0.0
+    assert bus_health.PROVISIONER_WARN_PENDING_ENTRY_AGE_SECONDS == 660.0
     for name in ("TEXT_WAIT", "RECLAIM_MIN_IDLE", "RECLAIM_INTERVAL"):
         doc = _constant_docstring(f"PROVISIONER_{name}_SECONDS")
         assert "**Movers, which no commit records:**" in doc, name
@@ -776,7 +779,7 @@ def test_the_provisioner_threshold_is_its_mirrored_terms_summed() -> None:
 
 def test_a_held_entry_younger_than_the_hold_is_quiet() -> None:
     now_ms = 10_000_000
-    oldest = bus_health.OldestPending(f"{now_ms - 2_000_000}-0", "co-provisioner", 4)
+    oldest = bus_health.OldestPending(f"{now_ms - 600_000}-0", "co-provisioner", 4)
     assert (
         bus_health.evaluate_pending_age(
             _REVISIONS, _PROVISIONER, oldest=oldest, pending=1, now_ms=now_ms
@@ -788,13 +791,13 @@ def test_a_held_entry_younger_than_the_hold_is_quiet() -> None:
 def test_an_entry_held_past_the_hold_is_the_stuck_entry_alarm() -> None:
     """The alarm the owner chose in place of a dead-letter queue."""
     now_ms = 10_000_000
-    oldest = bus_health.OldestPending(f"{now_ms - 2_461_000}-0", "co-provisioner", 5)
+    oldest = bus_health.OldestPending(f"{now_ms - 661_000}-0", "co-provisioner", 5)
     (finding,) = bus_health.evaluate_pending_age(
         _REVISIONS, _PROVISIONER, oldest=oldest, pending=2, now_ms=now_ms
     )
     assert finding.check == "pending-age"
     assert finding.subject == "content.revisions/provisioner.revisions"
-    assert "published 2461s ago (warn over 2460s)" in finding.message
+    assert "published 661s ago (warn over 660s)" in finding.message
     assert "delivered 5 times, held by co-provisioner; 2 pending" in finding.message
     assert "no dead-letter queue" in finding.message
 

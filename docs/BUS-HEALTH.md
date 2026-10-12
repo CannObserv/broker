@@ -220,9 +220,9 @@ Why a pending count cannot see a consumer that stopped calling
 
 `provisioner.revisions` (CannObserv/broker#78) has no dead-letter queue, by
 its owner's choice: an entry it cannot process stays pending, unacknowledged,
-and this probe is its alarm. It also holds entries on purpose - a revision
-whose derived text Processor has not written yet, until CannObserv/watcher#326
-- so two ticks of pending are normal and the two-tick rule would fire on them.
+and this probe is its alarm. It also holds entries on purpose - one that
+failed transiently waits a reclaim window - so two ticks of pending are normal
+and the two-tick rule would fire on them.
 
 Its rule is the **age of its oldest pending entry, by the entry's id**
 (`pending-age`): WARN once that entry was published longer ago than
@@ -314,8 +314,8 @@ of:
 | `LWW_PRODUCER_MAXLEN` (500) | Watcher's two `DEFAULT_*_STREAM_MAXLEN`, `src/core/{fetch_policy,watch_status}.py` (CannObserv/watcher#292) |
 | `LWW_RETAINED_FULL_SETS` (10) | `RETAINED_FULL_SETS`, `CannObserv/watcher:src/core/bus.py` (CannObserv/watcher#292) - the multiplier on the floor the line above is only the *default* of |
 | `LWW_REPUBLISH_PERIOD_SECONDS` (300) | Watcher's `*/5 * * * *` republish (CannObserv/watcher#264, #265; `info.watch-status` reads `WATCHER_WATCH_STATUS_REPUBLISH_CRON` and defaults to it) - already load-bearing as 3x the LWW age threshold before it was spelled out |
-| `PROVISIONER_TEXT_WAIT_SECONDS` (1800) | **The owner's choice (CannObserv/broker#78, 2026-10-07)**, with no measurement of Processor's lag to replace it: Watcher's `DEFAULT_PROCESS_COMMAND_TIMEOUT_SECONDS`, `src/core/process_commands.py`: past it Watcher re-issues an unanswered process command. Mover: `WATCHER_PROCESS_COMMAND_TIMEOUT_SECONDS`, `/etc/watcher/.env` |
-| `PROVISIONER_RECLAIM_MIN_IDLE_SECONDS` (600), `PROVISIONER_RECLAIM_INTERVAL_SECONDS` (60) | provisioner's `reclaim_min_idle_ms` and `reclaim_interval_s` settings. Movers: `PROVISIONER_RECLAIM_MIN_IDLE_MS`, `PROVISIONER_RECLAIM_INTERVAL_S`, `/etc/provisioner/consumer.env`. The three sum to `provisioner.revisions`' entry-age threshold, 2460 s |
+| `PROVISIONER_TEXT_WAIT_SECONDS` (0) | The owner's number since 2026-10-12 (CannObserv/broker#78): since watcher#326 the revision is published after Processor stores the text (processor#29), so it never lags. 1800 s before that. Mover: `WATCHER_EXTRACT_MODE`, `/etc/watcher/.env` - #326's rollback brings the lag back, until watcher#350 deletes the variable |
+| `PROVISIONER_RECLAIM_MIN_IDLE_SECONDS` (600), `PROVISIONER_RECLAIM_INTERVAL_SECONDS` (60) | provisioner's `reclaim_min_idle_ms` and `reclaim_interval_s` settings. Movers: `PROVISIONER_RECLAIM_MIN_IDLE_MS`, `PROVISIONER_RECLAIM_INTERVAL_S`, `/etc/provisioner/consumer.env` (neither set, 2026-10-12). The three sum to `provisioner.revisions`' entry-age threshold, 660 s: an entry still pending after one full reclaim cycle |
 | `DLQ_DRAINERS` (who triages each `*.dlq`) | the `DLQ (writer / drainer)` column of [STREAMS.md](STREAMS.md), the rule in [DLQ-DRAINING.md](DLQ-DRAINING.md) - an assignment, so it has no computable source; the keys are still derived through co-core's `dlq_name()` |
 
 `LWW_PRODUCER_MAXLEN` was already a mirror before the split - there was never an
