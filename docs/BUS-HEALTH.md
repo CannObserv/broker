@@ -211,7 +211,8 @@ old combined probe stayed in archiver with the table it queries.
 abstention, installed-copy parity, and what the unit inherits (broker#37).
 
 **A fault is the tick's set of `check:subject`** (CannObserv/broker#84), sent as
-the check-in's `metadata.fault`: co-status reports a run of `alert`s once, and a
+the check-in's `metadata.fault`: co-status reports a run of `alert`s once (a
+daily reminder pending CannObserv/status#39), and a
 changed set at once - a finding added *or* cleared, so the operator hears a
 fault shrink too. Never the message, which moves every tick. A subject must name
 a thing, never a reading of it; a test pins every `Finding` site to that, and

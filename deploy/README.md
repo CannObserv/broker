@@ -590,7 +590,8 @@ X-API-Key: <key>
 **`metadata.fault` is the one value co-status compares** (CannObserv/status#28,
 broker#84): the sorted, duplicate-free `check:subject` of this tick's findings,
 `[]` on `ok`. Since 2026-10-09 co-status reports a run of `alert` check-ins
-once (`co-broker` has no `renotify_seconds`), sends *has cleared* on the first
+once (`co-broker` has no `renotify_seconds` until CannObserv/status#39 sets a
+daily reminder), sends *has cleared* on the first
 `ok`, and opens a new fault - reporting at once, with no *cleared* for the old
 one - whenever this value changes. So a finding that arrives mid-fault reports,
 and so does one that clears while another stays open: that smaller report is
