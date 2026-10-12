@@ -587,7 +587,7 @@ X-API-Key: <key>
  "metadata": {"fault": ["<check>:<subject>", ...]}}
 ```
 
-**`metadata.fault` is the one field co-status reads** (CannObserv/status#28,
+**`metadata.fault` is the one value co-status compares** (CannObserv/status#28,
 broker#84): the sorted, duplicate-free `check:subject` of this tick's findings,
 `[]` on `ok`. Since 2026-10-09 co-status reports a run of `alert` check-ins
 once (`co-broker` has no `renotify_seconds`), sends *has cleared* on the first
