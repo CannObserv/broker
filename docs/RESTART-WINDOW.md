@@ -386,7 +386,7 @@ transient, but each rides one out only so far (backoffs as each told broker#67):
 
 | Consumer | Backoff | Absorbs a sustained outage of | Past that |
 |---|---|---|---|
-| replicator | 30 s cap; `StartLimitBurst=8` | **~64 min** floor, past 2026-09-16's: 8 starts (the burst counts the running one), each waiting 451 s even when booted into the outage, plus 7 gaps of 34 s; more if unreachable [replicator's claim, running `bd49943`: CannObserv/replicator#133, #134] | unit `failed`: on its host, `sudo systemctl reset-failed replicator && sudo systemctl start replicator`, then `journalctl -t replicator-failure` |
+| replicator | 30 s cap; `StartLimitBurst=8` | **~64 min** floor, past 2026-09-16's 57 m 48 s: 8 starts (the burst counts the running one), each waiting 451 s even when booted into the outage, plus 7 gaps of 34 s; more if unreachable [replicator's claim, running `bd49943`: CannObserv/replicator#133, #134] | unit `failed`: on its host, `sudo systemctl reset-failed replicator && sudo systemctl start replicator`, then `journalctl -t replicator-failure` |
 | archiver, watcher | 30 s cap; flat 5 s | not established | unknown. Both came back unaided from 2026-09-16's 57 m 48 s, the worst on record |
 | processor, provisioner | 30 s cap (provisioner: 15 s socket timeout) | not established | unknown. First through a broker restart 2026-10-13 |
 
