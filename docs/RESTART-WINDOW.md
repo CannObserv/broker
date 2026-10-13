@@ -54,8 +54,8 @@ be done one service at a time with a rollback after each.
 
 | | |
 |---|---|
-| **Expected downtime** | under a minute - one `systemctl restart` |
-| **Blast radius** | every participant loses the bus for that minute - four since Processor began consuming on 2026-10-02 (broker#75), five once Provisioner goes live (broker#78); Processor's reconnect across a broker restart is untested |
+| **Expected downtime** | under a minute - one `systemctl restart`. Measured 2026-10-13 (broker#67) from the stop to `Ready`: about 0.5 s for a `redis-server` restart, about 10.6 s for a VM reboot |
+| **Blast radius** | every participant loses the bus for that minute - five: archiver, watcher, replicator, processor and provisioner (broker#75, #78). All five came back unaided from a Redis restart and a VM reboot on 2026-10-13 (broker#67), and rode through a tailscaled restart. Step 1d, *As measured*, has the record. Back is not whole: four of the five create their groups only at boot, which is why step 1d checks every group by name |
 | **Reversible** | yes, at every step |
 | **Data touched** | none by steps 1b to 1d and 2 to 4. Step 1a-bis rewrites the AOF and discards its history, deliberately, after a fresh snapshot has been shipped off-node |
 
@@ -262,6 +262,12 @@ before to compare against. After an **unplanned** one there is no before: check
 each group's `last-delivered-id` against its stream's `last-generated-id` and
 that every consumer has reconnected, per step 1d and `docs/RECOVERY.md` §5.
 
+**A tailscaled restart is not a bus outage.** Established connections survive
+it. On 2026-10-13 a package update restarted tailscaled at 04:18:45Z, 78 s after
+a Redis restart. Afterwards every client's `CLIENT LIST` `age=` still dated from
+that Redis restart, and no participant logged a reconnect (broker#67). Step
+1d's bind check still follows a tailscaled restart. It held on that one.
+
 ### Step 1d - verify, in this order
 
 **`redis-server` does not log to journald on this node.** `logfile` is
@@ -309,12 +315,15 @@ rcli acladmin SELECT 0                           # -> OK
 # enough - entries-added is the counter that tells a trim from a wipe.
 for s in info.changes info.registry info.watch-status content.fetch \
          content.fetch-policy content.blobs content.revisions \
-         content.artifacts content.replicate content.fetch.dlq; do
+         content.artifacts content.replicate content.persist \
+         content.process content.derived content.fetch.dlq; do
     printf '%-22s XLEN=%s entries-added=%s\n' "$s" \
         "$(rcli acladmin XLEN $s)" \
         "$(rcli acladmin XINFO STREAM $s 2>/dev/null | grep -A1 entries-added | tail -1)"
 done
-for s in content.fetch content.blobs content.revisions content.artifacts content.replicate; do
+# Every grouped stream: nine groups on eight streams (docs/STREAMS.md).
+for s in content.fetch content.blobs content.revisions content.artifacts \
+         content.replicate content.persist content.process content.derived; do
     echo "== $s"; rcli acladmin XINFO GROUPS $s
 done
 
@@ -339,17 +348,68 @@ Then confirm each service is back **and consuming**. `CLIENT LIST` grouped by
 the 2026-09-16 restart `XINFO GROUPS` `lag` read ~150 on groups that were caught
 up, and consumer `idle` was reset for every consumer at AOF load (#20).
 
-**Recovery is bounded, not unconditional.** All three classify a broker outage as
-transient, but each rides one out only so far:
+**Every group by name, not by count.** This check is load-bearing. Archiver
+alone recreates a missing group, at `0`. Processor, watcher, replicator and
+provisioner each create theirs only at boot, from `$`. So a group missing after
+the broker is back is a real fault, and nothing in the service will heal it. A
+group lost while its process runs latches as `NOGROUP` until that service is
+restarted. Provisioner's repo is private, and the latch is filed on its own
+tracker; processor, watcher and replicator share it. The restart then recreates
+the group at `$`, so whatever arrived in between is skipped. For replicator's
+three groups that skip has a known cost (archiver's report on broker#67,
+CannObserv/replicator#133):
 
-| Consumer | Absorbs a sustained outage of | Past that | Source |
+| Group | A skipped command |
+|---|---|
+| `replicator.fetch` | re-issued by watcher after about 30 min: a delay, not a loss |
+| `replicator.persist` | re-issued by archiver's reaper after 6 h, at most 3 times per digest |
+| `replicator.replicate` | closed by archiver's reaper after 6 h and **never re-issued**. Re-issuing is an operator act |
+
+So read all nine by name in the `XINFO GROUPS` output: `replicator.fetch`,
+`watcher.blobs`, `archiver.revisions`, `provisioner.revisions`,
+`archiver.artifacts`, `replicator.replicate`, `replicator.persist`,
+`processor.process`, `watcher.derived`. Each should be present, with pending 0,
+at its stream's tip once an entry arrives. A group that comes back missing is
+cheapest to fix before its producer writes again.
+
+**As measured, 2026-10-13** (broker#67, the first run under `patching-hosts`).
+Three events: a `redis-server` restart (down 04:17:26.829Z to 04:17:27.346Z,
+about 0.5 s), a tailscaled restart at 04:18:45Z, and a VM reboot (stop
+04:22:08.491Z to `Ready` 04:22:19.093Z, about 10.6 s). Broker's side is
+measured: across the Redis restart and the reboot, every `entries-added` moved
+only forward, all nine groups were present by name at their tips with pending
+0, none was recreated, and all five users were back in `CLIENT LIST`, blocked
+in their reads. Each participant's reconnect is that participant's own claim,
+from its own journald, relayed over a Mayfly round and landed on broker#67:
+
+| Participant | Redis restart | tailscaled restart | VM reboot: back after `Ready` |
 |---|---|---|---|
-| replicator | ~60 min: exits after 20 failed cycles (~10 min), restarted up to 6 times in 7200 s | unit `failed`; `OnFailure=` logs `journalctl -t replicator-failure` on its host; restart it by hand | CannObserv/replicator#94, rehearsed against real systemd |
-| archiver, watcher | not established | unknown | both came back unaided from 2026-09-16's 57 m 48 s, the worst on record |
+| archiver | `recovered` 04:17:32.97Z after 1 failed cycle; reconnected ~0.6 s after `Ready` | rode through | ~1.5 s, 3 failed cycles |
+| watcher | within its flat 5 s backoff | rode through | ~4.5 s |
+| replicator | `recovered` 04:17:32.96Z, 1 failed cycle per loop | rode through | `recovered` at +6.5 s (04:22:25.63Z), 3 failed cycles per loop |
+| processor | no time stated; back in `CLIENT LIST` [broker's measure] | rode through | ~6.5 s |
+| provisioner | within a 1 s backoff | rode through | ~6 s; consumed a post-boot entry, `1791865381042-0` |
 
-A planned window is minutes and sits well inside every bound. An unplanned
-outage or a node restore (`docs/RECOVERY.md`) may not: replicator's margin over
-the worst on record is 2 m 12 s. And a bound is not a guarantee. On 2026-09-16
+No participant logged `NOGROUP`, no unit restarted or failed, and the longest
+continuous failure, replicator's ~17 s, was far inside its bound below.
+
+**Recovery is bounded, not unconditional.** All five classify a broker outage as
+transient, but each rides one out only so far. The backoffs are each
+participant's statement to broker#67:
+
+| Consumer | Backoff | Absorbs a sustained outage of | Past that | Source |
+|---|---|---|---|---|
+| replicator | capped at 30 s | **about 11-12 min**, not the 60 min first sized. A start already in its consume loop exits after 20 failed cycles, about 7.5 min. A start that boots into a broker still down exits at its first group call instead of riding it out, about 45 s per start [derived], for the 5 restarts left | unit `failed`: `sudo systemctl reset-failed replicator && sudo systemctl start replicator` on its host, then read `journalctl -t replicator-failure` | CannObserv/replicator#94 sized the budget; CannObserv/replicator#133 (open) found the boot gap |
+| archiver | capped at 30 s | not established | unknown | came back unaided from 2026-09-16's 57 m 48 s, the worst on record |
+| watcher | flat 5 s | not established | unknown | as archiver |
+| processor | capped at 30 s | not established | unknown | began consuming 2026-10-02 (broker#75); first through a broker restart 2026-10-13 |
+| provisioner | capped at 30 s, 15 s socket timeout | not established | unknown | began consuming 2026-10-12 (broker#78); first through a broker restart 2026-10-13 |
+
+A planned window is minutes and sits inside every bound. An unplanned outage
+or a node restore (`docs/RECOVERY.md`) may not: until replicator#133 lands,
+replicator's bound is about 12 min, and the worst on record is 57 m 48 s. A
+2026-09-16 outage today would leave replicator's unit `failed`. And a bound is
+not a guarantee. On 2026-09-16
 replicator's unit failed *inside* its bound, because a start guard refused the
 restarts. **A `user=` missing after the broker is back means check that unit
 now, whatever the outage length** - waiting is how that one took an hour to
@@ -389,7 +449,8 @@ data*).
 | Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u redis-server` |
 | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
 | `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
-| A service's `user=` is missing from `CLIENT LIST` after the broker is back | its unit gave up or refused to restart - past its outage bound, or a start guard (step 1d's table) | check the unit on its host now: `systemctl status <unit>`. `ExecMainStatus` there reports the last `ExecStartPre`, not the worker |
+| A service's `user=` is missing from `CLIENT LIST` after the broker is back | its unit gave up or refused to restart - past its outage bound, or a start guard (step 1d's table) | check the unit on its host now: `systemctl status <unit>`. `ExecMainStatus` there reports the last `ExecStartPre`, not the worker. A `failed` replicator needs `reset-failed` before `start` (CannObserv/replicator#133) |
+| A group is missing from `XINFO GROUPS`, or a service logs `NOGROUP` | its group is gone. Archiver recreates its own at `0`; the other four create theirs only at boot, and latch on `NOGROUP` until restarted | restart that service on its host. It recreates the group at `$`, skipping whatever arrived since: step 1d's *Every group by name* says what that costs on each of replicator's groups |
 | `XINFO GROUPS` shows non-zero `lag` on a group after a restart | usually nothing: on 7.0 the counter misreads after a restart | compare the group's `last-delivered-id` with the stream's `last-generated-id`; only a difference is a backlog |
 
 ---
