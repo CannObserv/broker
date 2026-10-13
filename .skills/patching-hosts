@@ -1,0 +1,91 @@
+# patching-hosts host knob (CannObserv/broker#67). Grammar: the vendored
+# skill's references/knob.md. The skill reads this file and never writes it.
+# Times are UTC. A malformed line makes the host report-only until fixed.
+
+class production
+posture scheduled
+
+# --- when -----------------------------------------------------------------
+# The owner's monthly window: Monday 23:00 to Tuesday 05:00 (Mon 16:00-22:00
+# PT), set 2026-10-13. Every step's whole span must fit inside it, clear of the
+# quiet ranges below, or apply.sh refuses it.
+window Mon 23:00-05:00
+
+# broker-backup.timer: OnCalendar=hourly, RandomizedDelaySec=5min,
+# AccuracySec=1min, so a run starts up to 6 min past the hour and takes about
+# a second. No step may share it: it reads dump.rdb, which a Redis stop rewrites.
+quiet 00:00-00:07
+quiet 01:00-01:07
+quiet 02:00-02:07
+quiet 03:00-03:07
+quiet 04:00-04:07
+quiet 05:00-05:07
+quiet 06:00-06:07
+quiet 07:00-07:07
+quiet 08:00-08:07
+quiet 09:00-09:07
+quiet 10:00-10:07
+quiet 11:00-11:07
+quiet 12:00-12:07
+quiet 13:00-13:07
+quiet 14:00-14:07
+quiet 15:00-15:07
+quiet 16:00-16:07
+quiet 17:00-17:07
+quiet 18:00-18:07
+quiet 19:00-19:07
+quiet 20:00-20:07
+quiet 21:00-21:07
+quiet 22:00-22:07
+quiet 23:00-23:07
+# broker-bus-health.timer is OnUnitActiveSec=10min: its ticks drift, so no
+# quiet range can avoid them. It is WARN-only, so a tick inside a step is
+# harmless; a Redis step is best started just after one.
+
+# --- the data store -------------------------------------------------------
+datastore redis redis-server
+# The hourly snapshot to gs://co-gcs-broker-backup stands in for a dump. Under
+# appendonly yes a restored RDB is ignored unless staged as the AOF base:
+# docs/RECOVERY.md, src/broker/restore.py.
+backup broker-backup.service redis-server.service
+
+# tailscaled carries every participant's connection, and redis-server binds
+# the tailnet address (After=/Wants= tailscaled, wait-for-tailnet-addr.sh), so
+# a tailscaled restart is a bus event: its own held step, after the redis one.
+# Followed in the maintenance lane (owner, 2026-10-13); its postinst restarts
+# tailscaled, so the step is approved on its own and the bind checked after.
+origin pkgs.tailscale.com follow
+hold tailscale tailscale
+
+# --- who is told ----------------------------------------------------------
+# Each bus participant (docs/STREAMS.md, docs/NETWORK-PATHS.md).
+caller CannObserv/archiver
+caller CannObserv/watcher
+caller CannObserv/replicator
+caller CannObserv/processor
+# The fifth, the ACL user `provisioner` (live 2026-10-12), has no line: its
+# repo is private and this one is public, so the line would publish its name
+# (gregoryfoster/skills#350, as for image-owner). It is told by hand, on its
+# own tracker, and checked in every Redis step like the four above.
+
+# --- checks (never root: they run as the invoking user, here exedev) -------
+# Redis answers, and anonymous is still refused. NOAUTH writes no ACL LOG
+# entry (measured 2026-10-13), so polling it every second adds no evidence noise.
+health redis-cli -h 127.0.0.1 -p 6379 PING 2>&1 | grep -qx 'NOAUTH Authentication required.'
+# The tailnet bind every remote participant connects through.
+health ss -Hltn 'sport = :6379' | grep -q '100\.97\.91\.19:6379'
+# The probe's last tick is recent and clean. 12 min: OnUnitActiveSec=10min,
+# and the widest gap measured over two days was 660 s. A stale last line fails.
+health journalctl -u broker-bus-health.service --since -12min -o cat --no-pager | grep '"Bus health summary"' | tail -n 1 | grep -q '"finding_count": 0'
+
+# No inflight line: nothing a non-root command can read sees a consumer
+# mid-batch. Every consumer runs on its own host, and pending counts need
+# acladmin, which is root through systemd-creds. The probe's pending-age and
+# group-undelivered findings are the after-the-fact signal.
+
+# --- exceptions -----------------------------------------------------------
+# The restarter scan can't follow a uv-run module. Neither starts or restarts
+# a unit: the backup uploads dump.rdb, and the probe is WARN-only and reports
+# to co-status (src/broker/backup.py, src/broker/bus_health.py).
+exception not-restarter:broker-backup.service 2027-04-13 uploads dump.rdb to GCS; starts and restarts no unit
+exception not-restarter:broker-bus-health.service 2027-04-13 WARN-only probe reporting to co-status; starts and restarts no unit
