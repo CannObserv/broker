@@ -360,7 +360,9 @@ is an operator act. Read all nine in the `XINFO GROUPS` output -
 `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 `provisioner.revisions`, `archiver.artifacts`, `replicator.replicate`,
 `replicator.persist`, `processor.process`, `watcher.derived` - present, pending
-0, at the tip once an entry arrives.
+0, at the tip once an entry arrives. The exception is `provisioner.revisions`,
+whose consumer holds entries on purpose: judge it by pending age, not pending
+count ([BUS-HEALTH.md](BUS-HEALTH.md), *Pending age*).
 
 **As measured, 2026-10-13** (broker#67). Redis restart: down 04:17:26.829Z to
 04:17:27.346Z. tailscaled restart: 04:18:45Z. Reboot: stop 04:22:08.491Z to
