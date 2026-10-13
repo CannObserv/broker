@@ -85,7 +85,9 @@ def test_ci_and_audit_run_on_one_pinned_image():
 
 
 def _os_version_id() -> str:
-    return re.search(r'^VERSION_ID="?([^"\n]+)"?$', OS_RELEASE.read_text(), re.MULTILINE)[1]
+    found = re.search(r'^VERSION_ID="?([^"\n]+)"?$', OS_RELEASE.read_text(), re.MULTILINE)
+    assert found, f"{OS_RELEASE} names no VERSION_ID"
+    return found[1]
 
 
 def test_runner_image_matches_the_node():
