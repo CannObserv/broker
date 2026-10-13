@@ -352,12 +352,12 @@ group, at `0`. Processor, watcher, replicator and provisioner create theirs only
 at boot, from `$`, and a group lost while one runs latches as `NOGROUP` until a
 restart (provisioner's private tracker has the issue; the other three share
 it). So a missing group is a real fault, and its fix skips whatever arrived in
-between. On replicator's groups (the issuers' claims, broker#67;
-CannObserv/replicator#133's boot retry kept the `$`), watcher re-issues a
-`replicator.fetch` skip after ~30 min, archiver's reaper a `replicator.persist`
-one after 6 h, at most 3 times. A `replicator.replicate` one is closed after 6 h
-and **never re-issued**: that is an operator act. Read all nine in the
-`XINFO GROUPS` output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
+between. On replicator's groups (the issuers' claims, broker#67; unchanged by
+CannObserv/replicator#133), watcher re-issues a `replicator.fetch` skip after
+~30 min, archiver's reaper a `replicator.persist` one after 6 h, at most 3
+times. A `replicator.replicate` one is closed after 6 h and **never
+re-issued**: that is an operator act. Read all nine in the `XINFO GROUPS`
+output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 `provisioner.revisions`, `archiver.artifacts`, `replicator.replicate`,
 `replicator.persist`, `processor.process`, `watcher.derived` - present, pending
 0, at the tip once an entry arrives. The exception is `provisioner.revisions`,
