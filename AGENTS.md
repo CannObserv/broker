@@ -158,7 +158,8 @@ tests/           mirrors src/; tests/deploy/ asserts installed artifacts match d
                  SocratiCode config (#17), ruff's reach into the docs (#38),
                  credentials out of every runbook's argv (#47), the vendored
                  skills' links, listing and channel URLs (#63), pytest's
-                 conftest reach across argument orders (#73), the lock audit (#86)
+                 conftest reach across argument orders (#73), the lock audit (#86),
+                 the CI action and runner pins (#88)
 ```
 
 ## Agent Skills
