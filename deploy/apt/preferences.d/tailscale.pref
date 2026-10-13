@@ -1,0 +1,10 @@
+# pkgs.tailscale.com is on this node for Tailscale alone (broker#67). Followed in
+# patching-hosts' maintenance lane, so scoped by pins: everything else the site
+# serves sits below Ubuntu's 500, and the two packages it was added for above.
+Package: *
+Pin: origin pkgs.tailscale.com
+Pin-Priority: 100
+
+Package: tailscale tailscale-archive-keyring
+Pin: origin pkgs.tailscale.com
+Pin-Priority: 600

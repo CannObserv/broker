@@ -19,6 +19,7 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` and `OOMScoreAdjust=-900` for the network path |
 | `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). **Installed and disabled**: broker#58 disabled it when dev tooling sat at exe.dev's -1000, out of its reach, and it stays disabled now that broker#71 put sessions at 0, where the kernel takes them before the bus (operator's decision, 2026-10-06). Configured, so turning it on is one command |
 | `needrestart.conf.d/broker.conf` | `/etc/needrestart/conf.d/` | `$nrconf{restart} = 'l'`: needrestart **lists** restarts after an apt run, never performs them. Stock Ubuntu mode restarts automatically, so a `libc6` security update would restart `redis-server` outside a window (broker#65) |
+| `apt/preferences.d/tailscale.pref` | `/etc/apt/preferences.d/` | Scopes `pkgs.tailscale.com`, which patching-hosts' maintenance lane follows: `Package: *` at 100, below Ubuntu's 500, and `tailscale` + `tailscale-archive-keyring` at 600. Unpinned, the site ties Ubuntu and could replace an Ubuntu package (broker#67) |
 
 `tests/deploy/` asserts all of it: the installed copies match these files, and
 `test_live_broker_matches_tracked_config.py` reads the running config back
@@ -350,6 +351,10 @@ sudo systemctl disable --now earlyoom
 # needrestart lists, never restarts (broker#65). Takes effect at the next apt run;
 # `sudo needrestart -b -m u` prints "Disabling Ubuntu mode" once it is read.
 sudo install -m 0644 -D deploy/needrestart.conf.d/broker.conf /etc/needrestart/conf.d/broker.conf
+
+# Tailscale's origin scoped to the packages it was added for (broker#67).
+# `apt-cache policy tailscale` shows 600 once it is read.
+sudo install -m 0644 -D deploy/apt/preferences.d/tailscale.pref /etc/apt/preferences.d/tailscale.pref
 ```
 
 Then verify against the running broker rather than against the files:

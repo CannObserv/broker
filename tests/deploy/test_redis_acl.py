@@ -1672,13 +1672,15 @@ def test_a_not_a_fault_row_is_still_a_denial(users) -> None:
 
     A `-` rule (`default`'s `-@all`) is refused rather than guessed at: `holds`
     reads `+` rules only, so it would call an excluded command held and fail the
-    row for the wrong reason.
+    row for the wrong reason. An `auth` row reads no grant, so `default`'s
+    failed AUTHs - a tool authenticating with `requirepass`, nobody's since
+    broker#52 - are judged like any other user's (broker#67).
     """
     stale = []
     for row in not_a_fault_rows():
         rules = users[row["user"]]
         subtractions = [rule for rule in rules if rule.startswith("-")]
-        assert not subtractions, (
+        assert row["reason"] == "auth" or not subtractions, (
             f"{row['user']} carries {subtractions}; teach this test to resolve them "
             "before a not-a-fault row for that user can be judged"
         )
