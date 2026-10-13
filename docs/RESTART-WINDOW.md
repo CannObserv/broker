@@ -352,11 +352,11 @@ group, at `0`. Processor, watcher, replicator and provisioner create theirs only
 at boot, from `$`, and a group lost while one runs latches as `NOGROUP` until a
 restart (provisioner's private tracker has the issue; the other three share
 it). So a missing group is a real fault, and its fix skips whatever arrived in
-between. On replicator's groups (archiver on broker#67, replicator#133), a skip
-on `replicator.fetch` is re-issued by watcher after ~30 min, and one on
-`replicator.persist` by archiver's reaper after 6 h, at most 3 times. One on
-`replicator.replicate` is closed after 6 h and **never re-issued**, since that
-is an operator act. Read all nine in the `XINFO GROUPS` output -
+between. On replicator's groups (the issuers' claims, broker#67;
+CannObserv/replicator#133's boot retry kept the `$`), watcher re-issues a
+`replicator.fetch` skip after ~30 min, archiver's reaper a `replicator.persist`
+one after 6 h, at most 3 times. A `replicator.replicate` one is closed after 6 h
+and **never re-issued**: that is an operator act. Read all nine in the `XINFO GROUPS` output -
 `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 `provisioner.revisions`, `archiver.artifacts`, `replicator.replicate`,
 `replicator.persist`, `processor.process`, `watcher.derived` - present, pending
@@ -379,23 +379,21 @@ participant's own claim, from its journald:
 | processor | no time stated | rode through | ~6.5 s |
 | provisioner | within a 1 s backoff | rode through | ~6 s, then consumed a post-boot entry |
 
-No `NOGROUP`, no unit restarted. The longest failure, replicator's ~17 s, sat
-well inside its bound.
+No `NOGROUP`, no unit restarted.
 
 **Recovery is bounded, not unconditional.** All five treat a broker outage as
 transient, but each rides one out only so far (backoffs as each told broker#67):
 
 | Consumer | Backoff | Absorbs a sustained outage of | Past that |
 |---|---|---|---|
-| replicator | 30 s cap | **~11-12 min**, not the 60 min CannObserv/replicator#94 sized: the first start exits after 20 failed cycles (~7.5 min), and each restart into a broker still down exits at its group call, ~45 s each [derived] (CannObserv/replicator#133, open) | unit `failed`: on its host, `sudo systemctl reset-failed replicator && sudo systemctl start replicator`, then `journalctl -t replicator-failure` |
+| replicator | 30 s cap; `StartLimitBurst=8` | **~64 min** floor, past 2026-09-16's: 8 starts (the burst counts the running one), each waiting 451 s even when booted into the outage, plus 7 gaps of 34 s; more if unreachable [replicator's claim, running `bd49943`: CannObserv/replicator#133, #134] | unit `failed`: on its host, `sudo systemctl reset-failed replicator && sudo systemctl start replicator`, then `journalctl -t replicator-failure` |
 | archiver, watcher | 30 s cap; flat 5 s | not established | unknown. Both came back unaided from 2026-09-16's 57 m 48 s, the worst on record |
 | processor, provisioner | 30 s cap (provisioner: 15 s socket timeout) | not established | unknown. First through a broker restart 2026-10-13 |
 
 A planned window is minutes and sits inside every bound. An unplanned outage
-or a node restore (`docs/RECOVERY.md`) may not: a 2026-09-16 outage would fail
-replicator's unit today. And a bound is not a guarantee. On 2026-09-16
-replicator's unit failed *inside* its bound, because a start guard refused the
-restarts. **A `user=` missing after the broker is back means check that unit
+or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.
+On 2026-09-16 replicator's unit failed *inside* its bound, because a start guard
+refused the restarts. **A `user=` missing after the broker is back means check that unit
 now, whatever the outage length** - waiting is how that one took an hour to
 find.
 
