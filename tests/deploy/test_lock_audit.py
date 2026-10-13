@@ -19,6 +19,7 @@ The script runs here against a fake ``uv`` on ``PATH``, so nothing reaches OSV.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -118,10 +119,11 @@ def test_workflow_runs_the_script_on_a_schedule_with_no_secret():
     push and PR. It holds no secret and no OIDC token: ``--frozen`` needs no
     wheelhouse, so it needs no WIF."""
     text = WORKFLOW.read_text()
-    assert "bash scripts/audit_lock.sh" in text
-    assert "schedule:" in text
-    assert "push:" in text
-    assert "pull_request:" in text
+    on_block = re.search(r"^on:\n((?:[ #].*\n|\n)+)", text, re.MULTILINE)
+    assert on_block, "no top-level on: block"
+    triggers = set(re.findall(r"^  (\w+):", on_block.group(1), re.MULTILINE))
+    assert {"push", "pull_request", "schedule"} <= triggers
+    assert re.search(r"^\s+run: bash scripts/audit_lock\.sh$", text, re.MULTILINE)
     assert "secrets." not in text
     assert "id-token" not in text
     assert "continue-on-error" not in text, "report-only is the script's exit, not a mask"
