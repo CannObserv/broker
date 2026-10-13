@@ -33,6 +33,7 @@ concurrency:
 jobs:
   audit:
     name: uv audit (report-only)
+    # The node's image, not ubuntu-latest (#88): tests/deploy/test_workflow_pins.py.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
