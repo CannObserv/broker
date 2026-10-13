@@ -356,8 +356,8 @@ between. On replicator's groups (the issuers' claims, broker#67;
 CannObserv/replicator#133's boot retry kept the `$`), watcher re-issues a
 `replicator.fetch` skip after ~30 min, archiver's reaper a `replicator.persist`
 one after 6 h, at most 3 times. A `replicator.replicate` one is closed after 6 h
-and **never re-issued**: that is an operator act. Read all nine in the `XINFO GROUPS` output -
-`replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
+and **never re-issued**: that is an operator act. Read all nine in the
+`XINFO GROUPS` output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 `provisioner.revisions`, `archiver.artifacts`, `replicator.replicate`,
 `replicator.persist`, `processor.process`, `watcher.derived` - present, pending
 0, at the tip once an entry arrives. The exception is `provisioner.revisions`,
@@ -393,9 +393,9 @@ transient, but each rides one out only so far (backoffs as each told broker#67):
 A planned window is minutes and sits inside every bound. An unplanned outage
 or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.
 On 2026-09-16 replicator's unit failed *inside* its bound, because a start guard
-refused the restarts. **A `user=` missing after the broker is back means check that unit
-now, whatever the outage length** - waiting is how that one took an hour to
-find.
+refused the restarts. **A `user=` missing after the broker is back means check
+that unit now, whatever the outage length** - waiting is how that one took an
+hour to find.
 
 **Do not start a second `redis-server` against this config to "test" it.** It
 inherits `dir /var/lib/redis` and `appendonly yes`, so it opens the live AOF for
