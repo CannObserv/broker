@@ -38,20 +38,20 @@ SHA_WITH_TAG = re.compile(r"@[0-9a-f]{40} # v\d+\.\d+\.\d+$")
 def _uses(path: Path, action: str) -> list[str]:
     """Every ``uses: <action>@...`` line in ``path``, from the ``@`` on."""
     return re.findall(
-        rf"^\s+(?:- )?uses: {re.escape(action)}(@.*)$", path.read_text(), re.MULTILINE
+        rf"^[ \t]+(?:- )?uses: {re.escape(action)}(@.*)$", path.read_text(), re.MULTILINE
     )
 
 
 def _step_with(path: Path, action: str) -> dict[str, str]:
     """The ``with:`` keys of the one step using ``action`` in ``path``."""
     text = path.read_text()
-    step = re.search(rf"^(\s+)uses: {re.escape(action)}@.*\n((?:\1.*\n)*)", text, re.MULTILINE)
+    step = re.search(rf"^([ \t]+)uses: {re.escape(action)}@.*\n((?:\1.*\n)*)", text, re.MULTILINE)
     assert step, f"{path.name}: no step uses {action}"
-    return dict(re.findall(r"^\s+([\w-]+): (\S+)$", step.group(2), re.MULTILINE))
+    return dict(re.findall(r"^[ \t]+([\w-]+): (\S+)$", step.group(2), re.MULTILINE))
 
 
 def _runners(path: Path) -> set[str]:
-    return set(re.findall(r"^\s+runs-on: (\S+)$", path.read_text(), re.MULTILINE))
+    return set(re.findall(r"^[ \t]+runs-on: (\S+)$", path.read_text(), re.MULTILINE))
 
 
 def test_setup_uv_and_auth_pin_a_commit_with_its_tag():
