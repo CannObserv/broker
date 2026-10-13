@@ -11,7 +11,10 @@ needs the network, so it is checked by hand when a pin moves:
 cache that ci.yml saves holds co-core unpacked from the private wheelhouse,
 and broker is public: a fork's pull request can restore a cache saved on
 ``main``. ``uv cache prune --ci`` drops every pre-built wheel, co-core's
-included, so ci.yml sets it back. audit.yml has nothing to cache, since
+included, so ci.yml sets it back. It keeps a wheel *built from source*, so
+the prune covers co-core only while uv.lock pins co-core to a wheel: locked
+sdist-only, co-core is built and kept (measured on uv 0.13.0), and the lock
+check below fails first. audit.yml has nothing to cache, since
 ``uv audit --frozen`` downloads no package, so it neither restores nor saves.
 
 **The runner.** ``ubuntu-24.04``, not ``ubuntu-latest``: the image matches the
@@ -24,6 +27,7 @@ it: on the node, ``test_runner_image_matches_the_node`` fails until it does.
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 from tests.deploy.conftest import outcome_of, pretend_node, require_broker_node
@@ -31,6 +35,7 @@ from tests.deploy.conftest import outcome_of, pretend_node, require_broker_node
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 AUDIT = WORKFLOWS / "audit.yml"
+LOCK = WORKFLOWS.parents[1] / "uv.lock"
 OS_RELEASE = Path("/etc/os-release")
 
 PINNED = ("astral-sh/setup-uv", "google-github-actions/auth")
@@ -74,6 +79,30 @@ def test_ci_prunes_the_cache_it_saves():
     with_ = _step_with(CI, "astral-sh/setup-uv")
     assert with_.get("enable-cache") == "true"
     assert with_.get("prune-cache") == "true"
+
+
+def _wheelhouse_packages_without_a_wheel(lock: Path) -> list[str]:
+    packages = tomllib.loads(lock.read_text())["package"]
+    return [
+        p["name"]
+        for p in packages
+        if p.get("source", {}).get("registry") == ".wheelhouse" and not p.get("wheels")
+    ]
+
+
+def test_every_wheelhouse_package_is_locked_to_a_wheel():
+    """The prune's premise: a package installed from its wheel is pruned."""
+    assert _wheelhouse_packages_without_a_wheel(LOCK) == []
+
+
+def test_wheel_check_fails_on_an_sdist_only_lock(tmp_path):
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        '[[package]]\nname = "co-core"\nversion = "9.9.9"\n'
+        'source = { registry = ".wheelhouse" }\n'
+        'sdist = { path = "co_core-9.9.9.tar.gz" }\n'
+    )
+    assert _wheelhouse_packages_without_a_wheel(lock) == ["co-core"]
 
 
 def test_audit_touches_no_cache():
