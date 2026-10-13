@@ -278,9 +278,10 @@ means. The checks that must be exact are the `XLEN` and `XINFO GROUPS` lines.
 ### 5. What the participants see
 
 Whether they reconnect on their own depends on how long the node was gone. All
-three classify a broker outage as transient, but replicator absorbs about 60
-minutes and then leaves its unit `failed` for an operator. Archiver and watcher
-have no established bound (`docs/RESTART-WINDOW.md`, *Step 1d*). A restore is
+five classify a broker outage as transient, but replicator absorbs about 64
+minutes at the floor and then leaves its unit `failed` for an operator. The
+others have no established bound (`docs/RESTART-WINDOW.md`, *Recovery is
+bounded*). A restore is
 exactly the unplanned outage that can outlast that. So before calling it done,
 confirm each `user=` in `CLIENT LIST` and each group's `last-delivered-id`
 against its stream's `last-generated-id`. Once they are back:
