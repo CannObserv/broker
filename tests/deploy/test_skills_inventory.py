@@ -78,6 +78,11 @@ def test_using_mayfly_chat_is_vendored() -> None:
     assert "using-mayfly-chat" in _links(SKILLS)
 
 
+def test_patching_hosts_is_vendored() -> None:
+    """#67: the cohort's scheduled patching run, gregoryfoster/skills#313."""
+    assert "patching-hosts" in _links(SKILLS)
+
+
 def _committable() -> list[Path]:
     """Tracked files plus untracked, unignored ones: what a ``git add -A`` takes.
 

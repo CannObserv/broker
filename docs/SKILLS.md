@@ -81,10 +81,12 @@ It measures and never curates; a budget warning in its run means someone runs
 
 ## Selection
 
-Eleven of upstream's twenty skills: the `gregoryfoster/skills` set archiver,
+Twelve of upstream's twenty-one skills: the `gregoryfoster/skills` set archiver,
 notifier, replicator and watcher vendor, less what does not apply here, plus
 `using-mayfly-chat` (#63), which the cohort adopts together
-(gregoryfoster/skills#302).
+(gregoryfoster/skills#302), and `patching-hosts` (#67), the cohort's scheduled
+OS patching run (gregoryfoster/skills#313). Its host knob is
+`.skills/patching-hosts`, a real file the skill reads and never writes.
 
 **`using-mayfly-chat` needs Node.js 18+** on the host running the agent; its
 wrapper exits 4 without it. **A channel URL never reaches a durable store** -
@@ -125,7 +127,7 @@ Left out:
 | `reviewing-code`, `shipping-work`, `-php`, `-python-click` | Other stack variants of the two above |
 
 **No `obra/superpowers`.** Every sibling also vendors it (`brainstorming`,
-`test-driven-development`, `systematic-debugging`, ...). None of the eleven below
+`test-driven-development`, `systematic-debugging`, ...). None of the twelve below
 depends on it; adding it is a second submodule by the same procedure.
 
 ## Inventory
@@ -139,6 +141,7 @@ All plain symlinks - no local overrides.
 | `init-socraticode` | init socraticode, set up code search, index this project |
 | `managing-skills` | add skill repo, update vendor skills, enable auto-refresh |
 | `orchestrating-issue-backlog` | orchestrate backlog, prioritize issues, clear backlog |
+| `patching-hosts` | patch the host, OS updates, security updates, apply updates, needrestart |
 | `reviewing-architecture` | AR, architecture review |
 | `reviewing-code-python-fastapi` | CR, code review, perform a review |
 | `shipping-work-python-fastapi` | ship it, push GH, close GH, wrap up |
