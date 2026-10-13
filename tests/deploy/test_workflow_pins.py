@@ -3,7 +3,9 @@
 **Actions.** ``astral-sh/setup-uv`` publishes no floating major tag since v8,
 so ``@v10`` would not resolve. Both setup-uv and ``google-github-actions/auth``
 pin a commit SHA with a ``# vX.Y.Z`` comment, the form CannObserv/watcher
-uses, and the two workflows pin the same setup-uv.
+uses, and the two workflows pin the same setup-uv. That a SHA *is* its tag
+needs the network, so it is checked by hand when a pin moves:
+``gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq .object.sha``.
 
 **The cache.** setup-uv v9 flipped ``prune-cache`` to false. Unpruned, the uv
 cache that ci.yml saves holds co-core unpacked from the private wheelhouse,
@@ -16,7 +18,7 @@ included, so ci.yml sets it back. audit.yml has nothing to cache, since
 node's userland (bash, perl, coreutils), which the shell under test runs on.
 ``ubuntu-latest`` moves to 26.04 on GitHub's schedule, between 2026-10-19 and
 2026-11-19 per actions/runner-images#14748. When the node moves, CI moves with
-it, and on the node the last test here fails until it does.
+it: on the node, ``test_runner_image_matches_the_node`` fails until it does.
 """
 
 from __future__ import annotations
