@@ -35,7 +35,7 @@ fi
 
 case $rc in
 0) ;;
-1) echo "::warning title=uv.lock advisories::uv audit found advisories in uv.lock; the job summary lists them. Bump with uv lock --upgrade-package <name>." ;;
+1) echo "::warning title=uv.lock advisories::uv audit found advisories in uv.lock; the job summary lists them. Sync the wheelhouse, then uv lock --upgrade-package <name> (CLAUDE.md, Environment & Tooling)." ;;
 *) echo "::warning title=uv audit did not run::uv audit exited $rc; the lock was not audited. The job summary has its output." ;;
 esac
 exit 0
