@@ -15,7 +15,7 @@ Tracked in ``deploy/``, installed as:
 Split like the other deploy tests: **pure** assertions on the tracked copy run
 everywhere; **installed parity** and **live** assertions skip where the node is
 not this one - decided by ``on_broker_node``, not by needrestart being installed.
-GitHub's ``ubuntu-latest`` ships needrestart without this drop-in, and the live
+GitHub's Ubuntu runner ships needrestart without this drop-in, and the live
 test failed on it for 27 pushes in a row (broker#79). On the node, a missing
 drop-in fails both rather than skipping them.
 """
@@ -97,7 +97,7 @@ def test_live_config_chain_resolves_to_list_only() -> None:
 @pytest.fixture
 def stock_needrestart(tmp_path, monkeypatch) -> Path:
     """A needrestart main config with no drop-in behind it: GitHub's
-    ``ubuntu-latest``, which ships needrestart and resolves to stock ``undef``."""
+    Ubuntu runner, which ships needrestart and resolves to stock ``undef``."""
     main = tmp_path / "needrestart.conf"
     main.write_text("$nrconf{verbosity} = 1;\n")
     monkeypatch.setattr(sys.modules[__name__], "MAIN_CONF", main)
