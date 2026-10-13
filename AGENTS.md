@@ -149,15 +149,17 @@ Types: feat, fix, refactor, docs, test, chore.
 deploy/          the artifacts the node deploys + the bus-health and backup units;
                  see deploy/README.md
 docs/            one reference doc per topic - see Detail Docs below
-scripts/         wheelhouse sync (runs before `uv sync`, must not import the project)
+scripts/         wheelhouse sync (runs before `uv sync`, must not import the project);
+                 audit_lock.sh, the report-only `uv audit` CI runs weekly (#86)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  logging.py (service-local, not a mirror)
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/,
                  rehearses the restore against a real redis-server, and guards the
                  SocratiCode config (#17), ruff's reach into the docs (#38),
                  credentials out of every runbook's argv (#47), the vendored
-                 skills' links, listing and channel URLs (#63), and pytest's
-                 conftest reach across argument orders (#73)
+                 skills' links, listing and channel URLs (#63), pytest's
+                 conftest reach across argument orders (#73), and the lock
+                 audit's never-red exit (#86)
 ```
 
 ## Agent Skills

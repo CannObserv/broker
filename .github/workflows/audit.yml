@@ -1,0 +1,45 @@
+name: audit
+
+# uv.lock against OSV (#86). It is the update mechanism patching-hosts' record
+# cites (run.md section 7). Dependabot and Renovate are out: neither updater
+# can sync the private wheelhouse co-core resolves from, the blocker watcher's
+# dependabot.yml names.
+#
+# Report-only: scripts/audit_lock.sh always exits 0, and a finding is a warning
+# annotation plus the job summary. A red gate here would turn main red on
+# someone else's disclosure date and block every later check-in (#79). Push and
+# PR runs read the lock a change ships. The weekly run reads the lock nobody
+# touched, since disclosures arrive without commits.
+#
+# No secret and no OIDC token: `uv audit --frozen` reads uv.lock without the
+# wheelhouse, so it needs no WIF. tests/deploy/test_lock_audit.py pins this.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 14 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  audit:
+    name: uv audit (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: uv audit --frozen
+        run: bash scripts/audit_lock.sh
