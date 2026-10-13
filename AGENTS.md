@@ -150,7 +150,7 @@ deploy/          the artifacts the node deploys + the bus-health and backup unit
                  see deploy/README.md
 docs/            one reference doc per topic - see Detail Docs below
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project);
-                 audit_lock.sh, the report-only `uv audit` CI runs weekly (#86)
+                 audit_lock.sh (#86)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  logging.py (service-local, not a mirror)
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/,
@@ -158,8 +158,7 @@ tests/           mirrors src/; tests/deploy/ asserts installed artifacts match d
                  SocratiCode config (#17), ruff's reach into the docs (#38),
                  credentials out of every runbook's argv (#47), the vendored
                  skills' links, listing and channel URLs (#63), pytest's
-                 conftest reach across argument orders (#73), and the lock
-                 audit's never-red exit (#86)
+                 conftest reach across argument orders (#73), the lock audit (#86)
 ```
 
 ## Agent Skills
