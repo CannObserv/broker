@@ -34,8 +34,9 @@ backup broker-backup.service redis-server.service
 # tailscaled, so the step is approved on its own and the bind checked after.
 origin pkgs.tailscale.com follow
 hold tailscale tailscale
-# The probe checks redis-server's After= on it, and --post-boot that it was
-# active first. depends stops and holds nothing, so the hold above stays.
+# The probe checks redis-server's After= on tailscaled, and --post-boot that
+# tailscaled was active first. depends stops and holds nothing, so the hold
+# above stays.
 depends redis-server tailscaled
 
 # --- who is told ----------------------------------------------------------
