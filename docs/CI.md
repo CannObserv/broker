@@ -40,7 +40,7 @@ from a fork: a read-only `GITHUB_TOKEN`, Dependabot secrets only. `ci.yml` needs
 no secret: it needs `vars.GCP_WIF_PROVIDER` to resolve and the OIDC token that
 `id-token: write` asks for. Both held on CannObserv/watcher's Dependabot PRs
 (same provider, same SA): `pull_request` runs as `dependabot[bot]`, WIF auth and
-wheelhouse sync green (watcher#356, 2026-10-09; #364, 2026-10-11). broker's first
+wheelhouse sync green (watcher#356, 2026-10-09; watcher#364, 2026-10-11). broker's first
 PR is the confirmation here. On a red one, read **Authenticate to Google Cloud**
 first. Watcher's `docs/COMMANDS.md` maps its errors: *"must specify exactly one
 of workload_identity_provider or credentials_json"* means the variable did not
