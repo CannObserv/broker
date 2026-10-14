@@ -159,7 +159,7 @@ tests/           mirrors src/; tests/deploy/ asserts installed artifacts match d
                  credentials out of every runbook's argv (#47), the vendored
                  skills' links, listing and channel URLs (#63), pytest's
                  conftest reach across argument orders (#73), the lock audit (#86),
-                 CI pins (#88), the Dependabot config (#90)
+                 CI pins (#88), Dependabot (#90)
 ```
 
 ## Agent Skills
@@ -193,8 +193,6 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*
   (`WATCHER_WATCH_STATUS_REPUBLISH_CRON`) with no commit anywhere.
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
-- CannObserv/archiver#196 - archiver's half of the OOM seam, repointed after the
-  cap moved to `deploy/redis.conf.broker`
 
 ## Detail Docs
 
@@ -212,7 +210,7 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
 - [docs/NODE-CREDENTIALS.md](docs/NODE-CREDENTIALS.md) - `acladmin`/`brokeradmin` as encrypted credentials: mint, rotate, what it does not protect; `requirepass` nobody's
 - [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, [deploy/README.md](deploy/README.md)
-- [docs/CI.md](docs/CI.md) - the workflows' SHA pins, Dependabot's config and exclusion, WIF on its PRs, how one lands
+- [docs/CI.md](docs/CI.md) - action pins, Dependabot and how its PRs land
 - [docs/SKILLS.md](docs/SKILLS.md) - the vendored agent skills, their refresh hook, the context cadence
 - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) - semantic search over this repo and its four siblings: the tool table, the prefetch, graph health, index scope
 
