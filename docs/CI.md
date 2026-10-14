@@ -30,8 +30,9 @@ bump made in it (gregoryfoster/skills#373), so its `actions/checkout@v5` moves
 with the installer: re-run `install-cadence.sh` after the skills submodule
 brings a new template. `exclude-paths` lists no ecosystem limit in GitHub's
 [Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#exclude-paths),
-and dependabot-core applies it in the base fetcher's `repo_contents`, which the
-`github-actions` fetcher lists `.github/workflows/` through.
+and dependabot-core applies it in the base fetcher's `repo_contents`
+(`common/lib/dependabot/file_fetchers/base.rb`, `filter_excluded`, read at
+`00f6c78`), which the `github-actions` fetcher lists `.github/workflows/` through.
 
 **A Dependabot run reads its own credential context.** GitHub runs it as if
 from a fork: a read-only `GITHUB_TOKEN`, Dependabot secrets only. `ci.yml` needs

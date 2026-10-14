@@ -11,8 +11,9 @@ person looks, so each property is pinned here. CannObserv/watcher's
 * **The generated cadence workflow is excluded.** ``install-cadence.sh``
   renders ``context-cadence.yml``, and a re-render reverts any bump made in it
   (gregoryfoster/skills#373). ``exclude-paths`` documents no ecosystem limit,
-  and dependabot-core applies it in the base fetcher's ``repo_contents``, which
-  the github_actions fetcher lists ``.github/workflows/`` through.
+  and dependabot-core applies it in the base fetcher's ``repo_contents``
+  (``file_fetchers/base.rb``, read at ``00f6c78``), which the github_actions
+  fetcher lists ``.github/workflows/`` through.
 * **Every workflow it scans pins each action as ``@<sha> # vX.Y.Z``.**
   Dependabot proposes in the pin's own form, so a SHA and its comment move
   together; a floating tag is what this replaces.
