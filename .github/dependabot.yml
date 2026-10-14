@@ -1,9 +1,9 @@
 # Moves the action pins nothing else moves (#90): ci.yml and audit.yml pin
 # every `uses:` to a commit SHA with a `# vX.Y.Z` comment (#88), and setup-uv
-# publishes no floating major to follow. Each PR is gated by ci.yml; a
-# Dependabot run reads its own credential context, so the WIF step is the
-# first thing to read on a red one. How one lands, fast-forwarded onto main
-# locally: docs/CI.md.
+# publishes no floating major to follow. Each PR is gated by ci.yml (audit.yml
+# reports); a Dependabot run reads its own credential context, so the WIF step
+# is the first thing to read on a red one. How one lands, fast-forwarded onto
+# main locally: docs/CI.md.
 #
 # github-actions only. `uv` is out for #86's reason: co-core resolves from the
 # private wheelhouse, which Dependabot's updater cannot sync.
