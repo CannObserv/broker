@@ -104,7 +104,8 @@ def test_it_excludes_exactly_the_generated_cadence_workflow():
 
 def test_every_scanned_workflow_pins_each_action_to_a_commit_with_its_tag():
     scanned = _scanned()
-    assert CADENCE not in scanned and len(scanned) >= 2, scanned
+    assert {"ci.yml", "audit.yml"} <= {p.name for p in scanned}, scanned
+    assert CADENCE not in scanned, scanned
     bad = [
         f"{path.name}: {ref}{rest}"
         for path in scanned
