@@ -15,8 +15,9 @@ pin moves, check the SHA against its tag:
 gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq '.object.type + " " + .object.sha'
 ```
 
-`commit` means the SHA is the pin. `tag` is an annotated tag, and the pin is
-that tag object's own `.object.sha` (`git/tags/<sha>`). Pinned by
+`commit`: that SHA is the pin. `tag`: an annotated tag, whose SHA names the tag
+object, not a commit; the pin is the commit it points at,
+`gh api repos/<owner>/<action>/git/tags/<sha> --jq .object.sha`. Pinned by
 `tests/deploy/test_workflow_pins.py` and `tests/deploy/test_dependabot.py`.
 
 ## Dependabot (#90)
