@@ -7,8 +7,8 @@ posture scheduled
 
 # --- when -----------------------------------------------------------------
 # The owner's monthly window: Monday 23:00 to Tuesday 05:00 (Mon 16:00-22:00
-# PT), set 2026-10-13. Every step's whole span must fit inside it, clear of the
-# quiet ranges below, or apply.sh refuses it.
+# PDT, 15:00-21:00 PST), set 2026-10-13. Every step's whole span must fit
+# inside it, clear of the quiet ranges below, or apply.sh refuses it.
 window Mon 23:00-05:00
 
 # broker-backup.timer: OnCalendar=hourly, RandomizedDelaySec=5min,
