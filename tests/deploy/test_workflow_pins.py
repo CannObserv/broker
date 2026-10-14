@@ -4,8 +4,9 @@
 so ``@v10`` would not resolve. Both setup-uv and ``google-github-actions/auth``
 pin a commit SHA with a ``# vX.Y.Z`` comment, the form CannObserv/watcher
 uses, and the two workflows pin the same setup-uv. ``actions/checkout`` joined
-them in #90, when Dependabot took over moving every pin; that every ``uses:``
-it scans takes this form is ``test_dependabot.py``'s. That a SHA *is* its tag
+them in #90, when Dependabot took over moving the pins it scans (all but the
+generated cadence workflow's); that each takes this form is
+``test_dependabot.py``'s. That a SHA *is* its tag
 needs the network, so it is checked by hand when a pin moves:
 ``gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq .object.sha``.
 
