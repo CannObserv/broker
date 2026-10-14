@@ -3,9 +3,9 @@
 ``scripts/audit_lock.sh`` runs ``uv audit --frozen`` against ``uv.lock`` and
 ``.github/workflows/audit.yml`` runs it on every push, every PR and once a week.
 It is the update mechanism patching-hosts' record cites (run.md section 7).
-Dependabot and Renovate are out: neither updater can sync the private
-wheelhouse ``co-core`` resolves from (watcher's ``dependabot.yml`` names the
-same blocker).
+Dependabot's ``uv`` ecosystem and Renovate are out: neither updater can sync
+the private wheelhouse ``co-core`` resolves from. Dependabot moves the action
+pins alone (``.github/dependabot.yml``, #90).
 
 **Report-only is the contract.** A gate that failed on a finding would turn
 ``main`` red on someone else's disclosure date, and every later check-in would

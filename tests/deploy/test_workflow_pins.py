@@ -3,7 +3,9 @@
 **Actions.** ``astral-sh/setup-uv`` publishes no floating major tag since v8,
 so ``@v10`` would not resolve. Both setup-uv and ``google-github-actions/auth``
 pin a commit SHA with a ``# vX.Y.Z`` comment, the form CannObserv/watcher
-uses, and the two workflows pin the same setup-uv. That a SHA *is* its tag
+uses, and the two workflows pin the same setup-uv. ``actions/checkout`` joined
+them in #90, when Dependabot took over moving every pin; that every ``uses:``
+it scans takes this form is ``test_dependabot.py``'s. That a SHA *is* its tag
 needs the network, so it is checked by hand when a pin moves:
 ``gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq .object.sha``.
 
