@@ -533,6 +533,39 @@ def test_the_inventory_names_a_producer_for_every_stream() -> None:
     assert set(documented_producers()) == set(CANONICAL_STREAMS)
 
 
+KIND_CELL = 2
+"""The ``Kind`` column of the *Streams on this broker* table."""
+
+
+def documented_kinds() -> dict[str, str]:
+    """``stream -> the kind its inventory row names``, off ../docs/STREAMS.md.
+
+    The cell's leading word only: some carry prose after it (``fact, broadcast
+    - four event types``). The doc spells co-core's ``config_state`` the way
+    co-core's own prose does, ``config/state``, so the slash is the one
+    spelling folded.
+    """
+    found: dict[str, str] = {}
+    for topic, cells in inventory_rows().items():
+        leading = re.match(r"[a-z_/]+", cells[KIND_CELL])
+        assert leading, f"{topic}'s kind cell is {cells[KIND_CELL]!r}"
+        found[topic] = leading.group().replace("/", "_")
+    return found
+
+
+def test_the_inventory_labels_every_stream_with_co_cores_kind() -> None:
+    """CannObserv/broker#96: `info.changes`'s row said `event`, a kind co-core's
+    ``StreamKind`` does not have, while ``stream_kind`` gave `fact`. Every row,
+    not that one: a stream added upstream (#93 inventories two) cannot be
+    written in under a kind the taxonomy lacks, or under the wrong one of its
+    three, since kind is what decides group cardinality and whether a DLQ
+    exists."""
+    documented = documented_kinds()
+    assert set(documented) == set(CANONICAL_STREAMS)
+    wrong = {t: k for t, k in documented.items() if k != stream_kind(t)}
+    assert not wrong, {t: f"{k}, co-core says {stream_kind(t)}" for t, k in wrong.items()}
+
+
 def test_the_inventory_says_which_streams_are_never_xtrimmed() -> None:
     """The trim tests below read this set, so it has to be the right one.
 
