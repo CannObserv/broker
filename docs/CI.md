@@ -54,7 +54,7 @@ the bump's fault, so a red there is fixed on the CI side, not by taking the bump
 # Read the action's release notes, not just the diff: a major can change inputs.
 gh pr comment <N> --body "@dependabot rebase"   # only if main moved; wait for the force-push
 gh pr checks <N> --watch                        # green on the commit that lands
-gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq .object.sha   # = the PR's SHA
+# the PR's new SHA is its tag's commit: check it as Pins, above
 git fetch origin "$(gh pr view <N> --json headRefName -q .headRefName)"
 git merge --ff-only FETCH_HEAD
 git push origin main                            # GitHub marks the PR merged
