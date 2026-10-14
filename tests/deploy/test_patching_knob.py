@@ -16,6 +16,10 @@ The rest are pure parses of the file, run everywhere:
   Pending counts and ``ACL LOG`` need ``acladmin``, i.e. root, so they stay out.
 - **The backup covers the data store**, so the recovery point is the hourly
   snapshot already off the node rather than a second copy of ``dump.rdb``.
+- **The backup's minutes are one quiet line**, ``*:00-*:07``: the same 24
+  ranges the 24 ``HH:00-HH:07`` lines recorded (gregoryfoster/skills#384).
+- **Redis depends on tailscaled** for the tailnet address it binds. ``depends``
+  stops and holds nothing, so the ``tailscale`` hold stays beside it (#91).
 - **The callers are the public participants.** Adding a participant means a
   line here; the private one is told by hand, and its name stays out of this
   public repo (gregoryfoster/skills#350).
@@ -79,6 +83,15 @@ def test_the_knob_reads_clean() -> None:
     assert knob["class"]["value"] == "production"
     assert knob["posture"]["value"] == "scheduled"
     assert knob["window"], "no window: apply.sh refuses every step"
+    quiet = knob["quiet"]
+    assert [(q["start"], q["end"]) for q in quiet] == [
+        (f"{hour:02d}:00", f"{hour:02d}:07") for hour in range(24)
+    ]
+    assert {q["weekday"] for q in quiet} == {None}
+    assert len({q["line"] for q in quiet}) == 1, "the 24 ranges are one line"
+    assert [(d["datastore"], d["unit"]) for d in knob["depends"]] == [
+        ("redis-server", "tailscaled")
+    ]
 
 
 def test_no_knob_command_escalates() -> None:
@@ -92,6 +105,15 @@ def test_no_knob_command_escalates() -> None:
 def test_the_backup_covers_the_redis_datastore() -> None:
     assert _named("datastore") == [["redis", "redis-server"]]
     assert _named("backup") == [["broker-backup.service", "redis-server.service"]]
+
+
+def test_the_backup_minutes_are_one_quiet_line() -> None:
+    assert _named("quiet") == [["*:00-*:07"]]
+
+
+def test_redis_depends_on_tailscaled_which_stays_held() -> None:
+    assert _named("depends") == [["redis-server", "tailscaled"]]
+    assert ["tailscale", "tailscale"] in _named("hold")
 
 
 def test_the_callers_are_the_public_participants() -> None:

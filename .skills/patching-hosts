@@ -14,30 +14,8 @@ window Mon 23:00-05:00
 # broker-backup.timer: OnCalendar=hourly, RandomizedDelaySec=5min,
 # AccuracySec=1min, so a run starts up to 6 min past the hour and takes about
 # a second. No step may share it: it reads dump.rdb, which a Redis stop rewrites.
-quiet 00:00-00:07
-quiet 01:00-01:07
-quiet 02:00-02:07
-quiet 03:00-03:07
-quiet 04:00-04:07
-quiet 05:00-05:07
-quiet 06:00-06:07
-quiet 07:00-07:07
-quiet 08:00-08:07
-quiet 09:00-09:07
-quiet 10:00-10:07
-quiet 11:00-11:07
-quiet 12:00-12:07
-quiet 13:00-13:07
-quiet 14:00-14:07
-quiet 15:00-15:07
-quiet 16:00-16:07
-quiet 17:00-17:07
-quiet 18:00-18:07
-quiet 19:00-19:07
-quiet 20:00-20:07
-quiet 21:00-21:07
-quiet 22:00-22:07
-quiet 23:00-23:07
+# One line, the same range every hour (gregoryfoster/skills#384).
+quiet *:00-*:07
 # broker-bus-health.timer is OnUnitActiveSec=10min: its ticks drift, so no
 # quiet range can avoid them. It is WARN-only, so a tick inside a step is
 # harmless; a Redis step is best started just after one.
@@ -56,6 +34,9 @@ backup broker-backup.service redis-server.service
 # tailscaled, so the step is approved on its own and the bind checked after.
 origin pkgs.tailscale.com follow
 hold tailscale tailscale
+# The probe checks redis-server's After= on it, and --post-boot that it was
+# active first. depends stops and holds nothing, so the hold above stays.
+depends redis-server tailscaled
 
 # --- who is told ----------------------------------------------------------
 # Each bus participant (docs/STREAMS.md, docs/NETWORK-PATHS.md).
