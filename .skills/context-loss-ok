@@ -196,3 +196,12 @@ docs/STREAMS.md :: disproven :: two namespaces, `fetch` and `replicate`.
 # CR 3 - the processor row's link pointed at NETWORK-PATHS.md from outside it;
 # moved into that file it linked to itself, so it names the section instead
 docs/STREAMS.md :: retarget :: | `processor` | `co-processor` *(consuming since 2026-10-02, CannObserv/processor#1)*
+# 2026-10-15 curation: RESTART-WINDOW.md's 2026-10-13 reconnects and outage bounds
+# moved to NETWORK-PATHS.md (*Through a broker outage*), 1a-bis's as-executed record
+# and who-could-run-it history to INCIDENT-2026-09-10.md; each pointer into them
+# now names the new home
+docs/RESTART-WINDOW.md :: retarget :: | **Blast radius** | every participant loses the bus for that minute - five: archiver, watcher, replicator, processor, provisioner. All five came back unaided on 2026-10-13 (step 1d, *As measured*), but three create their groups only at boot, so 1d checks each group by name |
+docs/RESTART-WINDOW.md :: retarget :: | A service's `user=` is missing from `CLIENT LIST` after the broker is back | its unit gave up or refused to restart - past its outage bound, or a start guard (step 1d's table)
+docs/RESTART-WINDOW.md :: retarget :: carrying the flush. Confirm it the same way:
+docs/RESTART-WINDOW.md :: retarget :: naming db 0, 14 and 15** plus one `FLUSHDB` - db14 as well as the db15 this
+docs/RECOVERY.md :: retarget :: (`docs/RESTART-WINDOW.md`, *Recovery is bounded*). So before calling it done,

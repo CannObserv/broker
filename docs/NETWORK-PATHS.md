@@ -6,6 +6,8 @@ produces and consumes each stream is [STREAMS.md](STREAMS.md). Both halves
 moved out of it when it ran past the per-doc context budget: the measurements
 first (CannObserv/broker#14 review, finding 8), the participant table on
 2026-10-07.
+How each rides out a broker outage came from
+[RESTART-WINDOW.md](RESTART-WINDOW.md) on 2026-10-15, for the same reason.
 
 ## Participants, hosts and paths
 
@@ -145,3 +147,37 @@ cost is a slower start, not a lost message. Revisit if a participant ever
 settles on a relayed path again - the table above would show it as a path that
 stops saying `direct`.
 
+## Through a broker outage
+
+**As measured, 2026-10-13** (broker#67). Redis restart: down 04:17:26.829Z to
+04:17:27.346Z. tailscaled restart: 04:18:45Z. Reboot: stop 04:22:08.491Z to
+`Ready` 04:22:19.093Z. Broker's side [measured], after the restart and the
+reboot: `entries-added` only forward, all nine groups at their tips with pending
+0, none recreated, all five users blocked in their reads. Each reconnect is the
+participant's own claim, from its journald:
+
+| Participant | Redis restart | tailscaled | Reboot, after `Ready` |
+|---|---|---|---|
+| archiver | ~0.6 s, 1 failed cycle | rode through | ~1.5 s, 3 cycles |
+| watcher | within its 5 s backoff | rode through | ~4.5 s |
+| replicator | `recovered` 04:17:32.96Z, 1 cycle | rode through | +6.5 s, 3 cycles |
+| processor | no time stated | rode through | ~6.5 s |
+| provisioner | within a 1 s backoff | rode through | ~6 s, then consumed a post-boot entry |
+
+No `NOGROUP`, no unit restarted.
+
+**Recovery is bounded, not unconditional.** All five treat a broker outage as
+transient, but each rides one out only so far (backoffs as each told broker#67):
+
+| Consumer | Backoff | Absorbs a sustained outage of | Past that |
+|---|---|---|---|
+| replicator | 30 s cap | **~64 min** floor at `StartLimitBurst=8`, past 2026-09-16's 57 m 48 s: 8 starts per 2 h, every recent one included, each waiting 451 s even when booted into the outage, plus 7 gaps of 34 s; more if unreachable [replicator's claim, running `bd49943`: CannObserv/replicator#133, #134] | unit `failed`: on its host, `sudo systemctl reset-failed replicator && sudo systemctl start replicator`, then `journalctl -t replicator-failure` |
+| archiver, watcher | 30 s cap; flat 5 s | not established | unknown. Both came back unaided from 2026-09-16's 57 m 48 s, the worst on record |
+| processor, provisioner | 30 s cap (provisioner: 15 s socket timeout) | not established | unknown. First through a broker restart 2026-10-13 |
+
+A planned window is minutes and sits inside every bound. An unplanned outage
+or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.
+On 2026-09-16 replicator's unit failed *inside* its bound, because a start guard
+refused the restarts. **A `user=` missing after the broker is back means check
+that unit now, whatever the outage length** - waiting is how that one took an
+hour to find.

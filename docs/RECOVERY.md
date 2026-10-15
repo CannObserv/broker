@@ -284,7 +284,7 @@ means. The checks that must be exact are the `XLEN` and `XINFO GROUPS` lines.
 Whether they reconnect on their own depends on how long the node was gone:
 replicator absorbs about 64 minutes at the floor, then leaves its unit `failed`
 for an operator, and the others have no established bound
-(`docs/RESTART-WINDOW.md`, *Recovery is bounded*). So before calling it done,
+(`docs/NETWORK-PATHS.md`, *Recovery is bounded*). So before calling it done,
 confirm each `user=` in `CLIENT LIST` and each group at its stream's tip.
 Once they are back:
 

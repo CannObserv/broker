@@ -170,3 +170,24 @@ deploy/redis-acl.conf :: # docs/STREAMS.md fires (`XLEN content.blobs` past 25k,
 deploy/redis-acl.conf :: # ../docs/STREAMS.md says **Never XTRIMmed**: a cap on a command stream deletes
 tests/deploy/test_redis_acl.py :: """``stream -> the service consuming it in a group``, off ../docs/STREAMS.md.
 docs/NON-STREAM-KEYS.md :: STREAMS.md had no row for anything that is not a stream, which is how an audit
+# 2026-10-15 curation of RESTART-WINDOW.md: what moved was 1d's reconnects and
+# bounds and 1a-bis's history; `cred`/`rcli`, 1d's loops and the window's
+# commands stayed, so these point at what is still there
+docs/ACL-CUTOVER.md :: the `cred` and `rcli` helpers defined at the top of RESTART-WINDOW.md; `rcli` takes
+docs/DLQ-DRAINING.md :: # `cred` and `rcli` as defined at the top of RESTART-WINDOW.md - the operator,
+docs/NODE-CREDENTIALS.md :: render. Root decrypts on demand - `cred` at the top of [RESTART-WINDOW.md](RESTART-WINDOW.md) - with
+docs/NETWORK-PATHS.md :: [RESTART-WINDOW.md](RESTART-WINDOW.md) on 2026-10-15, for the same reason.
+deploy/needrestart.conf.d/broker.conf :: # Restarts on this node belong to docs/RESTART-WINDOW.md.
+deploy/redis-acl.conf :: # (`rcli` in ../docs/RESTART-WINDOW.md) - unattended, with no operator prompt.
+tests/deploy/test_redis_acl.py :: #: (docs/RESTART-WINDOW.md): the snapshot, the AOF rewrite and its progress, the
+tests/deploy/test_redis_acl.py :: """docs/RESTART-WINDOW.md's commands, as the user that now issues them."""
+tests/deploy/test_runbook_loops.py :: as written never checked three of the nine groups. ``docs/RESTART-WINDOW.md``
+# RECOVERY.md lost nothing but one retargeted pointer; these name what it still holds
+docs/NODE-CREDENTIALS.md :: not decrypt the old credential anyway (RECOVERY.md). Run this **after** the
+docs/NODE-CREDENTIALS.md :: (RECOVERY.md step 2, broker#72); on a new cluster, [ACL-CUTOVER.md](ACL-CUTOVER.md)
+docs/RESTART-WINDOW.md :: `docs/RECOVERY.md`, *Same node, lost data*.
+docs/RESTART-WINDOW.md :: that every consumer has reconnected, per step 1d and `docs/RECOVERY.md` §5.
+docs/RESTART-WINDOW.md :: behind a restart that comes up wrong (`docs/RECOVERY.md`, *Same node, lost
+docs/RESTART-WINDOW.md :: | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis |
+docs/BUS-HEALTH.md :: `backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s; the drain
+docs/NETWORK-PATHS.md :: or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.

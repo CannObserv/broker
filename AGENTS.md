@@ -199,7 +199,7 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
 - [docs/STREAMS.md](docs/STREAMS.md) - which streams exist; who produces, consumes and drains each
 - [docs/NON-STREAM-KEYS.md](docs/NON-STREAM-KEYS.md) - keys that are not streams: Replicator's dedupe keys
 - [docs/DLQ-DRAINING.md](docs/DLQ-DRAINING.md) - who writes, triages and backstops each `*.dlq`, the capture, and the `XTRIM MINID` drain
-- [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - where each participant runs, its measured latency and path, and the accepted DERP risk
+- [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - where each participant runs, its measured latency and path, the accepted DERP risk, how it rides out a broker outage
 - [docs/CONSUMER-REGISTRATIONS.md](docs/CONSUMER-REGISTRATIONS.md) - the one-time reap of orphaned consumer registrations, and why it cannot recur
 - [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
 - [docs/LWW-CAP.md](docs/LWW-CAP.md) - the LWW length threshold, read off the stream

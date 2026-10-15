@@ -55,7 +55,7 @@ be done one service at a time with a rollback after each.
 | | |
 |---|---|
 | **Expected downtime** | under a minute - one `systemctl restart`; measured 2026-10-13 (broker#67): ~0.5 s for a restart, ~10.6 s for a VM reboot |
-| **Blast radius** | every participant loses the bus for that minute - five: archiver, watcher, replicator, processor, provisioner. All five came back unaided on 2026-10-13 (step 1d, *As measured*), but three create their groups only at boot, so 1d checks each group by name |
+| **Blast radius** | every participant loses the bus for that minute - five: archiver, watcher, replicator, processor, provisioner. All five came back unaided on 2026-10-13 ([NETWORK-PATHS.md](NETWORK-PATHS.md#through-a-broker-outage)), but three create their groups only at boot, so 1d checks each group by name |
 | **Reversible** | yes, at every step |
 | **Data touched** | none by steps 1b to 1d and 2 to 4. Step 1a-bis rewrites the AOF and discards its history, deliberately, after a fresh snapshot has been shipped off-node |
 
@@ -140,19 +140,9 @@ done on 2026-09-08, and `FLUSHDB` is now sitting in the AOF.** Under
 is gone. Only entries appended *after* the flush survive.
 
 So the two halves of R4's fix are hostile in this order and safe in the other.
-Purge the history first. On 2026-09-10 `BGREWRITEAOF` belonged to no user but
-`default`, so this is where that window was opened - `ACL SETUSER default on` as
-`acladmin` - and closed again after 1d. Since CannObserv/broker#52 `acladmin`
-holds it, and `default` is a tombstone that an `on` would not help.
-
-**Opening a window used to be the same act as making the cluster's break-glass
-live again**, and that credential - `default`'s, the one every service held
-before the cutover - leaked into another host's journald
-(CannObserv/archiver#251) and was rotated in four writes by
-CannObserv/broker#46. #52 retired it instead: the window's commands moved to
-`acladmin`, whose password is an encrypted credential on this node and nowhere
-in plaintext, and `default`'s became the digest of a value nobody kept. If
-`acladmin`'s is exposed, rotate it before the window, not after:
+Purge the history first, as `acladmin` (how 2026-09-10's window opened instead:
+[INCIDENT-2026-09-10.md](INCIDENT-2026-09-10.md)). If its credential is exposed,
+rotate it before the window, not after:
 [NODE-CREDENTIALS.md](NODE-CREDENTIALS.md).
 
 The rewrite destroys the AOF history, which is what recovered the incident
@@ -210,14 +200,7 @@ step is the one that steps on it. A `NOPERM` or `WRONGPASS` on the
 or `cred` decrypted nothing - and everything after it printed the never-ran
 defaults.
 
-**As executed, 2026-09-10 20:06 UTC.** The AOF held **61 `SELECT` commands
-naming db 0, 14 and 15** plus one `FLUSHDB` - db14 as well as the db15 this
-runbook anticipated, so the blast radius was wider than the incident write-up
-assumed. After the rewrite: `aof_rewrites` 0 to 1, base `appendonly.aof.1` to
-`appendonly.aof.2`, base size 89 bytes to 508,520, incr 42.9 MB to **0**, and
-zero `SELECT` or `FLUSHDB` left in the new incr file. The server logged
-`Removing the history file appendonly.aof.1.incr.aof`, which is the 42.9 MB
-carrying the flush. Confirm it the same way:
+Confirm no history survived (the counts as executed: [INCIDENT-2026-09-10.md](INCIDENT-2026-09-10.md)):
 
 ```bash
 sudo grep -ac '^SELECT'  /var/lib/redis/appendonlydir/appendonly.aof.*.incr.aof   # -> 0
@@ -362,38 +345,8 @@ output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 whose consumer holds entries on purpose: judge it by pending age, not pending
 count ([BUS-HEALTH.md](BUS-HEALTH.md), *Pending age*).
 
-**As measured, 2026-10-13** (broker#67). Redis restart: down 04:17:26.829Z to
-04:17:27.346Z. tailscaled restart: 04:18:45Z. Reboot: stop 04:22:08.491Z to
-`Ready` 04:22:19.093Z. Broker's side [measured], after the restart and the
-reboot: `entries-added` only forward, all nine groups at their tips with pending
-0, none recreated, all five users blocked in their reads. Each reconnect is the
-participant's own claim, from its journald:
-
-| Participant | Redis restart | tailscaled | Reboot, after `Ready` |
-|---|---|---|---|
-| archiver | ~0.6 s, 1 failed cycle | rode through | ~1.5 s, 3 cycles |
-| watcher | within its 5 s backoff | rode through | ~4.5 s |
-| replicator | `recovered` 04:17:32.96Z, 1 cycle | rode through | +6.5 s, 3 cycles |
-| processor | no time stated | rode through | ~6.5 s |
-| provisioner | within a 1 s backoff | rode through | ~6 s, then consumed a post-boot entry |
-
-No `NOGROUP`, no unit restarted.
-
-**Recovery is bounded, not unconditional.** All five treat a broker outage as
-transient, but each rides one out only so far (backoffs as each told broker#67):
-
-| Consumer | Backoff | Absorbs a sustained outage of | Past that |
-|---|---|---|---|
-| replicator | 30 s cap | **~64 min** floor at `StartLimitBurst=8`, past 2026-09-16's 57 m 48 s: 8 starts per 2 h, every recent one included, each waiting 451 s even when booted into the outage, plus 7 gaps of 34 s; more if unreachable [replicator's claim, running `bd49943`: CannObserv/replicator#133, #134] | unit `failed`: on its host, `sudo systemctl reset-failed replicator && sudo systemctl start replicator`, then `journalctl -t replicator-failure` |
-| archiver, watcher | 30 s cap; flat 5 s | not established | unknown. Both came back unaided from 2026-09-16's 57 m 48 s, the worst on record |
-| processor, provisioner | 30 s cap (provisioner: 15 s socket timeout) | not established | unknown. First through a broker restart 2026-10-13 |
-
-A planned window is minutes and sits inside every bound. An unplanned outage
-or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.
-On 2026-09-16 replicator's unit failed *inside* its bound, because a start guard
-refused the restarts. **A `user=` missing after the broker is back means check
-that unit now, whatever the outage length** - waiting is how that one took an
-hour to find.
+How each participant came back on 2026-10-13, and how long each can wait:
+[NETWORK-PATHS.md](NETWORK-PATHS.md#through-a-broker-outage).
 
 **Do not start a second `redis-server` against this config to "test" it.** It
 inherits `dir /var/lib/redis` and `appendonly yes`, so it opens the live AOF for
@@ -429,7 +382,7 @@ data*).
 | Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u redis-server` |
 | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
 | `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
-| A service's `user=` is missing from `CLIENT LIST` after the broker is back | its unit gave up or refused to restart - past its outage bound, or a start guard (step 1d's table) | check the unit on its host now: `systemctl status <unit>`. `ExecMainStatus` there reports the last `ExecStartPre`, not the worker. A `failed` replicator needs `reset-failed` before `start` (CannObserv/replicator#133) |
+| A service's `user=` is missing from `CLIENT LIST` after the broker is back | its unit gave up or refused to restart - past its outage bound, or a start guard ([NETWORK-PATHS.md](NETWORK-PATHS.md#through-a-broker-outage)) | check the unit on its host now: `systemctl status <unit>`. `ExecMainStatus` there reports the last `ExecStartPre`, not the worker. A `failed` replicator needs `reset-failed` before `start` (CannObserv/replicator#133) |
 | A group is missing from `XINFO GROUPS`, or a service logs `NOGROUP` | its group is gone. Archiver and provisioner recreate theirs at `0` (provisioner logs `group_recreated`); the other three latch on `NOGROUP` until restarted | restart that one on its host. It recreates the group at `$`, skipping what arrived since: on replicator's groups, step 1d's *Every group by name* gives the cost |
 | `XINFO GROUPS` shows non-zero `lag` on a group after a restart | usually nothing: on 7.0 the counter misreads after a restart | compare the group's `last-delivered-id` with the stream's `last-generated-id`; only a difference is a backlog |
 
