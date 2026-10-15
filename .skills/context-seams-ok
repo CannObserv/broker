@@ -192,3 +192,4 @@ docs/RESTART-WINDOW.md :: | Streams come back far shorter than they went in | **
 docs/BUS-HEALTH.md :: `backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s; the drain
 docs/NETWORK-PATHS.md :: or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.
 docs/INCIDENT-2026-09-10.md :: Step 1a-bis of [RESTART-WINDOW.md](RESTART-WINDOW.md), before `databases 1` went back on.
+docs/NETWORK-PATHS.md :: A planned restart window ([RESTART-WINDOW.md](RESTART-WINDOW.md)) is minutes and

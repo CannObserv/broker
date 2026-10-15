@@ -175,7 +175,8 @@ transient, but each rides one out only so far (backoffs as each told broker#67):
 | archiver, watcher | 30 s cap; flat 5 s | not established | unknown. Both came back unaided from 2026-09-16's 57 m 48 s, the worst on record |
 | processor, provisioner | 30 s cap (provisioner: 15 s socket timeout) | not established | unknown. First through a broker restart 2026-10-13 |
 
-A planned window is minutes and sits inside every bound. An unplanned outage
+A planned restart window ([RESTART-WINDOW.md](RESTART-WINDOW.md)) is minutes and
+sits inside every bound. An unplanned outage
 or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.
 On 2026-09-16 replicator's unit failed *inside* its bound, because a start guard
 refused the restarts. **A `user=` missing after the broker is back means check

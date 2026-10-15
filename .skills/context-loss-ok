@@ -214,3 +214,5 @@ docs/NETWORK-PATHS.md :: disproven :: **Accepted**, because a delayed first conn
 docs/NETWORK-PATHS.md :: disproven :: participants already absorb at every broker restart: the 2026-09-10 `databases 1`
 # CR 7 - "above" was the runbook's 1a-bis; this PR put a fix section below it
 docs/INCIDENT-2026-09-10.md :: retarget :: Recorded because the fix above is only credible with the failure beside it.
+# CR 8 - "a planned window" meant RESTART-WINDOW's, unnamed once moved out of it
+docs/RESTART-WINDOW.md :: retarget :: A planned window is minutes and sits inside every bound. An unplanned outage
