@@ -20,10 +20,13 @@ bottom.
   the mistake broker#9 corrected in the ACL. Inventoried in
   [NON-STREAM-KEYS.md](NON-STREAM-KEYS.md).
 
-A group's position is recoverable from nowhere else. Losing it means every
-group re-provisions at `ensure_group`'s default `$`, which is silent and skips
-everything between the lost position and the tail - the failure broker#1 went
-to some length to avoid during a *planned* migration, arriving unplanned. And
+A group's position is recoverable from nowhere else. A restore keeps it (the
+snapshot holds the groups; `restore.py` creates none). Losing the data outright
+re-provisions processor's, watcher's and replicator's groups at `ensure_group`'s
+default `$`, silently skipping everything between the lost position and the
+tail - the failure broker#1 went to some length to avoid during a *planned*
+migration, arriving unplanned. Archiver and provisioner re-create theirs at `0`
+(provisioner's claim, CannObserv/provisioner#43). And
 a single-purpose node's loss presents as an idle cluster: participants connect,
 find nothing, and log nothing interesting.
 
@@ -277,28 +280,26 @@ means. The checks that must be exact are the `XLEN` and `XINFO GROUPS` lines.
 
 ### 5. What the participants see
 
-Whether they reconnect on their own depends on how long the node was gone. All
-five classify a broker outage as transient, but replicator absorbs about 64
-minutes at the floor and then leaves its unit `failed` for an operator. The
-others have no established bound (`docs/RESTART-WINDOW.md`, *Recovery is
-bounded*). A restore is
-exactly the unplanned outage that can outlast that. So before calling it done,
-confirm each `user=` in `CLIENT LIST` and each group's `last-delivered-id`
-against its stream's `last-generated-id`. Once they are back:
+Whether they reconnect on their own depends on how long the node was gone:
+replicator absorbs about 64 minutes at the floor, then leaves its unit `failed`
+for an operator, and the others have no established bound
+(`docs/RESTART-WINDOW.md`, *Recovery is bounded*). So before calling it done,
+confirm each `user=` in `CLIENT LIST` and each group at its stream's tip.
+Once they are back:
 
 - **Entries published after the snapshot are gone from the bus.** Archiver's
   outbox has already marked them published, so nothing re-emits them; the
-  facts still exist in archiver's database, not on the bus. That is the RPO,
-  stated honestly.
+  facts survive only in archiver's database. That is the RPO.
 - **Group positions roll back consistently** with the entries, so nothing is
   skipped and nothing is double-delivered beyond the PEL.
+- **Create no group by hand.** Each consumer creates its own; one created
+  first keeps its position, so a `$` there makes provisioner skip, silently
+  (CannObserv/broker#97). Broker runs no reset: no broker user holds `+xgroup`.
 - **PEL entries are redelivered** through each consumer's `XAUTOCLAIM`, which
   is what the PEL is for.
 - **Watcher's LWW streams** republish their full set within five minutes.
-- **Replicator's `cmd:fetch:*` guards** come back with their absolute
-  expiries, so any that lapsed during the outage are already gone and
-  replicator refetches those commands unguarded - which is what a guard
-  expiring means.
+- **Replicator's `replicator:cmd:*` guards** that lapsed during the outage
+  are gone, correctly (step 4).
 
 ### 6. Close out
 

@@ -55,7 +55,7 @@ be done one service at a time with a rollback after each.
 | | |
 |---|---|
 | **Expected downtime** | under a minute - one `systemctl restart`; measured 2026-10-13 (broker#67): ~0.5 s for a restart, ~10.6 s for a VM reboot |
-| **Blast radius** | every participant loses the bus for that minute - five: archiver, watcher, replicator, processor, provisioner. All five came back unaided on 2026-10-13 (step 1d, *As measured*), but four create their groups only at boot, so 1d checks each group by name |
+| **Blast radius** | every participant loses the bus for that minute - five: archiver, watcher, replicator, processor, provisioner. All five came back unaided on 2026-10-13 (step 1d, *As measured*), but three create their groups only at boot, so 1d checks each group by name |
 | **Reversible** | yes, at every step |
 | **Data touched** | none by steps 1b to 1d and 2 to 4. Step 1a-bis rewrites the AOF and discards its history, deliberately, after a fresh snapshot has been shipped off-node |
 
@@ -347,14 +347,13 @@ Then confirm each service is back **and consuming**. `CLIENT LIST` grouped by
 the 2026-09-16 restart `XINFO GROUPS` `lag` read ~150 on groups that were caught
 up, and consumer `idle` was reset for every consumer at AOF load (#20).
 
-**Every group by name, not by count.** Archiver alone recreates a missing
-group, at `0`. Processor, watcher, replicator and provisioner create theirs only
-at boot, from `$`, and a group lost while one runs latches as `NOGROUP` until a
-restart (provisioner's private tracker has the issue; the other three share
-it). So a missing group is a real fault, and its fix skips whatever arrived in
-between. On replicator's groups (the issuers' claims, broker#67; unchanged by
-CannObserv/replicator#133), watcher re-issues a `replicator.fetch` skip after
-~30 min, archiver's reaper a `replicator.persist` one after 6 h, at most 3
+**Every group by name, not by count.** Archiver and provisioner recreate a
+missing group at `0` (provisioner's claim: CannObserv/provisioner#43,
+`b50de3f10717`, live 2026-10-14). The other three create theirs only at boot,
+from `$`, and latch on `NOGROUP` until restarted: a real fault, whose fix skips
+what arrived between. On replicator's groups (the issuers' claims, broker#67;
+unchanged by CannObserv/replicator#133), watcher re-issues a `replicator.fetch`
+skip after ~30 min, archiver's reaper a `replicator.persist` one after 6 h, at most 3
 times. A `replicator.replicate` one is closed after 6 h and **never
 re-issued**: that is an operator act. Read all nine in the `XINFO GROUPS`
 output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
@@ -432,7 +431,7 @@ data*).
 | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
 | `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
 | A service's `user=` is missing from `CLIENT LIST` after the broker is back | its unit gave up or refused to restart - past its outage bound, or a start guard (step 1d's table) | check the unit on its host now: `systemctl status <unit>`. `ExecMainStatus` there reports the last `ExecStartPre`, not the worker. A `failed` replicator needs `reset-failed` before `start` (CannObserv/replicator#133) |
-| A group is missing from `XINFO GROUPS`, or a service logs `NOGROUP` | its group is gone. Archiver recreates its own at `0`; the other four create theirs only at boot, and latch on `NOGROUP` until restarted | restart that service on its host. It recreates the group at `$`, skipping whatever arrived since: step 1d's *Every group by name* says what that costs on each of replicator's groups |
+| A group is missing from `XINFO GROUPS`, or a service logs `NOGROUP` | its group is gone. Archiver and provisioner recreate theirs at `0` (provisioner logs `group_recreated`); the other three latch on `NOGROUP` until restarted | restart that one on its host. It recreates the group at `$`, skipping what arrived since: on replicator's groups, step 1d's *Every group by name* gives the cost |
 | `XINFO GROUPS` shows non-zero `lag` on a group after a restart | usually nothing: on 7.0 the counter misreads after a restart | compare the group's `last-delivered-id` with the stream's `last-generated-id`; only a difference is a backlog |
 
 ---
