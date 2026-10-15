@@ -191,3 +191,4 @@ docs/RESTART-WINDOW.md :: behind a restart that comes up wrong (`docs/RECOVERY.m
 docs/RESTART-WINDOW.md :: | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis |
 docs/BUS-HEALTH.md :: `backup` and `persistence` findings are [RECOVERY.md](RECOVERY.md)'s; the drain
 docs/NETWORK-PATHS.md :: or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.
+docs/INCIDENT-2026-09-10.md :: Step 1a-bis of [RESTART-WINDOW.md](RESTART-WINDOW.md), before `databases 1` went back on.
