@@ -14,7 +14,7 @@ until both runbooks name it.
 
 The list is stated, not derived with ``--scan``: after a restore, a stream that
 did not come back would drop out of a scanned list and pass silently. For the
-same reason a loop in another code block than the definition must use
+same reason a loop in a different code block from the definition must use
 ``${GROUPED:?...}``, so a shell that never ran the definition fails loudly
 rather than looping over nothing.
 """
