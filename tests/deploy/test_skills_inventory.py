@@ -83,6 +83,11 @@ def test_patching_hosts_is_vendored() -> None:
     assert "patching-hosts" in _links(SKILLS)
 
 
+def test_coordinating_epics_is_vendored() -> None:
+    """#99: #80's check-in protocol, packaged as gregoryfoster/skills#348."""
+    assert "coordinating-epics" in _links(SKILLS)
+
+
 def _committable() -> list[Path]:
     """Tracked files plus untracked, unignored ones: what a ``git add -A`` takes.
 

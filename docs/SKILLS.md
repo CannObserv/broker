@@ -81,12 +81,15 @@ It measures and never curates; a budget warning in its run means someone runs
 
 ## Selection
 
-Twelve of upstream's twenty-one skills: the `gregoryfoster/skills` set archiver,
+Thirteen of upstream's twenty-two skills: the `gregoryfoster/skills` set archiver,
 notifier, replicator and watcher vendor, less what does not apply here, plus
 `using-mayfly-chat` (#63), which the cohort adopts together
 (gregoryfoster/skills#302), and `patching-hosts` (#67), the cohort's scheduled
 OS patching run (gregoryfoster/skills#313). Its host knob is
-`.skills/patching-hosts`, a real file the skill reads and never writes.
+`.skills/patching-hosts`, a real file the skill reads and never writes. And
+`coordinating-epics` (#99), #80's check-in protocol as a skill
+(gregoryfoster/skills#348): git, an authenticated `gh` and python3 3.9+, no
+knob. Vendoring it is not adopting it; #80's coordinator adopts it.
 
 **`using-mayfly-chat` needs Node.js 18+** on the host running the agent; its
 wrapper exits 4 without it. **A channel URL never reaches a durable store** -
@@ -127,7 +130,7 @@ Left out:
 | `reviewing-code`, `shipping-work`, `-php`, `-python-click` | Other stack variants of the two above |
 
 **No `obra/superpowers`.** Every sibling also vendors it (`brainstorming`,
-`test-driven-development`, `systematic-debugging`, ...). None of the twelve below
+`test-driven-development`, `systematic-debugging`, ...). None of the thirteen below
 depends on it; adding it is a second submodule by the same procedure.
 
 ## Inventory
@@ -136,6 +139,7 @@ All plain symlinks - no local overrides.
 
 | Skill | Triggers |
 |---|---|
+| `coordinating-epics` | coordinate the epic, burn down, check-in, I finished #N, next issue |
 | `curating-context` | curate context, context budget, trim AGENTS.md |
 | `enforcing-architecture` | add a fitness function, enforce this contract, lock this rule |
 | `init-socraticode` | init socraticode, set up code search, index this project |
