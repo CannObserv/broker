@@ -205,3 +205,7 @@ docs/RESTART-WINDOW.md :: retarget :: | A service's `user=` is missing from `CLI
 docs/RESTART-WINDOW.md :: retarget :: carrying the flush. Confirm it the same way:
 docs/RESTART-WINDOW.md :: retarget :: naming db 0, 14 and 15** plus one `FLUSHDB` - db14 as well as the db15 this
 docs/RECOVERY.md :: retarget :: (`docs/RESTART-WINDOW.md`, *Recovery is bounded*). So before calling it done,
+# CR 1 - in INCIDENT the moved paragraph's "this" and "1d" named the runbook's steps
+docs/RESTART-WINDOW.md :: retarget :: Purge the history first. On 2026-09-10 `BGREWRITEAOF` belonged to no user but
+docs/RESTART-WINDOW.md :: retarget :: `default`, so this is where that window was opened - `ACL SETUSER default on` as
+docs/RESTART-WINDOW.md :: retarget :: `acladmin` - and closed again after 1d. Since CannObserv/broker#52 `acladmin`
