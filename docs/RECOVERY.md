@@ -293,8 +293,9 @@ Once they are back:
 - **Group positions roll back consistently** with the entries, so nothing is
   skipped and nothing is double-delivered beyond the PEL.
 - **Create no group by hand.** Each consumer creates its own; one created
-  first keeps its position, so a `$` there makes provisioner skip, silently
-  (CannObserv/broker#97). Broker runs no reset: no broker user holds `+xgroup`.
+  first keeps its position, so a `$` there, made while provisioner is down,
+  makes it skip silently (CannObserv/broker#97). Broker runs no reset: no
+  broker user holds `+xgroup`.
 - **PEL entries are redelivered** through each consumer's `XAUTOCLAIM`, which
   is what the PEL is for.
 - **Watcher's LWW streams** republish their full set within five minutes.
