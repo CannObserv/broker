@@ -209,3 +209,6 @@ docs/RECOVERY.md :: retarget :: (`docs/RESTART-WINDOW.md`, *Recovery is bounded*
 docs/RESTART-WINDOW.md :: retarget :: Purge the history first. On 2026-09-10 `BGREWRITEAOF` belonged to no user but
 docs/RESTART-WINDOW.md :: retarget :: `default`, so this is where that window was opened - `ACL SETUSER default on` as
 docs/RESTART-WINDOW.md :: retarget :: `acladmin` - and closed again after 1d. Since CannObserv/broker#52 `acladmin`
+# CR 4 - five participants since #78, as the table at the top of the file says
+docs/NETWORK-PATHS.md :: disproven :: **Accepted**, because a delayed first connection is a failure all three
+docs/NETWORK-PATHS.md :: disproven :: participants already absorb at every broker restart: the 2026-09-10 `databases 1`

@@ -139,8 +139,8 @@ So a relay outage does nothing to a path that is already direct - direct packets
 do not touch it. What it can touch is a participant **booting during** the
 outage, whose first connection may be delayed while the path forms.
 
-**Accepted**, because a delayed first connection is a failure all three
-participants already absorb at every broker restart: the 2026-09-10 `databases 1`
+**Accepted**, because a delayed first connection is a failure every
+participant already absorbs at every broker restart: the 2026-09-10 `databases 1`
 window took this broker away for about two seconds and every group resumed at its
 exact position with nothing pending ([RESTART-WINDOW.md](RESTART-WINDOW.md)). The
 cost is a slower start, not a lost message. Revisit if a participant ever
