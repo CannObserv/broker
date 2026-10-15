@@ -145,8 +145,8 @@ Purge the history first, as `acladmin` (how 2026-09-10's window opened instead:
 rotate it before the window, not after:
 [NODE-CREDENTIALS.md](NODE-CREDENTIALS.md).
 
-The rewrite destroys the AOF history, which is what recovered the incident
-recorded there. That is acceptable now that broker#4 ships an hourly snapshot to
+The rewrite destroys the AOF history, which is what recovered the 2026-09-10
+incident. That is acceptable now that broker#4 ships an hourly snapshot to
 `co-gcs-broker-backup`, with one step first. The backup job ships whatever
 `dump.rdb` is, and only a save point rewrites that file, so a snapshot shipped
 by hand is up to an hour old unless you take the save yourself - `acladmin`

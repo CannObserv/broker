@@ -216,3 +216,6 @@ docs/NETWORK-PATHS.md :: disproven :: participants already absorb at every broke
 docs/INCIDENT-2026-09-10.md :: retarget :: Recorded because the fix above is only credible with the failure beside it.
 # CR 8 - "a planned window" meant RESTART-WINDOW's, unnamed once moved out of it
 docs/RESTART-WINDOW.md :: retarget :: A planned window is minutes and sits inside every bound. An unplanned outage
+# CR 9 - "there" now followed the NODE-CREDENTIALS link this curation put above it
+docs/RESTART-WINDOW.md :: retarget :: The rewrite destroys the AOF history, which is what recovered the incident
+docs/RESTART-WINDOW.md :: retarget :: recorded there. That is acceptable now that broker#4 ships an hourly snapshot to
