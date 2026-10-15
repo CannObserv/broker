@@ -212,3 +212,5 @@ docs/RESTART-WINDOW.md :: retarget :: `acladmin` - and closed again after 1d. Si
 # CR 4 - five participants since #78, as the table at the top of the file says
 docs/NETWORK-PATHS.md :: disproven :: **Accepted**, because a delayed first connection is a failure all three
 docs/NETWORK-PATHS.md :: disproven :: participants already absorb at every broker restart: the 2026-09-10 `databases 1`
+# CR 7 - "above" was the runbook's 1a-bis; this PR put a fix section below it
+docs/INCIDENT-2026-09-10.md :: retarget :: Recorded because the fix above is only credible with the failure beside it.
