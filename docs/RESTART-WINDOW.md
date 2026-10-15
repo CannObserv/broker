@@ -312,17 +312,16 @@ rcli acladmin SELECT 0                           # -> OK
 
 # The data, against the snapshot taken before the window. Lengths alone are not
 # enough - entries-added is the counter that tells a trim from a wipe.
-for s in info.changes info.registry info.watch-status content.fetch \
-         content.fetch-policy content.blobs content.revisions \
-         content.artifacts content.replicate content.persist \
-         content.process content.derived content.fetch.dlq; do
+# Every grouped stream: nine groups on eight (docs/STREAMS.md); a test pins it.
+GROUPED="content.fetch content.blobs content.revisions content.artifacts
+         content.replicate content.persist content.process content.derived"
+for s in info.changes info.registry info.watch-status content.fetch-policy \
+         content.fetch.dlq $GROUPED; do
     printf '%-22s XLEN=%s entries-added=%s\n' "$s" \
         "$(rcli acladmin XLEN $s)" \
         "$(rcli acladmin XINFO STREAM $s 2>/dev/null | grep -A1 entries-added | tail -1)"
 done
-# Every grouped stream: nine groups on eight streams (docs/STREAMS.md).
-for s in content.fetch content.blobs content.revisions content.artifacts \
-         content.replicate content.persist content.process content.derived; do
+for s in $GROUPED; do
     echo "== $s"; rcli acladmin XINFO GROUPS $s
 done
 

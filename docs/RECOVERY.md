@@ -250,11 +250,12 @@ rcli() { local u=$1 p; shift
 journalctl -u redis-server -n 20 -o cat --no-pager | grep -E 'loaded from base file|DB index'
 rcli acladmin INFO keyspace                         # db0:keys=N,expires=M - the rule is below
 
-for s in info.changes info.registry info.watch-status content.fetch content.fetch-policy \
-         content.blobs content.revisions content.artifacts content.replicate; do
+GROUPED="content.fetch content.revisions content.artifacts content.replicate content.blobs
+         content.persist content.process content.derived"   # test-pinned
+for s in info.changes info.registry info.watch-status content.fetch-policy $GROUPED; do
     printf '%-22s %s\n' "$s" "$(rcli acladmin XLEN "$s")"
 done
-for s in content.fetch content.revisions content.artifacts content.replicate content.blobs; do
+for s in $GROUPED; do
     echo "== $s"; rcli acladmin XINFO GROUPS "$s"       # last-delivered-id, pending, lag
 done
 
@@ -353,7 +354,7 @@ redis-server --port 6399 --bind 127.0.0.1 --dir /tmp/rehearsal --appendonly yes 
     --daemonize yes --pidfile /tmp/rehearsal/pid --logfile /tmp/rehearsal/log
 sleep 1; grep -E 'loaded from base file|Creating AOF base' /tmp/rehearsal/log   # the first line, never the second
 redis-cli -p 6399 INFO keyspace
-for s in content.fetch content.revisions content.artifacts content.replicate content.blobs; do
+for s in ${GROUPED:?step 4}; do
     echo "== $s"; redis-cli -p 6399 XINFO GROUPS "$s"
 done
 redis-cli -p 6399 SHUTDOWN NOSAVE; rm -rf /tmp/rehearsal   # nothing left listening, nothing left on disk
