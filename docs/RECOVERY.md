@@ -354,7 +354,7 @@ redis-server --port 6399 --bind 127.0.0.1 --dir /tmp/rehearsal --appendonly yes 
     --daemonize yes --pidfile /tmp/rehearsal/pid --logfile /tmp/rehearsal/log
 sleep 1; grep -E 'loaded from base file|Creating AOF base' /tmp/rehearsal/log   # the first line, never the second
 redis-cli -p 6399 INFO keyspace
-for s in ${GROUPED:?step 4}; do
+for s in ${GROUPED:?step 4 above}; do
     echo "== $s"; redis-cli -p 6399 XINFO GROUPS "$s"
 done
 redis-cli -p 6399 SHUTDOWN NOSAVE; rm -rf /tmp/rehearsal   # nothing left listening, nothing left on disk
