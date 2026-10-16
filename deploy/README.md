@@ -60,7 +60,8 @@ by reading it:
   strips them, so the reasoning can live with the rules where it belongs.
 - **`CLIENT SETINFO` does not exist before Redis 7.2.** This broker is 7.0.15,
   so granting `+client|setinfo` pre-emptively is rejected and takes every user
-  down with it. It becomes a required step of any upgrade to >= 7.2 instead.
+  down with it. It becomes a required step of any upgrade to >= 7.2 instead,
+  for the consumers: not `brokeradmin`, whose probe sends none since #102.
 
 ## Installing the ACL users
 
