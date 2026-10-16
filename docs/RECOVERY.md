@@ -421,12 +421,13 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
 
 ## Rehearsal record
 
-- **Every test run**: `tests/deploy/test_backup_restore_rehearsal.py` seeds a
-  real `redis-server` with a stream, a group two entries in with one acked, and
-  a TTL key; `SAVE`s; ships the file through `run_backup` into a fake bucket;
-  restores it through `restore.newest_object` / `download` / `gunzip_file` /
-  `stage_appendonlydir`; starts a second server under `appendonly yes` and
-  asserts the length, `last-delivered-id`, `entries-read`, the PEL and the TTL.
+- **Every test run**: `tests/deploy/test_backup_restore_rehearsal.py` seeds
+  the node's engine (`engine_binary`, #102) with a stream, a group two entries
+  in with one acked, and a TTL key; `SAVE`s; ships the file through
+  `run_backup` into a fake bucket; restores it through `restore.newest_object`
+  / `download` / `gunzip_file` / `stage_appendonlydir`; starts a second server
+  under `appendonly yes` and asserts the length, `last-delivered-id`,
+  `entries-read`, the PEL and the TTL.
   The control case, the same snapshot with no staging, comes up with `DBSIZE 0`.
   broker#72: the shipped digests are restored onto a "rebuilt" node, fresh node
   users are appended, and the result is rendered and loaded. Every service
@@ -463,6 +464,15 @@ sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -
   with the five service users, and its sha256 matched the node file's service
   lines and the state file. A second write to the first path was refused. The unit's namespace under `/etc/broker` showed
   `co-broker-backup.json` alone.
+- **2026-10-16, Valkey 7.2.13 (broker#102), by hand on `co-broker`.** The
+  `valkey-server` and `valkey-tools` debs extracted with `dpkg-deb -x` into a
+  scratch directory, never installed. Run with `BROKER_TEST_ENGINE` naming the
+  extracted `valkey-server` and a `PATH` putting `valkey-check-rdb` first:
+  this rehearsal, `test_aof_replay.py`, `test_bus_health_group_positions.py`,
+  `test_redis_acl.py`, `test_throwaway_engine.py` and `tests/test_backup.py`,
+  240 passed, the four DLQ skips. The snapshot was RDB v11, `valkey-ver`
+  `7.2.13`, recorded as `redis_version`. Valkey's checker also passed a 7.0.15
+  file and reported its `redis-ver`; 7.0's rejected Valkey's (exit 1).
 
 ---
 
