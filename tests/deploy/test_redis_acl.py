@@ -1354,7 +1354,7 @@ def test_default_grants_only_what_the_aof_replay_rechecks(users) -> None:
     construction: a command list here would be a mirror of what the cohort
     happens to propagate today, failing the same silent way when that changes.
     `-@dangerous` keeps `FLUSHALL` and its kin off it; `resetchannels` keeps
-    `&`. `tests/deploy/test_aof_replay.py` replays it.
+    channels off it. `tests/deploy/test_aof_replay.py` replays it.
 
     It stays `off`, and an `off` user cannot authenticate - so the grant is
     reachable only by a flip to `on`, which needs `+acl` or root, either of
