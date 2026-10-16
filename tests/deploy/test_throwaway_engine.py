@@ -12,6 +12,7 @@ engine installed. The one that does is the last: ``acl_server`` names the engine
 it started, which is how #101's control says which engine it judged.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -95,7 +96,8 @@ def test_an_explicit_engine_that_is_not_there_fails_by_name(monkeypatch, tmp_pat
     out of whichever fixture spawns first."""
     missing = tmp_path / "valkey-sever"
     monkeypatch.setenv(ENGINE_OVERRIDE, str(missing))
-    with pytest.raises(pytest.fail.Exception, match=f"{ENGINE_OVERRIDE}.*{missing}"):
+    pattern = f"{re.escape(ENGINE_OVERRIDE)}.*{re.escape(str(missing))}"
+    with pytest.raises(pytest.fail.Exception, match=pattern):
         engine_binary()
 
 
