@@ -249,10 +249,12 @@ rcli acladmin ACL LIST | grep '^user acladmin'            # precondition, not op
 
 ```bash
 # As run on 2026-09-10: `off` alone. A new cluster goes straight to the
-# tombstone, as CannObserv/broker#52 did here on 2026-09-29 - no grants, and a
-# password that is the digest of a value nobody keeps:
+# tombstone, as CannObserv/broker#52 did here on 2026-09-29 - a password that
+# is the digest of a value nobody keeps, and no grant but the writes the AOF
+# replay re-checks as `default` (CannObserv/broker#101; under `-@all` an
+# unplanned restart silently drops every MULTI block):
 DH="$(mint | sha256sum | cut -d' ' -f1)"
-rcli acladmin ACL SETUSER default off resetpass "#$DH" resetkeys resetchannels -@all
+rcli acladmin ACL SETUSER default off resetpass "#$DH" resetkeys resetchannels %W~* -@all +@write -@dangerous
 rcli acladmin ACL SAVE
 ```
 
@@ -260,13 +262,13 @@ Then verify every axis, not only the one that changed:
 
 ```bash
 redis-cli PING                                             # -> NOAUTH Authentication required.
-rcli acladmin ACL GETUSER default                          # -> flags off, one hash, commands -@all
+rcli acladmin ACL GETUSER default                          # -> flags off, one hash, keys %W~*, commands -@all +@blocking ... (7.0 expands +@write -@dangerous)
 rcli brokeradmin INFO server | grep redis_version          # the probe's credential still answers
 for u in archiver watcher replicator processor provisioner; do
     echo "$u: held by digest on this node - verify from its own host"
 done
 rcli acladmin CLIENT LIST | grep -c 'flags=b'              # same count as before the flip
-sudo grep '^user default' /etc/redis/users.acl             # -> user default off #<hash> resetchannels -@all
+sudo grep '^user default' /etc/redis/users.acl             # -> user default off #<hash> %W~* resetchannels -@all +@blocking ...
 ```
 
 **The skip in that loop is the general case, not an archiver exception.** Any
@@ -291,15 +293,16 @@ then fail. That is why the `CLIENT LIST` check comes first - a straggler would
 break at its next restart rather than now, and look healthy in between.
 
 Then update `deploy/redis-acl.conf` to `user default off >__DEFAULT_PW__
-resetchannels -@all`, and the passwords file's `default` line to
+resetchannels %W~* -@all +@write -@dangerous`, and the passwords file's `default` line to
 `__DEFAULT_PW_SHA256__=$DH`, and commit, so the tracked file matches what
 `ACL SAVE` wrote. `tests/deploy/test_redis_acl.py` pins the line as declared,
-`off`, carrying a password, and granting nothing.
+`off`, carrying a password, and granting writes alone.
 
 **There is no reversing it, and nothing needs to.** Until CannObserv/broker#52
 the reversal - `ACL SETUSER default on` - was also how every restart window
 opened, because no other user could `BGREWRITEAOF`, `CONFIG SET` or `SAVE`.
-`acladmin` holds those now, and an enabled tombstone grants nothing. A
+`acladmin` holds those now, and an enabled tombstone grants no read and no
+operator command. A
 migrating cluster that needs `default` back for a straggler restores the grants
 and a known password in one `ACL SETUSER`, as `acladmin`, and should ask why
 first.

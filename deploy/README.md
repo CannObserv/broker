@@ -88,8 +88,9 @@ side effect of turning on the mechanism meant to prevent it. And setting it
 that restart lands before any of them has moved onto its own credential. So on
 this cluster the file went in reading `on` with the then-current password,
 retiring it was the last step rather than the first, and **the tracked file now
-says `off`** - and since broker#52 grants nothing, behind the digest of a value
-nobody kept. It still carries a password, because `off` is a flag that leaves
+says `off`** - and since broker#52 grants no read and no operator command,
+behind the digest of a value nobody kept. Its one grant, writes on keys, is the
+AOF replay's (broker#101). It still carries a password, because `off` is a flag that leaves
 the password set intact, and a line with none would be `nopass` the moment
 anything flipped it `on`. A new cluster repeats the order: `on` with the shared
 grants for the first load, migrate, then the tombstone live.

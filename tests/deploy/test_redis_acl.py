@@ -665,7 +665,12 @@ def test_no_user_holds_xadd_or_xtrim_on_its_root_permission_set(users) -> None:
     """
     for name, rules in users.items():
         root, _ = split_rules(rules)
-        for command in ("+xadd", "+xtrim"):
+        if name == "default":
+            # Its `+@write` reaches both on every key: the AOF replay's grant
+            # (CannObserv/broker#101), and no client's while the user is `off`.
+            assert root[0] == "off", "default holds +@write on its root and must stay off"
+            continue
+        for command in ("+xadd", "+xtrim", "+@write", "+@stream", "+@all", "allcommands"):
             assert command not in root, (
                 f"{name} holds {command} on its root permissions, which applies it to every "
                 f"key pattern the user has: {sorted(root_key_patterns(rules))}"
@@ -1331,22 +1336,39 @@ def test_default_is_declared_disabled_and_still_carries_a_password(users) -> Non
     assert "nopass" not in rules
 
 
-def test_default_is_a_tombstone_that_grants_nothing(users) -> None:
-    """`default` is declared because it must be, and holds nothing (CannObserv/broker#52).
+def test_default_grants_only_what_the_aof_replay_rechecks(users) -> None:
+    """`default` holds writes on keys, and nothing to read, administer or subscribe.
 
-    Until #52 it was the window identity, `~* &* +@all` behind a password kept
-    in three plaintext copies - and `+acl` on `acladmin` already reached
-    everything it could, so there were two superuser keys to one door. The
-    window's commands moved to `acladmin`; `default`'s password became the
-    digest of a value nobody kept; and its line grants no command, key or
-    channel, so a flip to `on` - by accident, or by the rollback reflex this
-    line used to invite - admits a user who can do nothing.
+    Until #101 it held nothing at all (CannObserv/broker#52). Until #52 it was
+    the window identity, `~* &* +@all` behind a password kept in three plaintext
+    copies - and `+acl` on `acladmin` already reached everything it could, so
+    there were two superuser keys to one door. The window's commands moved to
+    `acladmin`, and its password became the digest of a value nobody kept.
+
+    **Why it is not empty (CannObserv/broker#101).** During AOF load `EXEC`
+    re-checks every queued command against `default`'s command and key rules,
+    whoever wrote it. Under `-@all` an unplanned restart silently dropped every
+    `MULTI` block in the incr file - and the engine writes them itself, for a
+    delivery or claim of 2+ entries and a write to a lazily expired key. Only
+    write commands reach the AOF, so `+@write` on `%W~*` is complete by
+    construction: a command list here would be a mirror of what the cohort
+    happens to propagate today, failing the same silent way when that changes.
+    `-@dangerous` keeps `FLUSHALL` and its kin off it; `resetchannels` keeps
+    `&`. `tests/deploy/test_aof_replay.py` replays it.
+
+    It stays `off`, and an `off` user cannot authenticate - so the grant is
+    reachable only by a flip to `on`, which needs `+acl` or root, either of
+    which can already grant anything. It comes off when the engine skips the
+    re-check (Valkey >= 8.0.11, Redis >= 8.4.4): that module's control says when.
     """
     root, selectors = split_rules(users["default"])
     assert not selectors, f"default carries a selector: {selectors}"
-    assert "-@all" in root, "default must deny every command explicitly"
+    assert root[root.index("-@all") :] == ["-@all", "+@write", "-@dangerous"], (
+        f"default's commands must read `-@all +@write -@dangerous`, in that order: {root}"
+    )
     granted = sorted(rule for rule in root if rule.startswith(("+", "~", "%", "&")))
-    assert not granted, f"default is a tombstone and grants {granted}"
+    assert granted == ["%W~*", "+@write"], f"default grants {granted}"
+    assert "resetchannels" in root
     assert not {"allkeys", "allcommands", "allchannels"} & set(root)
 
 
@@ -1588,7 +1610,7 @@ def test_the_operator_identity_says_why_its_trim_stops_at_dead_letter_queues(use
 
     `acladmin` is the credential an operator holds at a `redis-cli` since
     CannObserv/broker#52, it reads every key on the instance, and its `+xtrim`
-    is confined to `~*.dlq`. With `default` a tombstone and no service selector
+    is confined to `~*.dlq`. With `default` `off` and no service selector
     naming them, that confinement is why nothing on this broker can `XTRIM` a
     stream the inventory says is never XTRIMmed (CannObserv/broker#34).
     `acladmin` could lift it with its own `+acl`, so it is a guard against the
@@ -1798,16 +1820,20 @@ def _enabled(tracked_acl_broker, user: str):
         admin.execute_command("ACL", "SETUSER", user, "off")
 
 
-def test_enabling_default_admits_a_user_who_can_do_nothing(tracked_acl_broker) -> None:
-    """The tombstone, exercised (CannObserv/broker#52).
+def test_enabling_default_admits_no_reader_and_no_operator(tracked_acl_broker) -> None:
+    """The tombstone, exercised (CannObserv/broker#52, #101).
 
     The tracked file ships `default off`, so on this throwaway server the shared
     identity is refused from the first load - the state the production broker
     has been in since 2026-09-10. Until #52 the undo was the window's opening
     move: one `ACL SETUSER default on` as `acladmin`, and `default` held
-    `+@all`. Now the same flip admits a user refused every command, and the
-    production password is the digest of a value nobody kept - so the flip is
-    neither a window nor a way in.
+    `+@all`. Since #101 the same flip admits a user who can write keys and do
+    nothing else: no read, no `PING`, no `INFO`, no `CONFIG`, no `ACL`, no
+    `FLUSHALL` - and the production password is the digest of a value nobody
+    kept, so the flip is neither a window nor a way in.
+
+    What it can do is pinned rather than discovered: `XADD`, as one instance of
+    `+@write`. `XCLAIM`/`XAUTOCLAIM` return the entries they move, `%W` or not.
     """
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
         tracked_acl_broker("default").ping()
@@ -1819,10 +1845,15 @@ def test_enabling_default_admits_a_user_who_can_do_nothing(tracked_acl_broker) -
             default.ping,
             lambda: default.info("server"),
             lambda: default.xrange(CONTENT_FETCH),
+            lambda: default.xreadgroup("g", "c", {CONTENT_FETCH: "0"}),
+            lambda: default.get(CONTENT_FETCH),
             lambda: default.config_set("maxmemory", "0"),
+            lambda: default.execute_command("ACL", "SETUSER", "default", "+@all"),
+            default.flushall,
         ):
             with pytest.raises(redis_pkg.exceptions.NoPermissionError):
                 refused()
+        assert default.xadd(CONTENT_FETCH, {"k": "v"})
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
         tracked_acl_broker("default").ping()
 

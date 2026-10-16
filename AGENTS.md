@@ -82,9 +82,12 @@ nothing. The ACL declares no CI identity (#53).
   incident.
 - **No Redis password in plaintext at rest here** (broker#52): digests in the
   passwords file, `acladmin`/`brokeradmin` as `systemd-creds` credentials
-  (`cred`/`rcli`, no prompt), `default` a `-@all` tombstone no window
+  (`cred`/`rcli`, no prompt), `default` an `off` tombstone no window
   re-enables, `requirepass` nobody's. Mint, rotate, limits:
-  `docs/NODE-CREDENTIALS.md`.
+  `docs/NODE-CREDENTIALS.md`. Its only grant, `%W~* +@write -@dangerous`, is
+  the AOF replay's: `EXEC` re-checks as `default` while loading, and `-@all`
+  silently dropped every `MULTI` block (broker#101). It returns to `-@all` only
+  on an engine that skips that check; `tests/deploy/test_aof_replay.py` says when.
 - **`ACL LOG` is evidence: never reset it, and name every denial you cause.**
   Check a live read against the user's line first. A denial you or a peer
   cause gets a row in `deploy/redis-acl.conf`'s *Denials that are not faults*,
@@ -154,7 +157,8 @@ scripts/         wheelhouse sync (runs before `uv sync`, must not import the pro
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  logging.py (service-local, not a mirror)
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/,
-                 rehearses the restore against a real redis-server, and guards the
+                 rehearses the restore and the AOF replay under `default` (#101)
+                 against a real redis-server, and guards the
                  SocratiCode config (#17), ruff's reach into the docs (#38),
                  credentials out of every runbook's argv (#47), the vendored
                  skills' links, listing and channel URLs (#63), pytest's

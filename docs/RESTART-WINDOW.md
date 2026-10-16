@@ -19,7 +19,8 @@ The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
 > restart, every group at its position, 2 seconds of downtime.
 >
 > `default` was the identity of the first window. Since CannObserv/broker#52
-> it is a tombstone - `off`, no grants, a password nobody holds - and **every
+> it is a tombstone - `off`, a password nobody holds, and no grant but the
+> writes the AOF replay re-checks as it (CannObserv/broker#101) - and **every
 > command below runs as `acladmin`**, which holds the window's commands by name
 > (`SAVE`, `BGREWRITEAOF`, `INFO`, `CONFIG SET`, `SELECT`) beside `+acl`. There
 > is no window to open or close; a restart is just a restart.
@@ -405,8 +406,8 @@ data*).
   is the check, and it showed zero `default` connections before the flip.
 - **Do not re-enable `default` for a window.** Until CannObserv/broker#52 that
   was the opening move, because nothing else could `CONFIG SET save ""` when a
-  restart came up wrong. `acladmin` can, and `default` grants nothing: `on`
-  only makes an identity nobody can use.
+  restart came up wrong. `acladmin` can, and `default` grants no read and no
+  operator command: `on` only makes an identity nobody should use.
 - **Do not schedule this window alongside any service's own VM move.** R6
   generalised: one moving part at a time.
 

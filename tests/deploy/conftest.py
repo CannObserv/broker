@@ -156,12 +156,14 @@ def _stop(proc: subprocess.Popen) -> None:
 
 
 @contextmanager
-def acl_server(acl: Path, workdir: Path):
+def acl_server(acl: Path, workdir: Path, extra_args: tuple[str, ...] = ()):
     """A throwaway ``redis-server`` loading ``acl``, yielding a ``connect(user)``.
 
     Binds loopback on a free port with no persistence and never reads
     BROKER_REDIS_URL, so it cannot reach ``co-broker``. ``connect`` authenticates
     with ``PASSWORD``, so ``acl`` must give whichever user is named that one.
+    ``extra_args`` come last, so they override: ``--appendonly yes`` is how the
+    AOF replay is rehearsed (CannObserv/broker#101).
 
     Shared by the two things loaded this way: the tracked file, rendered with
     throwaway credentials, and the node's *saved* file, which carries the real
@@ -196,6 +198,7 @@ def acl_server(acl: Path, workdir: Path):
                 str(workdir),
                 "--aclfile",
                 str(acl),
+                *extra_args,
             ],
             stdout=stream,
             stderr=subprocess.STDOUT,
