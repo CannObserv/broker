@@ -177,6 +177,8 @@ def engine_binary() -> str | None:
     """
     override = os.environ.get(ENGINE_OVERRIDE)
     if override:
+        if not (os.path.isfile(override) and os.access(override, os.X_OK)):
+            pytest.fail(f"{ENGINE_OVERRIDE}={override} is not an executable file")
         return override
     return _running_engine() or next(filter(None, map(shutil.which, ENGINES)), None)
 

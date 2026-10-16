@@ -90,6 +90,15 @@ def test_an_explicit_engine_wins_over_the_running_unit(monkeypatch, tmp_path) ->
     assert engine_binary() == str(extracted)
 
 
+def test_an_explicit_engine_that_is_not_there_fails_by_name(monkeypatch, tmp_path) -> None:
+    """A mistyped path fails naming the variable, not as a ``FileNotFoundError``
+    out of whichever fixture spawns first."""
+    missing = tmp_path / "valkey-sever"
+    monkeypatch.setenv(ENGINE_OVERRIDE, str(missing))
+    with pytest.raises(pytest.fail.Exception, match=f"{ENGINE_OVERRIDE}.*{missing}"):
+        engine_binary()
+
+
 def test_engine_name_is_the_binary_and_its_version(tmp_path) -> None:
     """Valkey's ``--version`` reads ``Server v=7.2.13``, naming no engine, so the
     binary's own name carries it."""
