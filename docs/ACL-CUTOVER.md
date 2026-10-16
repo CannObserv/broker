@@ -252,10 +252,10 @@ rcli acladmin ACL LIST | grep '^user acladmin'            # precondition, not op
 
 ```bash
 # As run on 2026-09-10: `off` alone. A new cluster goes straight to the
-# tombstone, as CannObserv/broker#52 did here on 2026-09-29 - a password that
-# is the digest of a value nobody keeps, and no grant but the writes the AOF
-# replay re-checks as `default` (CannObserv/broker#101; under `-@all` an
-# unplanned restart silently drops every MULTI block):
+# tombstone CannObserv/broker#52 minted here on 2026-09-29 - a password that is
+# the digest of a value nobody keeps - with the one grant CannObserv/broker#101
+# added on 2026-10-16: the writes the AOF replay re-checks as `default` (#52's
+# `-@all` made an unplanned restart silently drop every MULTI block):
 DH="$(mint | sha256sum | cut -d' ' -f1)"
 rcli acladmin ACL SETUSER default off resetpass "#$DH" resetkeys resetchannels %W~* -@all +@write -@dangerous
 rcli acladmin ACL SAVE
