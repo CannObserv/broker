@@ -4,7 +4,7 @@
 # repo-wide figure in .skills/context-token-ratio, falling back to it for a
 # file never counted exactly or since drifted far from the size recorded here.
 14463 5997 AGENTS.md
-21854 8676 docs/ACL-CUTOVER.md
+21846 8670 docs/ACL-CUTOVER.md
 23592 9445 docs/BUS-HEALTH.md
 3796 1602 docs/CI.md
 3147 1217 docs/CONSUMER-REGISTRATIONS.md
@@ -13,7 +13,7 @@
 6715 2564 docs/LWW-CAP.md
 5431 1989 docs/MEMORY-PROTECTION.md
 12218 5046 docs/NETWORK-PATHS.md
-8161 3568 docs/NODE-CREDENTIALS.md
+8161 3569 docs/NODE-CREDENTIALS.md
 4237 1654 docs/NON-STREAM-KEYS.md
 25311 9998 docs/RECOVERY.md
 24797 9873 docs/RESTART-WINDOW.md
