@@ -17,9 +17,11 @@ No participant writes a transaction today; the engine writes the blocks itself:
   ``DEL`` + the write. Replicator's ``replicator:cmd:*`` dedupe keys are the
   shape; no participant contract can prevent this one.
 
-Built on ``tracked_acl_broker``'s server with ``--appendonly yes`` and one
-orchestration user, ``ops``, appended to the rendered file: it writes, and the
-replay ignores who wrote, which is the point. Restarted on the same ``dir``.
+Each test spawns its own server through ``acl_server`` - not the module-scoped
+``tracked_acl_broker``, which runs without persistence - from the tracked file
+as ``render_tracked_acl`` renders it, with ``--appendonly yes`` and one
+orchestration user, ``ops``, appended: it writes, and the replay ignores who
+wrote, which is the point. Restarted on the same ``dir``.
 
 The control - the bare tombstone still loses on this engine - is the exit
 condition, not decoration. Valkey >= 8.0.11 (valkey#3984) and Redis >= 8.4.4
@@ -90,6 +92,8 @@ def _replay(tmp_path, default_line: str | None) -> tuple[dict, dict, str]:
 
 
 def test_the_tracked_default_line_replays_every_block(tmp_path) -> None:
+    """Every position, owner and key the workload left is there after the load,
+    and the server logged no refused command while replaying it."""
     before, after, log = _replay(tmp_path, None)
     assert after == before
     assert "ACLs rules changed" not in log
