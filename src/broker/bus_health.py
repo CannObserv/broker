@@ -2792,9 +2792,16 @@ def probe_client(redis_url: str, password: str | None) -> Redis:
 
     ``driver_info=None`` sends no ``CLIENT SETINFO`` on connect. Valkey checks
     it against a grant ``brokeradmin`` does not hold, two denials a tick, one
-    ``ACL LOG`` entry counting them; 7.0 ignores it (CannObserv/broker#102).
-    Dropping the call, rather than granting it, keeps ``brokeradmin`` to what
-    this package issues.
+    ``ACL LOG`` entry counting them; 7.0 rejects it as an unknown subcommand
+    before the ACL check, and redis-py swallows the error
+    (CannObserv/broker#102). Dropping the call, rather than granting it, keeps
+    ``brokeradmin`` to what this package issues.
+
+    One handshake call remains: redis-py 8's ``CLIENT MAINT_NOTIFICATIONS``,
+    sent by default and its error swallowed - one ``errorstat_ERR`` a tick,
+    measured on 7.0.15. An unknown subcommand on 7.0 and Valkey 7.2, so no ACL
+    entry on either; ``test_the_probes_connection_is_denied_nothing`` fails on
+    an engine that checks it.
     """
     return Redis.from_url(
         redis_url,
