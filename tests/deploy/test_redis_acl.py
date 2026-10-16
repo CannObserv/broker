@@ -1821,7 +1821,7 @@ def _enabled(tracked_acl_broker, user: str):
         admin.execute_command("ACL", "SETUSER", user, "off")
 
 
-def test_enabling_default_admits_no_reader_and_no_operator(tracked_acl_broker) -> None:
+def test_enabling_default_admits_no_read_command_and_no_operator(tracked_acl_broker) -> None:
     """The tombstone, exercised (CannObserv/broker#52, #101).
 
     The tracked file ships `default off`, so on this throwaway server the shared
