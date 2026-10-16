@@ -138,9 +138,12 @@ def split_rules(rules: list[str]) -> tuple[list[str], list[list[str]]]:
     return root, selectors
 
 
-#: The engine units, Valkey's first, each with the binary its package installs.
-#: Valkey ships no ``redis-server``, its compat package included (#85).
+#: The units asked which engine runs, Valkey's first: should both be active
+#: at once, the window's target is the one judged.
 ENGINE_UNITS = ("valkey-server.service", "redis-server.service")
+#: The binaries looked up on ``PATH`` when no unit is active, Redis's first:
+#: ``valkey-server`` only where ``redis-server`` is absent. Valkey ships no
+#: ``redis-server``, its compat package included (#85).
 ENGINES = ("redis-server", "valkey-server")
 #: An engine binary to run instead, by path: a rehearsal against one that is not
 #: installed, as #85 ran an extracted Valkey 7.2.13 (``apt-get download`` and
