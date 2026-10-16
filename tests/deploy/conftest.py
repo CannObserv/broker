@@ -171,9 +171,10 @@ def _running_engine() -> str | None:
 def engine_binary() -> str | None:
     """The server binary the throwaway servers run: the engine the node runs.
 
-    ``BROKER_TEST_ENGINE`` first, then the binary behind the active engine unit
-    - during the window's soak both packages are installed, and only the
-    running unit says which engine the node is. With none running (off the node,
+    ``BROKER_TEST_ENGINE`` first, which must be an executable file or the run
+    fails naming it. Then the binary behind the active engine unit: during the
+    window's soak both packages are installed, and only the running unit says
+    which engine the node is. With none running (off the node,
     or between one engine's stop and the other's start), ``redis-server`` from
     ``PATH``, and ``valkey-server`` only where it is absent. Never simply the
     first one found (CannObserv/broker#102).
