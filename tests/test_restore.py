@@ -270,6 +270,22 @@ def test_main_list_prints_newest_first_with_what_the_metadata_says(stub_main, ca
     assert lines[1].startswith("gs://a-backup-bucket/co-broker/20260910T153511Z.rdb.gz")
 
 
+def test_main_list_shows_the_version_whichever_engine_wrote_it(stub_main, capsys) -> None:
+    """Objects from before the Valkey window took ``redis_version`` from
+    ``redis-ver``; after it, from ``valkey-ver``. One key, so the bucket's
+    older objects list exactly as they did (#102)."""
+    for name, version in (
+        ("co-broker/20261016T152500Z.rdb.gz", "7.0.15"),
+        ("co-broker/20261116T152500Z.rdb.gz", "7.2.13"),
+    ):
+        stub_main.bucket.objects[name] = b"x"
+        stub_main.bucket.metadata[name] = {"snapshot_at": name[10:26], "redis_version": version}
+    assert restore.main(["--list"]) == 0
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert "redis_version=7.2.13" in lines[0]
+    assert "redis_version=7.0.15" in lines[1]
+
+
 def test_main_file_stages_a_local_snapshot_without_a_client(stub_main, rdb) -> None:
     assert restore.main(["--file", str(rdb), "--into", str(stub_main.redis_dir)]) == 0
     restore.storage.Client.assert_not_called()

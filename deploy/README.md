@@ -714,7 +714,7 @@ and only then is it enabled.
 ## The backup (broker#4)
 
 `broker-backup.service` copies `dump.rdb`, verifies the copy with
-`redis-check-rdb`, gzips it, and creates
+`valkey-check-rdb` or `redis-check-rdb` (#102), gzips it, and creates
 `gs://co-gcs-broker-backup/co-broker/<snapshot time>.rdb.gz` with
 `if_generation_match=0` - never an overwrite, and the identity holds no
 `delete`, so the bucket's 30-day lifecycle rule is the only thing that removes

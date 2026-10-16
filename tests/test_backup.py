@@ -64,6 +64,24 @@ CHECK_REPORT = """\
 [info] 0 already expired
 """
 
+# What valkey-check-rdb 7.2.13 printed for a Valkey snapshot, verbatim
+# (CannObserv/broker#102, from the binary #85 extracted). The version field is
+# ``valkey-ver``, and there is no ``redis-ver``.
+VALKEY_CHECK_REPORT = """\
+[offset 0] Checking RDB file dump.rdb
+[offset 28] AUX FIELD valkey-ver = '7.2.13'
+[offset 42] AUX FIELD redis-bits = '64'
+[offset 54] AUX FIELD ctime = '1789054988'
+[offset 69] AUX FIELD used-mem = '712208'
+[offset 81] AUX FIELD aof-base = '0'
+[offset 83] Selecting DB ID 0
+[offset 186] Checksum OK
+[offset 186] \\o/ RDB looks OK! \\o/
+[info] 2 keys read
+[info] 1 expires
+[info] 0 already expired
+"""
+
 SNAPSHOT_AT = datetime.fromtimestamp(1789054988, tz=UTC)
 NOW = SNAPSHOT_AT + timedelta(minutes=10)
 
@@ -213,6 +231,55 @@ def test_take_snapshot_copies_verifies_and_describes(rdb, tmp_path) -> None:
     assert snap.keys == 2
 
 
+def test_take_snapshot_reads_the_version_a_valkey_snapshot_carries(rdb, tmp_path) -> None:
+    """Valkey writes ``valkey-ver`` and no ``redis-ver``: read only the latter,
+    every Valkey-era backup would record ``redis_version: ""`` (#102)."""
+    snap = take_snapshot(rdb, tmp_path / "work", checker=_fake_checker(VALKEY_CHECK_REPORT))
+    assert snap.redis_version == "7.2.13"
+    assert snap.keys == 2
+
+
+def test_a_valkey_snapshot_ships_its_version_in_metadata_and_state(
+    rdb, client, bucket, tmp_path
+) -> None:
+    """Under the key every older object carries, so ``restore.py --list`` reads
+    one field whichever engine wrote the file."""
+    state = _run(rdb, client, tmp_path, checker=_fake_checker(VALKEY_CHECK_REPORT))
+    (name,) = [n for n in bucket.objects if n.endswith(OBJECT_SUFFIX)]
+    assert bucket.metadata[name]["redis_version"] == "7.2.13"
+    assert state["redis_version"] == "7.2.13"
+
+
+def _checkers_on_path(monkeypatch, tmp_path: Path, *names: str) -> None:
+    """``PATH`` holding only stand-in checkers, each printing its own name."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in names:
+        script = bin_dir / name
+        script.write_text(f"#!/bin/sh\necho {name}\n")
+        script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+
+def test_check_rdb_prefers_valkeys_checker(monkeypatch, tmp_path) -> None:
+    """7.0.15's checker rejects Valkey's RDB v11, and Valkey's reads 7.0's v10
+    and reports its ``redis-ver``. So Valkey's goes first whichever engine is
+    running, which is what keeps the soak, with both installed, verified (#102)."""
+    _checkers_on_path(monkeypatch, tmp_path, "valkey-check-rdb", "redis-check-rdb")
+    assert check_rdb(tmp_path / "x.rdb").strip() == "valkey-check-rdb"
+
+
+def test_check_rdb_falls_back_to_redis_checker(monkeypatch, tmp_path) -> None:
+    _checkers_on_path(monkeypatch, tmp_path, "redis-check-rdb")
+    assert check_rdb(tmp_path / "x.rdb").strip() == "redis-check-rdb"
+
+
+def test_check_rdb_refuses_with_no_checker_at_all(monkeypatch, tmp_path) -> None:
+    _checkers_on_path(monkeypatch, tmp_path)
+    with pytest.raises(BackupError, match="valkey-check-rdb.*redis-check-rdb"):
+        check_rdb(tmp_path / "x.rdb")
+
+
 def test_take_snapshot_refuses_a_file_that_is_not_an_rdb(tmp_path) -> None:
     """Refused before the checker runs and before anything is uploaded: a wrong
     ``--rdb`` must not ship a text file under a name that says snapshot."""
@@ -230,7 +297,9 @@ def test_take_snapshot_refuses_when_the_checker_does(rdb, tmp_path) -> None:
         take_snapshot(rdb, tmp_path / "work", checker=checker)
 
 
-@pytest.mark.skipif(shutil.which("redis-check-rdb") is None, reason="redis-check-rdb not installed")
+@pytest.mark.skipif(
+    not any(shutil.which(c) for c in backup.CHECKERS), reason="no RDB checker installed"
+)
 def test_the_real_checker_rejects_a_wrong_checksum(rdb) -> None:
     """The seam, exercised against the binary on the one input every other test
     treats as valid. If the checker accepted this, the ``checker`` argument

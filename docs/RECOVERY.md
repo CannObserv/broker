@@ -47,8 +47,8 @@ was recovered by replaying that history; that was margin, not design.
 | **When** | hourly - `broker-backup.timer`, `OnCalendar=hourly`, five minutes of jitter, `Persistent=true` so a reboot's missed tick still runs |
 | **Where** | `gs://co-gcs-broker-backup/co-broker/<snapshot time>.rdb.gz` - the prefix is the hostname - and the ACL digests beside it as `<run time>.digests` (below) |
 | **Named by** | the snapshot's own `ctime`, the aux field the save writes into the file, as `20260910T153511Z`. A listing reads as a timeline and the newest name is the newest data |
-| **Verified** | `redis-check-rdb` on the private copy before anything is uploaded - the format, every record, the CRC64 trailer. A file that fails is refused |
-| **Described** | object metadata: `snapshot_at`, `sha256`, `size_bytes`, `redis_version`, `rdb_version`, `keys`, `source_host` - readable without downloading |
+| **Verified** | `valkey-check-rdb`, else `redis-check-rdb`, on the private copy before anything is uploaded - the format, every record, the CRC64 trailer. A file that fails is refused. Valkey's first: it reads 7.0's RDB v10, and 7.0's rejects Valkey's v11 (#102) |
+| **Described** | object metadata: `snapshot_at`, `sha256`, `size_bytes`, `redis_version`, `rdb_version`, `keys`, `source_host` - readable without downloading. `redis_version` is the file's `valkey-ver` or `redis-ver`, one key for both engines (#102) |
 | **Retained** | 30 days, by the **bucket's lifecycle rule**. The node's identity cannot delete |
 | **RPO** | the backup interval plus the save interval: under two hours worst case, about an hour typically |
 | **Credential** | `/etc/broker/co-broker-backup.json` (0400 root:root), `roles/storage.objectCreator` + `roles/storage.objectViewer` on that one bucket. **No Redis credential** - the job reads files, and a digest is not one (below) |

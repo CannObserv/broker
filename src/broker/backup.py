@@ -12,8 +12,8 @@ ways that keep a backup honest:
   never asks the broker for anything: no ACL user exists for it, and nothing it
   does can be mistaken for a client.
 - **It verifies before it ships.** The private copy goes through
-  ``redis-check-rdb`` - the format, every record, the CRC64 trailer - and a file
-  that fails is refused, never uploaded under a name that says snapshot.
+  the engine's RDB checker - the format, every record, the CRC64 trailer - and
+  a file that fails is refused, never uploaded under a name that says snapshot.
 - **The object is named by the snapshot's own time**, the ``ctime`` the server
   wrote into the file, so a listing reads as a timeline and the newest name is
   the newest data. Shipping the same snapshot twice is a 412 on the create's
@@ -93,12 +93,20 @@ NODE_USERS = ("acladmin", "brokeradmin", "default")
 UPLOAD_TIMEOUT_SECONDS = 120.0
 LIST_TIMEOUT_SECONDS = 30.0
 
-CHECKER = "redis-check-rdb"
+# Valkey's first, whichever engine runs (CannObserv/broker#102): 7.0.15's
+# checker rejects Valkey's RDB v11, and Valkey 7.2's reads 7.0's v10 and reports
+# its ``redis-ver``. So during the soak, with both installed, every file the
+# node can write is verified.
+CHECKERS = ("valkey-check-rdb", "redis-check-rdb")
+# The AUX field that names the writer's version, Valkey's first. A Valkey RDB
+# carries ``valkey-ver`` and no ``redis-ver``. Recorded under ``redis_version``
+# either way: every older object in the bucket carries that key.
+VERSION_FIELDS = ("valkey-ver", "redis-ver")
 # Read by the probe, which runs as another user.
 STATE_FILE_MODE = 0o644
 
-# The two structured lines in redis-check-rdb's report:
-#   [offset 27] AUX FIELD redis-ver = '7.0.15'
+# The two structured lines in the checker's report:
+#   [offset 27] AUX FIELD redis-ver = '7.0.15'    (valkey-ver, from Valkey)
 #   [info] 2 keys read
 _AUX_RE = re.compile(r"AUX FIELD (\S+) = '([^']*)'")
 _KEYS_RE = re.compile(r"\[info\] (\d+) keys read")
@@ -144,7 +152,7 @@ def parse_rdb_header(head: bytes) -> int:
 
 
 def parse_check_report(text: str) -> dict[str, str]:
-    """The AUX fields and the key count out of ``redis-check-rdb``'s report."""
+    """The AUX fields and the key count out of the checker's report."""
     report = dict(_AUX_RE.findall(text))
     keys = _KEYS_RE.search(text)
     if keys:
@@ -222,20 +230,22 @@ def iso(at: datetime) -> str:
 
 
 def check_rdb(path: Path) -> str:
-    """Run ``redis-check-rdb`` on the private copy and return its report.
+    """Run the first of ``CHECKERS`` installed on the private copy; return its report.
 
     The checker walks every record and verifies the CRC64 trailer, which is the
     one thing a header check cannot see. A non-zero exit refuses the backup,
     and so does a missing binary: shipping an unverified file under a name that
     says snapshot is worse than shipping nothing and saying so.
     """
-    binary = shutil.which(CHECKER)
+    binary = next(filter(None, map(shutil.which, CHECKERS)), None)
     if binary is None:
-        raise BackupError(f"{CHECKER} not installed; refusing to ship an unverified snapshot")
+        raise BackupError(
+            f"neither {' nor '.join(CHECKERS)} installed; refusing to ship an unverified snapshot"
+        )
     result = subprocess.run([binary, str(path)], capture_output=True, text=True, check=False)
     if result.returncode != 0:
         tail = (result.stdout + result.stderr).strip().splitlines()[-3:]
-        raise BackupError(f"{CHECKER} rejected {path.name}: {' | '.join(tail)}")
+        raise BackupError(f"{Path(binary).name} rejected {path.name}: {' | '.join(tail)}")
     return result.stdout
 
 
@@ -279,7 +289,7 @@ def take_snapshot(
         sha256=sha256_file(copy),
         snapshot_at=snapshot_time(report, mtime=source_mtime),
         rdb_version=rdb_version,
-        redis_version=report.get("redis-ver"),
+        redis_version=next(filter(None, map(report.get, VERSION_FIELDS)), None),
         keys=int(keys) if keys is not None and keys.isdigit() else None,
     )
 
