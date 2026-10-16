@@ -67,7 +67,7 @@ def _state(client) -> dict:
     }
 
 
-def _replay(tmp_path, default_line: str | None) -> tuple[dict, dict, str]:
+def _replay(tmp_path, default_line: str | None) -> tuple[dict, dict, str, str]:
     acl = _acl(tmp_path, default_line)
     args = ("--appendonly", "yes", "--enable-debug-command", "yes")
     with acl_server(acl, tmp_path, args) as connect:
@@ -88,24 +88,25 @@ def _replay(tmp_path, default_line: str | None) -> tuple[dict, dict, str]:
     )
     with acl_server(acl, tmp_path, args) as connect:
         after = _state(connect("ops"))
-    return before, after, (tmp_path / "redis-server.log").read_text()
+    return before, after, (tmp_path / "redis-server.log").read_text(), connect.engine
 
 
 def test_the_tracked_default_line_replays_every_block(tmp_path) -> None:
     """Every position, owner and key the workload left is there after the load,
     and the server logged no refused command while replaying it."""
-    before, after, log = _replay(tmp_path, None)
+    before, after, log, _engine = _replay(tmp_path, None)
     assert after == before
     assert "ACLs rules changed" not in log
 
 
 def test_the_bare_tombstone_still_drops_them_on_this_engine(tmp_path) -> None:
     """The control. Failing here is good news: the engine skips the re-check
-    while loading, and ``default``'s grant can come off (#101)."""
-    before, after, log = _replay(tmp_path, BARE_TOMBSTONE)
+    while loading, and ``default``'s grant can come off (#101). Judged on
+    whichever engine the node runs, and the failure names it (#102)."""
+    before, after, log, engine = _replay(tmp_path, BARE_TOMBSTONE)
     assert before["owners"] and {o for _, o in before["owners"]} == {"c2"}
     assert after != before, (
-        "the bare tombstone replayed every block: this engine no longer re-checks "
+        f"the bare tombstone replayed every block on {engine}: it no longer re-checks "
         "EXEC's queued commands during AOF load. Retire default's grant (#101)."
     )
     assert after["dedupe"] is None

@@ -17,7 +17,8 @@ It also pins the trap CannObserv/broker#4 stated backwards: under
 ``appendonly yes``, a ``dump.rdb`` with no ``appendonlydir`` beside it is not
 loaded. The server starts empty and creates a fresh base, silently.
 
-Skips where ``redis-server`` is absent. Binds loopback on free ports and never
+Runs the node's engine, Redis or Valkey (``engine_binary``, CannObserv/broker#102),
+and skips where neither is installed. Binds loopback on free ports and never
 reads BROKER_REDIS_URL, so it cannot touch ``co-broker``.
 """
 
@@ -42,23 +43,24 @@ from tests.deploy.conftest import (
     SERVICE_USERS,
     _free_port,
     acl_server,
+    engine_binary,
 )
 from tests.gcs_fakes import FakeBucket, FakeClient
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("redis-server") is None, reason="redis-server not installed"
+    engine_binary() is None, reason="neither redis-server nor valkey-server installed"
 )
 
 
 class Scratch:
-    """One throwaway redis-server over ``directory``."""
+    """One throwaway server over ``directory``, the node's engine."""
 
     def __init__(self, directory: Path, *, appendonly: bool) -> None:
         self.directory = directory
         self.port = _free_port()
         self.proc = subprocess.Popen(
             [
-                "redis-server",
+                engine_binary(),
                 "--port",
                 str(self.port),
                 "--bind",
@@ -77,7 +79,7 @@ class Scratch:
         deadline = time.time() + 10
         while time.time() < deadline:
             if self.proc.poll() is not None:
-                raise RuntimeError(f"redis-server exited:\n{self.proc.stdout.read()}")
+                raise RuntimeError(f"the server exited:\n{self.proc.stdout.read()}")
             with socket.socket() as s:
                 s.settimeout(0.2)
                 if s.connect_ex(("127.0.0.1", self.port)) == 0:
@@ -85,7 +87,7 @@ class Scratch:
             time.sleep(0.05)
         else:
             self.proc.terminate()
-            raise RuntimeError("redis-server did not start")
+            raise RuntimeError("the server did not start")
         self.client = redis_pkg.Redis(
             host="127.0.0.1", port=self.port, decode_responses=True, socket_timeout=5
         )

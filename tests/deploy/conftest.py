@@ -39,6 +39,10 @@ Both throwaway servers - ``tracked_acl_broker``'s, and the one that loads the
 node's *saved* ACL to compare it with the live one (CannObserv/broker#54) - are
 spawned by ``acl_server``, which is why it is a context manager here rather than
 the body of one fixture.
+
+Every throwaway server here runs ``engine_binary()``: the engine the node runs,
+Redis or Valkey (CannObserv/broker#102). ``tests/deploy/test_throwaway_engine.py``
+pins how it chooses.
 """
 
 import hashlib
@@ -134,6 +138,62 @@ def split_rules(rules: list[str]) -> tuple[list[str], list[list[str]]]:
     return root, selectors
 
 
+#: The engine units, Valkey's first, each with the binary its package installs.
+#: Valkey ships no ``redis-server``, its compat package included (#85).
+ENGINE_UNITS = ("valkey-server.service", "redis-server.service")
+ENGINES = ("redis-server", "valkey-server")
+#: An engine binary to run instead, by path: a rehearsal against one that is not
+#: installed, as #85 ran an extracted Valkey 7.2.13 (``apt-get download`` and
+#: ``dpkg-deb -x``, never installed on co-broker).
+ENGINE_OVERRIDE = "BROKER_TEST_ENGINE"
+
+
+def _running_engine() -> str | None:
+    """The binary behind whichever engine unit is active, or ``None``."""
+    if shutil.which("systemctl") is None:
+        return None
+    for unit in ENGINE_UNITS:
+        shown = subprocess.run(
+            ["systemctl", "show", "--property=ActiveState,ExecStart", unit],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        path = re.search(r"^ExecStart=\{ path=(\S+)", shown, re.MULTILINE)
+        if "ActiveState=active" in shown.splitlines() and path:
+            return path.group(1)
+    return None
+
+
+def engine_binary() -> str | None:
+    """The server binary the throwaway servers run: the engine the node runs.
+
+    ``BROKER_TEST_ENGINE`` first, then the binary behind the active engine unit
+    - during the window's soak both packages are installed, and only the
+    running unit says which engine the node is. With none running (off the node,
+    or between one engine's stop and the other's start), ``redis-server`` from
+    ``PATH``, and ``valkey-server`` only where it is absent. Never simply the
+    first one found (CannObserv/broker#102).
+    """
+    override = os.environ.get(ENGINE_OVERRIDE)
+    if override:
+        return override
+    return _running_engine() or next(filter(None, map(shutil.which, ENGINES)), None)
+
+
+def engine_name(binary: str) -> str:
+    """``valkey-server 7.2.13``: the binary's name, then the version it reports.
+
+    By name because Valkey's ``--version`` says ``Server v=7.2.13``, naming no
+    engine; Redis's says ``Redis server v=7.0.15``.
+    """
+    reported = subprocess.run(
+        [binary, "--version"], capture_output=True, text=True, check=False
+    ).stdout
+    version = re.search(r"\bv=(\S+)", reported)
+    return f"{Path(binary).name} {version.group(1) if version else '(no version)'}"
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -157,7 +217,7 @@ def _stop(proc: subprocess.Popen) -> None:
 
 @contextmanager
 def acl_server(acl: Path, workdir: Path, extra_args: tuple[str, ...] = ()):
-    """A throwaway ``redis-server`` loading ``acl``, yielding a ``connect(user)``.
+    """A throwaway server loading ``acl``, yielding a ``connect(user)``.
 
     Binds loopback on a free port with no persistence and never reads
     BROKER_REDIS_URL, so it cannot reach ``co-broker``. ``connect`` authenticates
@@ -167,11 +227,12 @@ def acl_server(acl: Path, workdir: Path, extra_args: tuple[str, ...] = ()):
 
     Shared by the two things loaded this way: the tracked file, rendered with
     throwaway credentials, and the node's *saved* file, which carries the real
-    digests (CannObserv/broker#54).
+    digests (CannObserv/broker#54). The server is ``engine_binary()``, and
+    ``connect.engine`` names it.
     """
-    binary = shutil.which("redis-server")
+    binary = engine_binary()
     if not binary:
-        pytest.skip("redis-server not installed")
+        pytest.skip("neither redis-server nor valkey-server installed")
 
     port = _free_port()
     # Logged to a file rather than a pipe nobody reads: a module-scoped caller
@@ -235,6 +296,9 @@ def acl_server(acl: Path, workdir: Path, extra_args: tuple[str, ...] = ()):
     # rather than by widening the fixture's return, so every existing caller
     # keeps the shape it has.
     connect.port = port
+    # Which engine a verdict was reached on - #101's control is judged per
+    # engine, and its failure is the signal to retire a grant (#102).
+    connect.engine = engine_name(binary)
 
     try:
         yield connect

@@ -32,7 +32,6 @@ so the new mechanism is worth asserting where the server is real.
 
 from __future__ import annotations
 
-import shutil
 import socket
 import subprocess
 import time
@@ -50,7 +49,7 @@ from src.broker.bus_health import (
     STREAM_CHECKS,
     collect_broker_findings,
 )
-from tests.deploy.conftest import PASSWORD, _free_port
+from tests.deploy.conftest import PASSWORD, _free_port, engine_binary
 
 #: The one stream these run against, and archiver's group on it as the probe
 #: derives it - the first of its two since CannObserv/broker#78.
@@ -280,7 +279,7 @@ async def test_a_held_entry_inside_the_hold_is_not_a_finding(probe, seeder) -> N
 
 
 class _Restartable:
-    """A throwaway ``redis-server`` with an AOF, stopped and started over one dir.
+    """A throwaway server with an AOF, stopped and started over one dir.
 
     Local rather than the ACL fixture above, which runs without persistence and
     is module-scoped: what this needs is a server that can be **restarted**, so
@@ -299,7 +298,7 @@ class _Restartable:
         self.proc = subprocess.Popen(
             # fmt: off
             [
-                "redis-server",
+                engine_binary(),
                 "--port",
                 str(self.port),
                 "--bind",
@@ -322,15 +321,14 @@ class _Restartable:
                 if s.connect_ex(("127.0.0.1", self.port)) == 0:
                     return
             time.sleep(0.05)
-        raise RuntimeError("redis-server did not start")
+        raise RuntimeError("the server did not start")
 
     def restart(self) -> None:
         """Through ``SHUTDOWN``, not ``SIGTERM``: what is being reproduced is a
         clean stop and a load from the AOF, which is what the node did on
-        2026-09-16."""
-        subprocess.run(
-            ["redis-cli", "-p", str(self.port), "SHUTDOWN", "NOSAVE"], capture_output=True
-        )
+        2026-09-16. Through redis-py rather than ``redis-cli``, which
+        ``valkey-tools`` does not ship (CannObserv/broker#102)."""
+        redis_pkg.Redis(host="127.0.0.1", port=self.port).shutdown(nosave=True)
         assert self.proc is not None
         self.proc.wait(timeout=10)
         self.start()
@@ -343,8 +341,8 @@ class _Restartable:
 
 @pytest.fixture
 def restartable(tmp_path):
-    if shutil.which("redis-server") is None:
-        pytest.skip("redis-server not installed")
+    if engine_binary() is None:
+        pytest.skip("neither redis-server nor valkey-server installed")
     server = _Restartable(tmp_path)
     try:
         yield server
