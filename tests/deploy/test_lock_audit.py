@@ -30,17 +30,45 @@ SCRIPT = REPO_ROOT / "scripts" / "audit_lock.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "audit.yml"
 
 
-def _run(tmp_path: Path, uv_exit: int, uv_output: str = "", *, actions: bool = True):
-    """Run the script with a fake ``uv`` that records its argv, prints
-    ``uv_output`` and exits ``uv_exit``."""
+# uv < 0.11.19 has no ``audit-command`` name (astral-sh/uv#19645): its parser
+# rejects the value before the command runs.
+UNKNOWN_FLAG = (
+    "error: invalid value 'audit-command' for '--preview-features <PREVIEW_FEATURES>': "
+    "Unknown feature flag\n"
+)
+
+
+def _run(
+    tmp_path: Path,
+    uv_exit: int,
+    uv_output: str = "",
+    *,
+    actions: bool = True,
+    knows_flag: bool = True,
+):
+    """Run the script with a fake ``uv`` that records each call's argv, prints
+    ``uv_output`` and exits ``uv_exit``. With ``knows_flag=False`` it answers
+    ``--preview-features`` as uv < 0.11.19 does, exit 2, and runs nothing."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     argv_file = tmp_path / "argv"
     (tmp_path / "output").write_text(uv_output)
+    (tmp_path / "unknown").write_text(UNKNOWN_FLAG)
     fake = bin_dir / "uv"
+    reject = (
+        ""
+        if knows_flag
+        else (
+            'if [[ " $* " == *" --preview-features "* ]]; then\n'
+            f'\tcat "{tmp_path / "unknown"}" >&2\n'
+            "\texit 2\n"
+            "fi\n"
+        )
+    )
     fake.write_text(
         "#!/usr/bin/env bash\n"
-        f'printf "%s\\n" "$@" > "{argv_file}"\n'
+        f'echo "$*" >> "{argv_file}"\n'
+        f"{reject}"
         f'cat "{tmp_path / "output"}"\n'
         f"exit {uv_exit}\n"
     )
@@ -52,8 +80,10 @@ def _run(tmp_path: Path, uv_exit: int, uv_output: str = "", *, actions: bool = T
     result = subprocess.run(
         ["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=30
     )
-    argv = argv_file.read_text().split() if argv_file.exists() else []
-    return result, argv, summary.read_text() if summary.exists() else ""
+    calls = (
+        [line.split() for line in argv_file.read_text().splitlines()] if argv_file.exists() else []
+    )
+    return result, calls, summary.read_text() if summary.exists() else ""
 
 
 @pytest.mark.parametrize("uv_exit", [0, 1, 2, 127])
@@ -65,9 +95,46 @@ def test_every_exit_is_zero(tmp_path, uv_exit):
 
 def test_audits_the_lock_without_relocking(tmp_path):
     """``--frozen`` reads ``uv.lock`` as committed. A relock would need the
-    private wheelhouse, which this job has no credential to fetch."""
-    _, argv, _ = _run(tmp_path, 0)
-    assert argv[:2] == ["audit", "--frozen"]
+    private wheelhouse, which this job has no credential to fetch. ``uv audit``
+    is a preview command, so the flag goes first and a uv that knows it runs
+    once."""
+    _, calls, _ = _run(tmp_path, 0)
+    assert calls == [["audit", "--frozen", "--preview-features", "audit-command"]]
+
+
+@pytest.mark.parametrize(
+    ("uv_exit", "uv_output", "warning"),
+    [
+        (0, "Found no known vulnerabilities\n", None),
+        (1, "- PYSEC-2026-4175: urllib3\n", "::warning title=uv.lock advisories::"),
+    ],
+)
+def test_a_uv_older_than_the_flag_still_audits(tmp_path, uv_exit, uv_output, warning):
+    """uv < 0.11.19 rejects ``audit-command`` with exit 2 and "Unknown feature
+    flag" (#103), so the script retries without the flag: the command is
+    there, only the name is not. The same retry covers a uv that drops the name
+    once ``audit`` is stable. The rejected attempt never reaches the report."""
+    result, calls, summary = _run(tmp_path, uv_exit, uv_output, knows_flag=False)
+    assert calls == [
+        ["audit", "--frozen", "--preview-features", "audit-command"],
+        ["audit", "--frozen"],
+    ]
+    assert "did not run" not in result.stdout
+    if warning:
+        assert warning in result.stdout
+    else:
+        assert "::warning" not in result.stdout
+    assert f"exit {uv_exit}" in summary
+    assert uv_output.strip() in summary
+    assert "Unknown feature flag" not in summary
+
+
+def test_any_other_exit_2_is_not_retried(tmp_path):
+    """Only the unknown-flag rejection retries. An outage at OSV also exits 2,
+    and a second call would only repeat it."""
+    result, calls, _ = _run(tmp_path, 2, "error: OSV unreachable\n")
+    assert len(calls) == 1
+    assert "::warning title=uv audit did not run::" in result.stdout
 
 
 def test_clean_lock_raises_no_warning(tmp_path):

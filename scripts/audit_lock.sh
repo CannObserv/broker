@@ -14,7 +14,11 @@
 #
 # --frozen reads uv.lock as committed. A relock would need the private
 # wheelhouse (CLAUDE.md, Environment & Tooling), which this job has no
-# credential to fetch. `uv audit` is a preview command, hence the flag.
+# credential to fetch. `uv audit` is a preview command, hence the flag. uv
+# before 0.11.19 (astral-sh/uv#19645) has the command but not the name
+# `audit-command`, and rejects it with exit 2 and "Unknown feature flag", so
+# that one rejection retries without the flag (#103). It needs no uv floor,
+# and also covers a uv that drops the name once `audit` is stable.
 # tests/deploy/test_lock_audit.py pins all of it.
 set -u
 
@@ -22,6 +26,10 @@ cd "$(dirname "$0")/.."
 
 out=$(uv audit --frozen --preview-features audit-command 2>&1)
 rc=$?
+if [ "$rc" -eq 2 ] && [[ $out == *"Unknown feature flag"* ]]; then
+	out=$(uv audit --frozen 2>&1)
+	rc=$?
+fi
 
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
 	token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
