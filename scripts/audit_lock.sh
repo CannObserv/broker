@@ -17,8 +17,9 @@
 # credential to fetch. `uv audit` is a preview command, hence the flag. uv
 # before 0.11.19 (astral-sh/uv#19645) has the command but not the name
 # `audit-command`, and rejects it with exit 2 and "Unknown feature flag", so
-# that one rejection retries without the flag (#103). It needs no uv floor,
-# and also covers a uv that drops the name once `audit` is stable.
+# that one rejection retries without the flag (#103). It needs no uv floor.
+# From 0.11.20 (astral-sh/uv#19669) an unknown name only warns, so the retry
+# fires on uv <= 0.11.18 alone: a later uv that drops the name still audits.
 # tests/deploy/test_lock_audit.py pins all of it.
 set -u
 

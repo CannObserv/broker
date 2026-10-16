@@ -112,8 +112,9 @@ def test_audits_the_lock_without_relocking(tmp_path):
 def test_a_uv_older_than_the_flag_still_audits(tmp_path, uv_exit, uv_output, warning):
     """uv < 0.11.19 rejects ``audit-command`` with exit 2 and "Unknown feature
     flag" (#103), so the script retries without the flag: the command is
-    there, only the name is not. The same retry covers a uv that drops the name
-    once ``audit`` is stable. The rejected attempt never reaches the report."""
+    there, only the name is not. From 0.11.20 an unknown name only warns, so
+    no later uv reaches this path. The rejected attempt never reaches the
+    report."""
     result, calls, summary = _run(tmp_path, uv_exit, uv_output, knows_flag=False)
     assert calls == [
         ["audit", "--frozen", "--preview-features", "audit-command"],
