@@ -130,6 +130,17 @@ def test_a_uv_older_than_the_flag_still_audits(tmp_path, uv_exit, uv_output, war
     assert "Unknown feature flag" not in summary
 
 
+def test_a_retry_that_fails_never_reads_as_clean(tmp_path):
+    """On an old uv the flagless call can still fail, an outage at OSV say.
+    The warning and the summary report that call, not the rejection."""
+    result, calls, summary = _run(tmp_path, 2, "error: OSV unreachable\n", knows_flag=False)
+    assert len(calls) == 2
+    assert "::warning title=uv audit did not run::uv audit exited 2" in result.stdout
+    assert "exit 2" in summary
+    assert "OSV unreachable" in summary
+    assert "Unknown feature flag" not in summary
+
+
 def test_any_other_exit_2_is_not_retried(tmp_path):
     """Only the unknown-flag rejection retries. An outage at OSV also exits 2,
     and a second call would only repeat it."""
