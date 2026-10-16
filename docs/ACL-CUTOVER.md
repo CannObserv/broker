@@ -301,7 +301,7 @@ resetchannels %W~* -@all +@write -@dangerous`, and the passwords file's `default
 **There is no reversing it, and nothing needs to.** Until CannObserv/broker#52
 the reversal - `ACL SETUSER default on` - was also how every restart window
 opened, because no other user could `BGREWRITEAOF`, `CONFIG SET` or `SAVE`.
-`acladmin` holds those now, and an enabled tombstone grants no read and no
+`acladmin` holds those now, and an enabled tombstone grants no read command and no
 operator command. A
 migrating cluster that needs `default` back for a straggler restores the grants
 and a known password in one `ACL SETUSER`, as `acladmin`, and should ask why

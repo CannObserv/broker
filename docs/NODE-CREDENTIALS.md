@@ -131,7 +131,7 @@ moved to `acladmin`; `default` lost every grant; its password became the digest
 of a value nobody kept; `/etc/redis/broker-password` was shredded; and
 `requirepass` was re-minted to belong to no user. There is nothing left to
 rotate: the digest is of a value nobody has, and the tombstone would grant no
-read and no operator command if it were found. Since CannObserv/broker#101 it
+read command and no operator command if it were found. Since CannObserv/broker#101 it
 holds `%W~* +@write -@dangerous`, which the AOF replay re-checks `MULTI` blocks
 against while loading; `deploy/redis-acl.conf`, the `default` stanza.
 
