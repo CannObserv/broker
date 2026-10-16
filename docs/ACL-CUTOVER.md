@@ -137,7 +137,9 @@ sudo shred -u /root/users.acl.check /root/aclcheck.log
 **`PING` must return `NOAUTH`.** If it returns `PONG`, stop - see *The `nopass`
 trap* below. `ACL LIST` must show eight users: `archiver`, `watcher`,
 `replicator`, `processor`, `provisioner`, `brokeradmin`, `acladmin`, and `default` - **`off`**,
-`-@all`, still carrying a password hash. No test credential: `citest` was
+still carrying a password hash, `%W~*`, and `-@all` followed by 7.0's expansion
+of `+@write -@dangerous` (`+@blocking +@string ...`, CannObserv/broker#101); a
+cluster that predates #101 shows `-@all` alone, and replays no `MULTI` block. No test credential: `citest` was
 deleted by CannObserv/broker#53.
 
 ### 3. Note where each service lives
