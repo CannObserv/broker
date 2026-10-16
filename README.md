@@ -128,6 +128,14 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   ACL declares participants and node users only, and `databases 1` stays. The
   siblings' suites default to loopback; CannObserv/replicator#132 asks
   replicator's to refuse any other host.
+- CannObserv/broker#101 - `default` holds `%W~* +@write -@dangerous`, live
+  2026-10-16T14:13:38Z, still `off`. During AOF load `EXEC` re-checks as
+  `default`, so the bare `-@all` tombstone of #52 made an unplanned restart
+  drop every `MULTI` block - engine-wrapped claims and deliveries of 2+ entries,
+  and lazily expired writes. None lost: 0 refusals in the logs since
+  2026-09-01, 0 blocks in the incr at the fix. Interim until the
+  engine skips the check (Valkey >= 8.0.11, Redis >= 8.4.4);
+  `tests/deploy/test_aof_replay.py`'s control says when.
 
 ## What stayed in archiver
 
