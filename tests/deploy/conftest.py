@@ -233,6 +233,9 @@ def acl_server(acl: Path, workdir: Path, extra_args: tuple[str, ...] = ()):
     binary = engine_binary()
     if not binary:
         pytest.skip("neither redis-server nor valkey-server installed")
+    # Before the spawn: between it and the ``try`` below, nothing may raise,
+    # or the server outlives the test holding its port.
+    engine = engine_name(binary)
 
     port = _free_port()
     # Logged to a file rather than a pipe nobody reads: a module-scoped caller
@@ -298,7 +301,7 @@ def acl_server(acl: Path, workdir: Path, extra_args: tuple[str, ...] = ()):
     connect.port = port
     # Which engine a verdict was reached on - #101's control is judged per
     # engine, and its failure is the signal to retire a grant (#102).
-    connect.engine = engine_name(binary)
+    connect.engine = engine
 
     try:
         yield connect
