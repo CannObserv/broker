@@ -1833,7 +1833,8 @@ def test_enabling_default_admits_no_reader_and_no_operator(tracked_acl_broker) -
     kept, so the flip is neither a window nor a way in.
 
     What it can do is pinned rather than discovered: `XADD`, as one instance of
-    `+@write`. `XCLAIM`/`XAUTOCLAIM` return the entries they move, `%W` or not.
+    `+@write`, on a key nothing else on this module-shared server reads.
+    `XCLAIM`/`XAUTOCLAIM` return the entries they move, `%W` or not.
     """
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
         tracked_acl_broker("default").ping()
@@ -1853,7 +1854,7 @@ def test_enabling_default_admits_no_reader_and_no_operator(tracked_acl_broker) -
         ):
             with pytest.raises(redis_pkg.exceptions.NoPermissionError):
                 refused()
-        assert default.xadd(CONTENT_FETCH, {"k": "v"})
+        assert default.xadd("flip.residue", {"k": "v"})
     with pytest.raises(redis_pkg.exceptions.AuthenticationError):
         tracked_acl_broker("default").ping()
 
