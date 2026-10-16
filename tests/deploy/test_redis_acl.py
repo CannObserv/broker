@@ -1606,10 +1606,11 @@ async def test_the_probes_connection_is_denied_nothing(fresh_acl_broker) -> None
 
     redis-py's default ``driver_info`` sends ``CLIENT SETINFO`` twice on every
     connect. Valkey 7.2 checks it against a grant ``brokeradmin`` does not hold,
-    2 ``ACL LOG`` entries a tick (#85); 7.0 rejects the subcommand before the ACL
-    sees it. So this fails on Valkey unless the probe connects with
-    ``driver_info=None``, and passes on 7.0 either way (#102). Built by
-    ``probe_client``, the timer's own construction, not a copy of its kwargs.
+    two denials a tick, one ``ACL LOG`` entry counting them (#85); 7.0 rejects
+    the subcommand before the ACL sees it. So this fails on Valkey unless the
+    probe connects with ``driver_info=None``, and passes on 7.0 either way
+    (#102). Built by ``probe_client``, the timer's own construction, not a copy
+    of its kwargs.
     """
     url = f"redis://brokeradmin@127.0.0.1:{fresh_acl_broker.port}/0"
     client = probe_client(url, PASSWORD)

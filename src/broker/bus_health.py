@@ -2791,9 +2791,10 @@ def probe_client(redis_url: str, password: str | None) -> Redis:
     RedisTimeoutError, which the collector already renders as that finding.
 
     ``driver_info=None`` sends no ``CLIENT SETINFO`` on connect. Valkey checks
-    it against a grant ``brokeradmin`` does not hold, two ``ACL LOG`` entries a
-    tick; 7.0 ignores it (CannObserv/broker#102). Dropping the call, rather
-    than granting it, keeps ``brokeradmin`` to what this package issues.
+    it against a grant ``brokeradmin`` does not hold, two denials a tick, one
+    ``ACL LOG`` entry counting them; 7.0 ignores it (CannObserv/broker#102).
+    Dropping the call, rather than granting it, keeps ``brokeradmin`` to what
+    this package issues.
     """
     return Redis.from_url(
         redis_url,

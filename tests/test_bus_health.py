@@ -2455,11 +2455,12 @@ def test_main_connects_through_probe_client(stub_main_deps) -> None:
 
 def test_the_probe_sends_no_client_setinfo() -> None:
     """redis-py 8's default ``driver_info`` sends ``CLIENT SETINFO`` on every
-    connect, and Valkey denies it to ``brokeradmin``: 2 ``ACL LOG`` entries a
-    tick, the log operators read as evidence (#85, #102). ``None`` is redis-py's
-    documented off switch; a connection holding none sends neither call. A grant
-    would be the other fix, and ``test_the_probe_holds_only_what_it_issues``
-    keeps ``brokeradmin`` off one nothing in ``src/broker/`` needs."""
+    connect, and Valkey denies it to ``brokeradmin``: two denials a tick, one
+    ``ACL LOG`` entry counting them, in the log operators read as evidence
+    (#85, #102). ``None`` is redis-py's documented off switch; a connection
+    holding none sends neither call. A grant would be the other fix, and
+    ``test_the_probe_holds_only_what_it_issues`` keeps ``brokeradmin`` off one
+    nothing in ``src/broker/`` needs."""
     client = bus_health.probe_client("redis://localhost:6379/14", None)
     assert client.connection_pool.make_connection().driver_info is None
 
