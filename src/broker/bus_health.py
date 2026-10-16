@@ -2781,6 +2781,29 @@ def _unit_credential(name: str) -> str | None:
     return value or None
 
 
+def probe_client(redis_url: str, password: str | None) -> Redis:
+    """The probe's one client, built here so the tests pin what the timer sends.
+
+    Bounded sockets: a hung (rather than refusing) broker would otherwise block
+    until systemd's TimeoutStartSec kills the unit, turning the WARN-only
+    "broker unreachable" finding into a failed unit in exactly the degraded
+    state this probe exists to report. The timeouts surface as
+    RedisTimeoutError, which the collector already renders as that finding.
+
+    ``driver_info=None`` sends no ``CLIENT SETINFO`` on connect. Valkey checks
+    it against a grant ``brokeradmin`` does not hold, two ``ACL LOG`` entries a
+    tick; 7.0 ignores it (CannObserv/broker#102). Dropping the call, rather
+    than granting it, keeps ``brokeradmin`` to what this package issues.
+    """
+    return Redis.from_url(
+        redis_url,
+        password=password,
+        socket_connect_timeout=SOCKET_CONNECT_TIMEOUT_SECONDS,
+        socket_timeout=SOCKET_TIMEOUT_SECONDS,
+        driver_info=None,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Timer entrypoint. Always exits 0 once the probe ran - WARN-only means a
     finding is a journald line, never a failed unit. Only a probe crash (a bug
@@ -2810,18 +2833,7 @@ def main(argv: list[str] | None = None) -> int:
     password = _unit_credential(BROKER_CREDENTIAL)
 
     async def _run() -> None:
-        # Bounded sockets: a hung (rather than refusing) broker would otherwise
-        # block until systemd's TimeoutStartSec kills the unit, turning the
-        # WARN-only "broker unreachable" finding into a failed unit in exactly
-        # the degraded state this probe exists to report. The timeouts surface
-        # as RedisTimeoutError, which the collector already renders as that
-        # finding.
-        client = Redis.from_url(
-            redis_url,
-            password=password,
-            socket_connect_timeout=SOCKET_CONNECT_TIMEOUT_SECONDS,
-            socket_timeout=SOCKET_TIMEOUT_SECONDS,
-        )
+        client = probe_client(redis_url, password)
         try:
             await run_once(
                 client,

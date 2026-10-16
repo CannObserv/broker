@@ -2445,6 +2445,25 @@ def test_main_bounds_the_redis_socket(stub_main_deps) -> None:
     assert kwargs["socket_timeout"] > 0
 
 
+def test_main_connects_through_probe_client(stub_main_deps) -> None:
+    """``main`` builds nothing of its own, so what ``probe_client`` pins is
+    what the timer sends."""
+    assert bus_health.main(["--state-file", str(stub_main_deps.state_file)]) == 0
+
+    assert stub_main_deps.from_url.call_args.kwargs["driver_info"] is None
+
+
+def test_the_probe_sends_no_client_setinfo() -> None:
+    """redis-py 8's default ``driver_info`` sends ``CLIENT SETINFO`` on every
+    connect, and Valkey denies it to ``brokeradmin``: 2 ``ACL LOG`` entries a
+    tick, the log operators read as evidence (#85, #102). ``None`` is redis-py's
+    documented off switch; a connection holding none sends neither call. A grant
+    would be the other fix, and ``test_the_probe_holds_only_what_it_issues``
+    keeps ``brokeradmin`` off one nothing in ``src/broker/`` needs."""
+    client = bus_health.probe_client("redis://localhost:6379/14", None)
+    assert client.connection_pool.make_connection().driver_info is None
+
+
 def test_main_releases_the_client_pool(stub_main_deps) -> None:
     """A pool reclaimed during loop teardown emits "Event loop is closed" noise
     into the journald stream this unit exists to keep clean. Archiver's copy
@@ -2712,11 +2731,7 @@ def test_probe_takes_no_retry_so_its_stated_per_call_bound_is_the_real_one() -> 
     change now that every participant reaches this node across a tailnet - would
     halve the effective headroom without touching either number the unit cites.
     """
-    client = bus_health.Redis.from_url(
-        "redis://localhost:6379/14",
-        socket_connect_timeout=bus_health.SOCKET_CONNECT_TIMEOUT_SECONDS,
-        socket_timeout=bus_health.SOCKET_TIMEOUT_SECONDS,
-    )
+    client = bus_health.probe_client("redis://localhost:6379/14", None)
     assert client.connection_pool.make_connection().retry._retries == 0
 
 

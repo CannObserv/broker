@@ -51,6 +51,7 @@ from src.broker.bus_health import (
     LWW_PRODUCER_MAXLEN,
     REGISTRY_PRODUCER_MAXLEN,
     STREAM_CHECKS,
+    probe_client,
 )
 from tests.canonical import CANONICAL_STREAMS
 from tests.deploy.conftest import ACL_FILE, PASSWORD, SERVICE_USERS, parse_users, split_rules
@@ -1597,6 +1598,28 @@ def test_everything_the_probe_issues_is_granted(users) -> None:
         f"src/broker/bus_health.py issues {ungranted}, which brokeradmin is not granted - "
         f"widen it live as acladmin and in {ACL_FILE.name}, with the call site named"
     )
+
+
+async def test_the_probes_connection_is_denied_nothing(fresh_acl_broker) -> None:
+    """On the wire, what the two tests above claim of the line: a tick's
+    connect and first read log no denial as ``brokeradmin``.
+
+    redis-py's default ``driver_info`` sends ``CLIENT SETINFO`` twice on every
+    connect. Valkey 7.2 checks it against a grant ``brokeradmin`` does not hold,
+    2 ``ACL LOG`` entries a tick (#85); 7.0 rejects the subcommand before the ACL
+    sees it. So this fails on Valkey unless the probe connects with
+    ``driver_info=None``, and passes on 7.0 either way (#102). Built by
+    ``probe_client``, the timer's own construction, not a copy of its kwargs.
+    """
+    url = f"redis://brokeradmin@127.0.0.1:{fresh_acl_broker.port}/0"
+    client = probe_client(url, PASSWORD)
+    try:
+        assert await client.info("server")
+    finally:
+        await client.aclose()
+    log = fresh_acl_broker("acladmin").acl_log()
+    denied = [entry for entry in log if entry["username"] == "brokeradmin"]
+    assert not denied, f"the probe's connection was denied: {denied}"
 
 
 def test_the_call_site_scan_maps_redis_py_methods_to_commands() -> None:
