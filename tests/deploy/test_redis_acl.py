@@ -1363,6 +1363,7 @@ def test_default_grants_only_what_the_aof_replay_rechecks(users) -> None:
     """
     root, selectors = split_rules(users["default"])
     assert not selectors, f"default carries a selector: {selectors}"
+    assert "-@all" in root, "default must deny every command before granting writes"
     assert root[root.index("-@all") :] == ["-@all", "+@write", "-@dangerous"], (
         f"default's commands must read `-@all +@write -@dangerous`, in that order: {root}"
     )
