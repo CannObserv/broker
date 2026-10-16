@@ -136,11 +136,12 @@ sudo shred -u /root/users.acl.check /root/aclcheck.log
 
 **`PING` must return `NOAUTH`.** If it returns `PONG`, stop - see *The `nopass`
 trap* below. `ACL LIST` must show eight users: `archiver`, `watcher`,
-`replicator`, `processor`, `provisioner`, `brokeradmin`, `acladmin`, and `default` - **`off`**,
-still carrying a password hash, `%W~*`, and `-@all` followed by 7.0's expansion
-of `+@write -@dangerous` (`+@blocking +@string ...`, CannObserv/broker#101); a
-cluster that predates #101 shows `-@all` alone, and replays no `MULTI` block. No test credential: `citest` was
-deleted by CannObserv/broker#53.
+`replicator`, `processor`, `provisioner`, `brokeradmin`, `acladmin`, and
+`default` - **`off`**, still carrying a password hash, `%W~*`, and `-@all`
+followed by 7.0's expansion of `+@write -@dangerous` (`+@blocking +@string ...`,
+CannObserv/broker#101); a cluster that predates #101 shows `-@all` alone, and
+replays no `MULTI` block. No test credential: `citest` was deleted by
+CannObserv/broker#53.
 
 ### 3. Note where each service lives
 
@@ -264,7 +265,7 @@ Then verify every axis, not only the one that changed:
 
 ```bash
 redis-cli PING                                             # -> NOAUTH Authentication required.
-rcli acladmin ACL GETUSER default                          # -> flags off, one hash, keys %W~*, commands -@all +@blocking ... (7.0 expands +@write -@dangerous)
+rcli acladmin ACL GETUSER default                          # -> flags off, one hash, keys %W~*, commands -@all +@blocking ...
 rcli brokeradmin INFO server | grep redis_version          # the probe's credential still answers
 for u in archiver watcher replicator processor provisioner; do
     echo "$u: held by digest on this node - verify from its own host"
@@ -295,19 +296,18 @@ then fail. That is why the `CLIENT LIST` check comes first - a straggler would
 break at its next restart rather than now, and look healthy in between.
 
 Then update `deploy/redis-acl.conf` to `user default off >__DEFAULT_PW__
-resetchannels %W~* -@all +@write -@dangerous`, and the passwords file's `default` line to
-`__DEFAULT_PW_SHA256__=$DH`, and commit, so the tracked file matches what
-`ACL SAVE` wrote. `tests/deploy/test_redis_acl.py` pins the line as declared,
-`off`, carrying a password, and granting writes alone.
+resetchannels %W~* -@all +@write -@dangerous`, and the passwords file's
+`default` line to `__DEFAULT_PW_SHA256__=$DH`, and commit, so the tracked file
+matches what `ACL SAVE` wrote. `tests/deploy/test_redis_acl.py` pins the line as
+declared, `off`, carrying a password, and granting writes alone.
 
 **There is no reversing it, and nothing needs to.** Until CannObserv/broker#52
 the reversal - `ACL SETUSER default on` - was also how every restart window
 opened, because no other user could `BGREWRITEAOF`, `CONFIG SET` or `SAVE`.
-`acladmin` holds those now, and an enabled tombstone grants no read command and no
-operator command. A
-migrating cluster that needs `default` back for a straggler restores the grants
-and a known password in one `ACL SETUSER`, as `acladmin`, and should ask why
-first.
+`acladmin` holds those now, and an enabled tombstone grants no read command and
+no operator command. A migrating cluster that needs `default` back for a
+straggler restores the grants and a known password in one `ACL SETUSER`, as
+`acladmin`, and should ask why first.
 
 **Why `acladmin` exists at all**, because this was nearly got wrong: `ACL
 SETUSER` requires `+acl`, and until that user was added **no user had it** -

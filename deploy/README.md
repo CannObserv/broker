@@ -81,19 +81,19 @@ sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
 ### The cutover order, and why only step 1 needs the window
 
 **`default` is the sharp edge, in both directions.** Omitting it from an aclfile
-silently makes it `nopass` - an anonymous client is served while
-`CONFIG GET requirepass` still returns the password, which is R2 arriving as a
-side effect of turning on the mechanism meant to prevent it. And setting it
-`off` at the first load locks out every service still on `default:`, because
-that restart lands before any of them has moved onto its own credential. So on
-this cluster the file went in reading `on` with the then-current password,
-retiring it was the last step rather than the first, and **the tracked file now
-says `off`** - and since broker#52 grants no read command and no operator command,
-behind the digest of a value nobody kept. Its one grant, writes on keys, is the
-AOF replay's (broker#101). It still carries a password, because `off` is a flag that leaves
-the password set intact, and a line with none would be `nopass` the moment
-anything flipped it `on`. A new cluster repeats the order: `on` with the shared
-grants for the first load, migrate, then the tombstone live.
+silently makes it `nopass` - an anonymous client is served while `CONFIG GET
+requirepass` still returns the password, which is R2 arriving as a side effect
+of turning on the mechanism meant to prevent it. And setting it `off` at the
+first load locks out every service still on `default:`, because that restart
+lands before any of them has moved onto its own credential. So on this cluster
+the file went in reading `on` with the then-current password, retiring it was
+the last step rather than the first, and **the tracked file now says `off`** -
+and since broker#52 grants no read command and no operator command, behind the
+digest of a value nobody kept. Its one grant, writes on keys, is the AOF
+replay's (broker#101). It still carries a password, because `off` is a flag that
+leaves the password set intact, and a line with none would be `nopass` the
+moment anything flipped it `on`. A new cluster repeats the order: `on` with the
+shared grants for the first load, migrate, then the tombstone live.
 
 1. **In the window** - install `/etc/redis/users.acl`, add `aclfile` to
    `redis.conf` (and `databases 1` only after a `BGREWRITEAOF` - see the

@@ -406,8 +406,8 @@ data*).
   is the check, and it showed zero `default` connections before the flip.
 - **Do not re-enable `default` for a window.** Until CannObserv/broker#52 that
   was the opening move, because nothing else could `CONFIG SET save ""` when a
-  restart came up wrong. `acladmin` can, and `default` grants no read command and no
-  operator command: `on` only makes an identity nobody should use.
+  restart came up wrong. `acladmin` can, and `default` grants no read command
+  and no operator command: `on` only makes an identity nobody should use.
 - **Do not schedule this window alongside any service's own VM move.** R6
   generalised: one moving part at a time.
 
