@@ -418,6 +418,10 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
      The run must report `uploaded` or `unchanged`, with that sha12.
    - On failure, `live` and the units switch back, and the old build is proved
      the same way.
+   - A quiet deploy can take up to 15 minutes waiting for the probe's tick,
+     and twice that when it switches back.
+   - The deploy reads the tick's summary line from the system journal. `exedev`
+     can read that journal because it is in `adm`.
 6. **Compare** the host configs, then **prune** to 5 releases plus `live`.
 
 **Exit codes:**
