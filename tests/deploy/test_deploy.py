@@ -775,7 +775,13 @@ class TestADeploy:
     def test_the_import_probe_names_both_modules_and_co_core(self, world):
         assert_ok(world.run())
         probe = next(c for c in world.calls() if c.startswith("python ") and " -c " in c)
-        for module in ("src.broker.bus_health", "src.broker.backup", "co_core"):
+        # restore too (CR 17): docs/RECOVERY.md runs it as root from live.
+        for module in (
+            "src.broker.bus_health",
+            "src.broker.backup",
+            "src.broker.restore",
+            "co_core",
+        ):
             assert module in probe, module
         assert "read_revision" in probe
 
@@ -1213,7 +1219,9 @@ class TestReleases:
         assert_ok(world.run(world.main[0]))
         (probe,) = [c for c in world.calls() if " -c " in c]
         assert probe.startswith(f"python {world.release(world.main[0])} ")
-        assert "import src.broker.bus_health, src.broker.backup, co_core" in probe
+        assert (
+            "import src.broker.bus_health, src.broker.backup, src.broker.restore, co_core" in probe
+        )
 
     def test_an_unlinked_release_whose_venv_no_longer_runs_is_rebuilt(self, world):
         assert_ok(world.run(world.main[0]))

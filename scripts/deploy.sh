@@ -83,10 +83,11 @@ HOST_CONFIGS=(
 # which exedev cannot read. Compared with the release live ran instead; the
 # parity tests in tests/deploy compare them with the node.
 DERIVED_CONFIGS=(redis.conf.broker redis-acl.conf)
-# What a release must import, and the build id it reports (src/broker/revision.py,
-# which reads REVISION beside pyproject.toml: the editable install keeps src/
-# the release's own, #105 CR 2).
-IMPORT_PROBE='import src.broker.bus_health, src.broker.backup, co_core; from src.broker.revision import read_revision; print(read_revision())'
+# What a release must import - the probe's, the backup's and restore's entry
+# points (docs/RECOVERY.md runs restore as root from live) and co-core - and the
+# build id it reports (src/broker/revision.py, which reads REVISION beside
+# pyproject.toml: the editable install keeps src/ the release's own, #105 CR 2).
+IMPORT_PROBE='import src.broker.bus_health, src.broker.backup, src.broker.restore, co_core; from src.broker.revision import read_revision; print(read_revision())'
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 note() { echo "deploy: $*" >&2; }
