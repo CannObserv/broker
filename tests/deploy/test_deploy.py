@@ -1235,18 +1235,20 @@ class TestReleases:
         assert not (world.release(world.main[-1]) / "REVISION").exists()
 
     def test_old_releases_are_pruned_but_never_the_linked_one(self, world):
+        """KEEP counts the releases besides live (CR 8)."""
         for sha in world.main:
             assert_ok(world.run(sha, BROKER_DEPLOY_KEEP="1"))
         kept = {p.name for p in (world.root / "releases").iterdir()}
-        assert kept == {world.build(world.main[-1])}
+        assert kept == {world.build(world.main[-1]), world.build(world.main[-2])}
 
-    def test_five_releases_are_kept_by_default(self, world):
+    def test_five_releases_are_kept_by_default_plus_live(self, world):
+        """The design's Q2 and its disk budget: 5 releases plus live (CR 8)."""
         for _ in range(4):
             world.push()
         for sha in world.main:  # 7 builds
             assert_ok(world.run(sha))
         kept = {p.name for p in (world.root / "releases").iterdir()}
-        assert kept == {world.build(sha) for sha in world.main[-5:]}
+        assert kept == {world.build(sha) for sha in world.main[-6:]}
 
     def test_a_failed_prune_does_not_fail_a_deploy_that_succeeded(self, world):
         assert_ok(world.run(world.main[0]))

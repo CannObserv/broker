@@ -27,7 +27,7 @@
 #      that runs live when live moved. The probe by its next natural tick, never
 #      forced (the two-tick pending rule); the backup by one forced run
 #   4. on failure, switch back, units too, and prove the old build the same way
-#   5. compare the host configs (never installed), prune to KEEP releases
+#   5. compare the host configs (never installed), prune to KEEP releases plus live
 #
 # It restarts nothing, and never redis-server. Runs as exedev; sudo for every
 # write under the deploy root, for the unit files and for systemctl. exedev can
@@ -768,10 +768,11 @@ compare_host_configs
 
 # --- prune -----------------------------------------------------------------
 
+# KEEP releases besides the one live names (the design's Q2): live is left out
+# of the count, never only out of the deletion.
 live_build="$(release_of)"
 # shellcheck disable=SC2012 # names are 12 hex characters
-ls -1t "$ROOT/releases" | tail -n +$((KEEP + 1)) | while read -r old; do
-  [[ "$old" == "$live_build" ]] && continue
+ls -1t "$ROOT/releases" | { grep -vxF -- "$live_build" || :; } | tail -n +$((KEEP + 1)) | while read -r old; do
   note "pruning release $old"
   # REVISION first: a prune cut short leaves an interrupted build, never a
   # "complete" one with half its files. Verified by now: a failed prune is a note.
