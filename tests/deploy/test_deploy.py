@@ -799,6 +799,15 @@ class TestWheelhouse:
         assert str(world.env_file) in result.stderr
         assert world.target() is None
 
+    def test_an_env_file_that_will_not_source_is_refused_with_why(self, world):
+        """CR 2: set -e does not reach into a command substitution, so the lines
+        before the error were taken as the file, in silence."""
+        world.env_file.write_text("GOOGLE_APPLICATION_CREDENTIALS=/k.json\nif then\n")
+        result = world.run()
+        assert result.returncode == 1
+        assert f"cannot read {world.env_file}" in result.stderr
+        assert world.target() is None
+
     def test_only_the_files_the_lock_names_are_copied(self, world):
         assert_ok(world.run())
         wheelhouse = world.release(world.main[-1]) / ".wheelhouse"

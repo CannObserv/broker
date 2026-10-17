@@ -314,9 +314,9 @@ wheelhouse() {
     unset GOOGLE_APPLICATION_CREDENTIALS
     set -a
     # shellcheck disable=SC1090
-    . "$ENV_FILE"
+    . "$ENV_FILE" || exit 1 # set -e does not reach into a command substitution
     printf '%s' "${GOOGLE_APPLICATION_CREDENTIALS:-}"
-  )"
+  )" || die "cannot read $ENV_FILE as shell (set -a; . $ENV_FILE); nothing switched"
   [[ -n "$key" ]] || die "no GOOGLE_APPLICATION_CREDENTIALS in $ENV_FILE for the wheelhouse sync; nothing switched"
   (cd "$SRC" && GOOGLE_APPLICATION_CREDENTIALS="$key" uv run --no-project \
     --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py >&2) ||
