@@ -156,6 +156,19 @@ roots_alone "$ROOT"
 exec 9<"$ROOT"
 flock -n 9 || die "another deploy is running (it holds the lock on $ROOT)"
 
+# The path seams are the tests'; left set in a shell, one retargets a real
+# deploy, so each that is not the node's default is said, and journaled (CR 19).
+seams=""
+for seam in ROOT=/srv/broker HOST= ENV_FILE=/etc/broker/.env \
+  BACKUP_STATE=/var/lib/broker-backup/state.json; do
+  name="${seam%%=*}"
+  [[ "${!name}" == "${seam#*=}" ]] || seams+=" BROKER_DEPLOY_$name=${!name}"
+done
+if [[ -n "$seams" ]]; then
+  note "paths that are not the node's:$seams"
+  logger -t broker-deploy "paths that are not the node's:$seams" || true
+fi
+
 # The installed units this deploy replaces, kept for a switch back. They are
 # the only copies left, a hand fix included: an exit that leaves them neither
 # installed back nor needed (a signal, a switch back that could not rename)

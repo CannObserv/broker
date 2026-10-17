@@ -2193,6 +2193,20 @@ class TestOperation:
         assert f"{knob}=5x" in result.stderr
         assert not world.calls()
 
+    def test_a_path_seam_set_in_the_shell_is_named_and_journaled(self, world):
+        """CR 19: left set, a test seam retargets a real deploy in silence."""
+        result = world.run()
+        assert_ok(result)
+        for knob, value in (
+            ("BROKER_DEPLOY_ROOT", world.root),
+            ("BROKER_DEPLOY_HOST", world.host),
+            ("BROKER_DEPLOY_ENV_FILE", world.env_file),
+            ("BROKER_DEPLOY_BACKUP_STATE", world.backup_state),
+        ):
+            assert f"{knob}={value}" in result.stderr, knob
+        (logged,) = [c for c in world.calls() if c.startswith("logger ") and "not the node's" in c]
+        assert f"BROKER_DEPLOY_HOST={world.host}" in logged
+
     def test_an_unknown_flag_is_refused(self, world):
         assert world.run("--live-only").returncode == 1
 
