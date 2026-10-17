@@ -358,8 +358,9 @@ build_release() {
   # Copied, never hardlinked from ~/.cache/uv: a hardlink is the cache's inode
   # and every dev venv's, so the chown below would reach them (status#14).
   # Editable, as the design chose (Q5): its .pth names this release itself.
-  (cd "$release" && UV_PYTHON_DOWNLOADS=never uv sync --locked --no-dev --compile-bytecode \
-    --link-mode copy --python "$PYTHON" --quiet) ||
+  # The venv is the release's own .venv, whatever the caller's shell names.
+  (cd "$release" && env -u UV_PROJECT_ENVIRONMENT -u VIRTUAL_ENV UV_PYTHON_DOWNLOADS=never \
+    uv sync --locked --no-dev --compile-bytecode --link-mode copy --python "$PYTHON" --quiet) ||
     die "uv sync failed for $build; nothing switched"
   home="$(sed -n 's/^home *= *//p' "$release/.venv/pyvenv.cfg" 2>/dev/null)" || home=""
   [[ -n "$home" && "$home" != /home/* ]] ||

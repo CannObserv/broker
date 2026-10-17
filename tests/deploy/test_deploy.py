@@ -94,8 +94,8 @@ wheels = [
 """
 
 STUB_UV = r"""#!/usr/bin/env bash
-echo "uv $PWD GAC=${GOOGLE_APPLICATION_CREDENTIALS:-} PYDL=${UV_PYTHON_DOWNLOADS:-} $*" \
-  >> "$FAKE_LOG"
+echo "uv $PWD GAC=${GOOGLE_APPLICATION_CREDENTIALS:-} PYDL=${UV_PYTHON_DOWNLOADS:-}" \
+  "UPE=${UV_PROJECT_ENVIRONMENT:-} VENV=${VIRTUAL_ENV:-} $*" >> "$FAKE_LOG"
 case "$1" in
   sync)
     [[ -n "${FAKE_SYNC_FAIL:-}" ]] && exit 1
@@ -721,6 +721,13 @@ class TestADeploy:
         ]
         assert steps == sorted(steps), steps
         assert not [c for c in calls if c.startswith("chown-of-writable")], "chmod before chown"
+
+    def test_the_sync_ignores_a_venv_the_callers_shell_names(self, world):
+        """CR 10: UV_PROJECT_ENVIRONMENT would build the venv outside the release,
+        and the deploy then blamed "an unknown interpreter"."""
+        assert_ok(world.run(UV_PROJECT_ENVIRONMENT="/elsewhere", VIRTUAL_ENV="/elsewhere"))
+        (sync,) = syncs(world)
+        assert " UPE= VENV= " in sync
 
     def test_bytecode_is_compiled_for_src_too(self, world):
         """--compile-bytecode reaches site-packages alone; the editable src/ is not there."""
