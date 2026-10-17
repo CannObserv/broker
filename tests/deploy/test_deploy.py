@@ -178,7 +178,8 @@ case "$1" in
     exit 0 ;;
   mv)
     # FAKE_MV_FAIL=<n> fails this run's nth `sudo mv`: the switch, or the switch back.
-    n=$(( $(cat "$(dirname "$FAKE_LOG")/mv-count") + 1 )); echo "$n" > "$(dirname "$FAKE_LOG")/mv-count"
+    count="$(dirname "$FAKE_LOG")/mv-count"
+    n=$(($(cat "$count") + 1)); echo "$n" > "$count"
     [[ "$n" == "${FAKE_MV_FAIL:-0}" ]] && exit 1
     as_root "$@"; exit ;;
   ln | chmod | touch | tee) as_root "$@"; exit ;;
