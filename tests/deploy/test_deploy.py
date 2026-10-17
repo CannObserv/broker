@@ -1768,6 +1768,20 @@ class TestUnits:
         assert world.target() == previous
         assert world.installed(BACKUP) == world.dev_units[BACKUP]
 
+    def test_a_redeploy_that_changed_nothing_before_failing_is_exit_1(self, world):
+        """CR 1: the link never moved and no unit was replaced, so the node is
+        as it was. Exit 4 would say nothing answers."""
+        assert_ok(world.run())
+        (world.units / BACKUP).write_text("edited by hand\n")
+        (world.units / BACKUP).chmod(0o000)
+        try:
+            result = world.run()
+        finally:
+            (world.units / BACKUP).chmod(0o644)
+        assert result.returncode == 1, result.stderr
+        assert "nothing changed" in result.stderr
+        assert world.installed(BACKUP) == "edited by hand\n"
+
     def test_a_failed_install_switches_back(self, world):
         assert_ok(world.run(world.main[0]))
         previous = world.target()

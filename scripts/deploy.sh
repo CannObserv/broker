@@ -742,8 +742,10 @@ else
   elif [[ "$previous" == "$build" ]]; then
     # The link never moved, so the units are all that changed. A hand-fixed
     # unit is the likeliest way here, and its copy kept aside the only one left.
+    # None replaced (the first could not be kept aside) is nothing changed at all.
     units_replaced ||
-      dead "live failed on $build, which it was already running; there is nothing to switch back to"
+      die "live failed on $build, which it was already running, before any unit was replaced;" \
+        "nothing changed"
     back="put back the units it replaced, on $build"
   else
     back="switched back to $(served_build "$previous_link")"
