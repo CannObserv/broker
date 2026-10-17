@@ -370,6 +370,68 @@ uv run pytest tests/deploy -rs        # the only skips: test_redis_acl.py's unas
 to this instance, so anything needing a restart waits for a window rather than
 being applied in passing.
 
+## Deploying (broker#22, #106)
+
+`scripts/deploy.sh` builds a **release**: a root-owned, read-only `git archive`
+of one CI-green commit on `origin/main`, with only the wheels `uv.lock` names
+and a venv of its own. It then points `/srv/broker/live` at the release. The
+design is `docs/plans/2026-10-17-22-release-deploy.md`. A unit runs a release
+once its `WorkingDirectory=` is `/srv/broker/live`. Until #107 and #108 switch
+them, **both units still run `~/broker`**, so a deploy builds and links a
+release and changes nothing that runs.
+
+```bash
+# Once, on a new or rebuilt node: root's, and writable by root alone. The
+# deploy refuses any other owner or mode.
+sudo install -d -o root -g root -m 755 /srv/broker
+
+# From the checkout, as exedev. Never as root, and never from a release, which
+# has no .git. It syncs the wheelhouse itself, with the key path in /etc/broker/.env.
+~/broker/scripts/deploy.sh                 # origin/main
+~/broker/scripts/deploy.sh <sha12>         # an older main commit: how a rollback is spelled
+~/broker/scripts/deploy.sh --skip-ci ...   # GitHub cannot answer: an emergency, journaled
+journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> (was ...)
+```
+
+**In order:**
+
+1. **CI gate.** The commit's `push` run of `ci.yml` on `main` must be
+   `success`, and so must every job in it. GitHub is asked unauthenticated, and
+   a pending run is waited for, up to 600 s.
+   - A commit behind the tip with no run is refused at once.
+   - So is a commit a workflow pushed: GitHub never runs CI for a
+     `GITHUB_TOKEN` push, such as the weekly context measurement. The refusal
+     names the commit under it.
+   - `audit.yml` is not gated.
+2. **Build** `releases/<sha12>` at its final path, or reuse it when it is
+   complete, root's, and still imports. A release `live` links is never rebuilt.
+3. **Switch** `live` with a `sudo` rename.
+4. **Install** each `deploy/broker-*.{service,timer}` that differs from its
+   installed copy, with one `daemon-reload`. A new unit is installed, never
+   enabled.
+5. **Verify** each unit the deploy changed: one whose unit file it installed,
+   or one that runs `live` when `live` moved.
+   - The probe is verified by its **next natural tick**, never a forced one,
+     because of the two-tick `pending` rule. The tick must exit 0 and log the
+     sha12.
+   - The backup is verified by one forced run, after any running one finishes.
+     The run must report `uploaded` or `unchanged`, with that sha12.
+   - On failure, `live` and the units switch back, and the old build is proved
+     the same way.
+6. **Compare** the host configs, then **prune** to 5 releases plus `live`.
+
+**Exit codes:**
+
+- `0`: deployed and verified.
+- `1`: refused before anything switched, or switched back to a build that answers.
+- `4`: nothing answers. Read `journalctl -t broker-deploy` and each unit's own journal.
+
+**It never installs a host config, and never restarts `redis-server`.** It
+compares the files Install puts in place verbatim, and a difference is a note.
+`redis.conf.broker` and `redis-acl.conf` are installed derived, under an
+`/etc/redis` that `exedev` cannot read. They are compared with the release
+`live` ran before, and a change is a note pointing at the restart window.
+
 ## Memory protection (broker#21)
 
 On 2026-09-16 the then-2 GB node ran out of memory under dev tooling (broker#17).
