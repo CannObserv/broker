@@ -21,3 +21,9 @@ __pycache__/
 # below a no-op and leaves .gitkeep untracked (CannObserv/archiver#116).
 .wheelhouse/*
 !.wheelhouse/.gitkeep
+
+# A release's build id, written by scripts/deploy.sh at the release root (#106).
+# A copy in a checkout would make it claim to be a release instead of `dev`
+# (src/broker/revision.py). `git archive` never ships an untracked file, so a
+# release loses nothing. Pinned by tests/test_revision.py.
+/REVISION

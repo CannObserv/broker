@@ -6,6 +6,7 @@ reports ``dev``, so this ships before the first release exists.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from src.broker import revision
@@ -58,3 +59,14 @@ def test_the_default_is_read_at_call_time(tmp_path, monkeypatch) -> None:
     path.write_text("feedfacecafe\n")
     monkeypatch.setattr(revision, "REVISION_PATH", path)
     assert revision.read_revision() == "feedfacecafe"
+
+
+def test_a_checkout_never_tracks_or_picks_up_a_revision() -> None:
+    """A stray REVISION in a dev tree would report a release's sha12 from a
+    checkout (#106). It is ignored at the root, and tracked nowhere."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=REPO_ROOT, check=True, capture_output=True, text=True
+    ).stdout.split("\0")
+    assert not [p for p in tracked if Path(p).name == "REVISION"]
+    ignored = subprocess.run(["git", "check-ignore", "-q", "REVISION"], cwd=REPO_ROOT)
+    assert ignored.returncode == 0, "/REVISION in .gitignore"
