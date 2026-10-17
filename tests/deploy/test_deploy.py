@@ -514,7 +514,12 @@ class World:
     def release(self, sha: str) -> Path:
         return self.root / "releases" / self.build(sha)
 
-    def push(self, units: dict[str, str | None] | None = None, env: dict | None = None) -> str:
+    def push(
+        self,
+        units: dict[str, str | None] | None = None,
+        env: dict | None = None,
+        top: dict[str, str] | None = None,
+    ) -> str:
         """Commit on top of origin's main and push it. The checkout's main holds
         an unpushed commit, so this happens in a clone of its own."""
         pusher = self.tmp / "pusher"
@@ -525,6 +530,8 @@ class World:
         git(pusher, "fetch", "-q", "origin")
         git(pusher, "switch", "-q", "-C", "main", "origin/main")
         self.write_tree(pusher, units or {})
+        for name, body in (top or {}).items():  # files at the repo root
+            (pusher / name).write_text(body)
         git(pusher, "add", "-A")
         git(pusher, "commit", "-q", "--allow-empty", "-m", "pushed", env=env)
         git(pusher, "push", "-q", "origin", "main")
@@ -837,6 +844,13 @@ class TestWheelhouse:
         assert sorted(p.name for p in wheelhouse.iterdir()) == sorted(
             [".gitkeep", CO_CORE_SDIST, CO_CORE_WHEEL]
         )
+
+    def test_a_lock_that_spells_the_wheelhouse_as_pyproject_does_still_copies(self, world):
+        """CR 12: pyproject.toml says ./.wheelhouse, and uv normalises it today."""
+        world.push(top={"uv.lock": UV_LOCK.replace('"' + ".wheelhouse" + '"', '"./.wheelhouse"')})
+        assert_ok(world.run())
+        wheelhouse = world.release(world.main[-1]) / ".wheelhouse"
+        assert (wheelhouse / CO_CORE_WHEEL).is_file() and (wheelhouse / CO_CORE_SDIST).is_file()
 
     def test_the_copies_are_files_never_links(self, world):
         assert (world.checkout / ".wheelhouse" / CO_CORE_WHEEL).stat().st_nlink == 2

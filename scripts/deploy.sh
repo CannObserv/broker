@@ -295,10 +295,11 @@ probe_error() { tr '\n' ' ' <"$backup/probe.err" 2>/dev/null | sed 's/ *$//'; }
 
 # The wheelhouse files uv.lock names: the sdist and wheel paths of each package
 # whose source is registry = ".wheelhouse" (co-core), relative to that directory.
+# "./.wheelhouse" too: pyproject.toml spells it so, and uv normalises it today.
 locked_wheels() {
   awk '
     /^\[/ { wheelhouse = 0 }
-    /^source = \{ registry = "\.wheelhouse" \}$/ { wheelhouse = 1 }
+    /^source = \{ registry = "(\.\/)?\.wheelhouse" \}$/ { wheelhouse = 1 }
     wheelhouse && match($0, /path = "[^"]*"/) { print substr($0, RSTART + 8, RLENGTH - 9) }
   ' "$release/uv.lock"
 }
