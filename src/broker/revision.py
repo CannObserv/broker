@@ -9,16 +9,21 @@ from pathlib import Path
 
 REVISION_PATH = Path(__file__).resolve().parents[2] / "REVISION"
 DEV = "dev"
+UNKNOWN = "unknown"
 
 
 def read_revision(path: Path | None = None) -> str:
-    """The ``REVISION`` file's stripped contents, or ``dev`` when it is absent.
+    """The ``REVISION`` file's stripped contents; ``dev`` when it is absent.
 
-    Resolved at call time so the tests can point it elsewhere. Only absence is
-    ``dev``: an unreadable file is a broken release and raises, rather than
-    reporting itself as a checkout.
+    Resolved at call time so the tests can point it elsewhere. Never raises: the
+    probe reads it before its summary line and check-in, the backup before its
+    state record, and a build id must not cost either its report. A file that
+    is there but unreadable or empty is a broken release, so it reads as
+    ``unknown`` - never ``dev``, which would pass it off as a checkout.
     """
     try:
-        return (path or REVISION_PATH).read_text().strip()
+        return (path or REVISION_PATH).read_text().strip() or UNKNOWN
     except FileNotFoundError:
         return DEV
+    except (OSError, ValueError):
+        return UNKNOWN

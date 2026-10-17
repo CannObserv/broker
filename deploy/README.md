@@ -595,8 +595,9 @@ X-API-Key: <key>
 ```
 
 **`variables.revision` is the code the tick ran** (broker#105): a release's
-`REVISION` file, or `dev` from a checkout. The `Bus health summary` line carries
-it too. It is never in `metadata`, where every deploy would open a new fault.
+`REVISION` file, `dev` from a checkout, or `unknown` when the file is there but
+unreadable or empty: a broken release, never a reason to skip the report. The
+`Bus health summary` line carries it too. It is never in `metadata`, where every deploy would open a new fault.
 
 **`metadata.fault` is the one value co-status compares** (CannObserv/status#28,
 broker#84): the sorted, duplicate-free `check:subject` of this tick's findings,

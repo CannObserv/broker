@@ -366,8 +366,8 @@ loopback; the last line is not optional.
 The state file the job writes is `/var/lib/broker-backup/state.json`; the
 probe reads it every ten minutes and its `backup` finding is what turns a
 silent failure into an alert. Its `revision` is the code the last run was, on
-success or failure: a release's `REVISION`, or `dev` from a checkout
-(broker#105).
+success or failure: a release's `REVISION`, `dev` from a checkout, or `unknown`
+for a release whose file is unreadable or empty (broker#105).
 
 ---
 

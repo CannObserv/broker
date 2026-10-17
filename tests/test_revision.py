@@ -23,6 +23,27 @@ def test_present_reads_as_its_stripped_contents(tmp_path) -> None:
     assert revision.read_revision(path) == "0123456789ab"
 
 
+def test_an_unreadable_file_is_unknown_never_dev_and_never_raises(tmp_path) -> None:
+    """The probe reads it before its summary line and check-in, the backup
+    before its state record: a raise would cost either its report. `dev` would
+    pass a broken release off as a checkout."""
+    path = tmp_path / "REVISION"
+    path.mkdir()  # IsADirectoryError, an OSError, as a permission denial is
+    assert revision.read_revision(path) == "unknown"
+
+
+def test_undecodable_contents_are_unknown(tmp_path) -> None:
+    path = tmp_path / "REVISION"
+    path.write_bytes(b"\xff\xfe\x00")
+    assert revision.read_revision(path) == "unknown"
+
+
+def test_an_empty_file_is_unknown(tmp_path) -> None:
+    path = tmp_path / "REVISION"
+    path.write_text("\n")
+    assert revision.read_revision(path) == "unknown"
+
+
 def test_the_file_is_looked_for_at_the_project_root() -> None:
     """Beside ``pyproject.toml``, where a release root puts it - not inside the
     package, which a deploy does not write into."""
