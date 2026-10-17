@@ -128,6 +128,7 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError, ResponseError
 
 from src.broker.logging import configure_logging, get_logger
+from src.broker.revision import read_revision
 
 # Literal rather than __name__: the timer runs this module via ``python -m``,
 # where __name__ is "__main__" - a useless journald filter key.
@@ -2547,7 +2548,7 @@ def _http_post(url: str, data: bytes, headers: dict[str, str], timeout: float) -
         return int(e.code)
 
 
-async def post_checkin(findings: list[Finding]) -> None:
+async def post_checkin(findings: list[Finding], *, revision: str) -> None:
     """Report this tick to co-status, if this node has been wired to it.
 
     Never raises and never changes the unit's exit status. WARN-only is the
@@ -2576,6 +2577,8 @@ async def post_checkin(findings: list[Finding]) -> None:
         "status": "alert" if findings else "ok",
         "variables": {
             "source": socket.gethostname(),
+            # Here and never in `metadata`: a deploy is not a new fault.
+            "revision": revision,
             "finding_count": len(findings),
             "findings": [
                 {"check": f.check, "subject": f.subject, "message": f.message} for f in findings
@@ -2746,12 +2749,13 @@ async def run_once(
             f"Bus health: {finding.message}",
             extra={"check": finding.check, "subject": finding.subject},
         )
+    revision = read_revision()
     summary = logger.warning if findings else logger.info
-    summary("Bus health summary", extra={"finding_count": len(findings)})
+    summary("Bus health summary", extra={"finding_count": len(findings), "revision": revision})
 
     # Last, and after the journald lines: journald is the floor this repo never
     # gives up, so it must not be contingent on a network call succeeding.
-    await post_checkin(findings)
+    await post_checkin(findings, revision=revision)
     return findings
 
 

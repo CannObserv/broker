@@ -14,8 +14,10 @@ their own coverage because the timer is stateless without them.
 from __future__ import annotations
 
 import ast
+import io
 import itertools
 import json
+import logging
 import re
 import time
 from collections import deque
@@ -80,6 +82,7 @@ from src.broker.bus_health import (
     save_state,
     with_margin,
 )
+from src.broker.logging import build_json_formatter
 from tests.canonical import CANONICAL_STREAMS
 
 
@@ -2408,6 +2411,78 @@ async def test_run_once_healthy_logs_info_summary(fake_redis, tmp_path, monkeypa
     assert info_spy.call_args.kwargs["extra"]["finding_count"] == 0
 
 
+# --- the build id (CannObserv/broker#105, #22 D5) ---
+
+
+async def test_the_summary_line_names_the_revision_it_ran(
+    fake_redis, tmp_path, monkeypatch
+) -> None:
+    """A deploy is visible on its first tick: the line says which code wrote it."""
+    monkeypatch.setattr(bus_health, "read_revision", lambda: "0123456789ab")
+    info_spy = MagicMock()
+    monkeypatch.setattr(bus_health.logger, "info", info_spy)
+
+    await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    assert info_spy.call_args.kwargs["extra"]["revision"] == "0123456789ab"
+
+
+def _knob_health_patterns() -> list[str]:
+    """The `grep` patterns of `.skills/patching-hosts`' probe `health` line."""
+    knob = (Path(__file__).resolve().parents[1] / ".skills" / "patching-hosts").read_text()
+    (line,) = [
+        ln for ln in knob.splitlines() if ln.startswith("health journalctl -u broker-bus-health")
+    ]
+    return re.findall(r"grep (?:-q )?'([^']*)'", line)
+
+
+async def test_the_summary_line_still_passes_the_patching_knobs_health_grep(
+    fake_redis, tmp_path, monkeypatch
+) -> None:
+    """The knob greps the rendered JSON line (#22 B7); a field added to it must
+    not move `"finding_count": 0` out of reach of that grep."""
+    monkeypatch.setattr(bus_health, "read_revision", lambda: "dev")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(build_json_formatter())
+    level = bus_health.logger.level
+    bus_health.logger.addHandler(handler)
+    bus_health.logger.setLevel(logging.INFO)
+    try:
+        await bus_health.run_once(
+            fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+        )
+    finally:
+        bus_health.logger.removeHandler(handler)
+        bus_health.logger.setLevel(level)
+
+    patterns = _knob_health_patterns()
+    assert patterns == ['"Bus health summary"', '"finding_count": 0']
+    (line,) = [ln for ln in stream.getvalue().splitlines() if re.search(patterns[0], ln)]
+    assert all(re.search(p, line) for p in patterns)
+    assert json.loads(line)["revision"] == "dev"
+
+
+async def test_the_checkin_carries_the_revision_in_variables_never_metadata(
+    fake_redis, tmp_path, monkeypatch, checkin_env
+) -> None:
+    """`metadata.fault` is the value co-status compares (#84): a revision there
+    would open a new fault on every deploy. It rides in `variables`."""
+    monkeypatch.setattr(bus_health, "read_revision", lambda: "0123456789ab")
+    monkeypatch.setattr(bus_health.logger, "warning", MagicMock())
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+
+    await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    sent = checkin_env[0]["data"]
+    assert sent["variables"]["revision"] == "0123456789ab"
+    assert sent["metadata"] == {"fault": ["dlq:content.fetch.dlq"]}
+
+
 # --- timer entrypoint ---
 
 
@@ -2875,7 +2950,8 @@ async def test_the_fault_key_is_sorted_and_duplicate_free(checkin_env) -> None:
             bus_health.Finding(check="backup", subject="rdb", message="failed"),
             bus_health.Finding(check="dlq", subject="content.fetch.dlq", message="depth 1"),
             bus_health.Finding(check="backup", subject="rdb", message="stale"),
-        ]
+        ],
+        revision="dev",
     )
 
     assert checkin_env[0]["data"]["metadata"]["fault"] == [
@@ -2887,7 +2963,7 @@ async def test_the_fault_key_is_sorted_and_duplicate_free(checkin_env) -> None:
 async def test_an_ok_checkin_carries_an_empty_fault_key(checkin_env) -> None:
     """co-status ends the fault on `ok` and reads no key from it; empty says
     the same thing on the wire, and keeps the payload one shape."""
-    await bus_health.post_checkin([])
+    await bus_health.post_checkin([], revision="dev")
 
     sent = checkin_env[0]["data"]
     assert sent["status"] == "ok"

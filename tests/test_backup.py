@@ -388,6 +388,40 @@ def test_run_backup_writes_state_the_probe_can_read(rdb, client, tmp_path) -> No
     assert stat.S_IMODE((tmp_path / "state" / "state.json").stat().st_mode) == 0o644
 
 
+def test_a_success_records_and_logs_the_revision_it_ran(rdb, client, tmp_path, monkeypatch) -> None:
+    """The build id (broker#105, #22 D5): `dev` from a checkout, a release's
+    sha12 once one runs, so a deploy is visible on its first hour."""
+    monkeypatch.setattr(backup, "read_revision", lambda: "0123456789ab")
+    info_spy = MagicMock()
+    monkeypatch.setattr(backup.logger, "info", info_spy)
+    _run(rdb, client, tmp_path)
+    assert _state(tmp_path)["revision"] == "0123456789ab"
+    assert info_spy.call_args.kwargs["extra"]["revision"] == "0123456789ab"
+
+
+def test_a_failure_records_and_logs_the_revision_it_ran(rdb, bucket, tmp_path, monkeypatch) -> None:
+    """A failing release must be told from the one before it."""
+    monkeypatch.setattr(backup, "read_revision", lambda: "0123456789ab")
+    error_spy = MagicMock()
+    monkeypatch.setattr(backup.logger, "error", error_spy)
+    with pytest.raises(BackupError):
+        _run(rdb, FakeClient(bucket, missing=True), tmp_path)
+    assert _state(tmp_path)["revision"] == "0123456789ab"
+    assert error_spy.call_args.kwargs["extra"]["revision"] == "0123456789ab"
+
+
+def test_a_failure_before_the_run_records_the_revision(stub_main, monkeypatch, tmp_path) -> None:
+    """A key that will not load fails in main(), before run_backup; it is a
+    failure of this revision like any other."""
+    monkeypatch.setattr(backup, "read_revision", lambda: "0123456789ab")
+    stub_main.client_factory.side_effect = RuntimeError("no key")
+    monkeypatch.setattr(backup.logger, "error", MagicMock())
+    assert backup.main(stub_main.argv) == 1
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["revision"] == "0123456789ab"
+    assert state["outcome"] == "failed"
+
+
 def test_the_probe_accepts_the_state_the_job_writes(rdb, client, tmp_path) -> None:
     """The one cross-module contract: the keys written here are the keys
     ``evaluate_backup`` reads. Fresh on both clocks is healthy."""

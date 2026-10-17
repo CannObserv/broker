@@ -590,9 +590,13 @@ Every tick, the probe posts to co-status whether or not it found anything:
 ```
 POST http://status:9000/api/v1/monitors/<id>/checkin
 X-API-Key: <key>
-{"status": "ok" | "alert", "variables": {"source", "finding_count", "findings"},
+{"status": "ok" | "alert", "variables": {"source", "revision", "finding_count", "findings"},
  "metadata": {"fault": ["<check>:<subject>", ...]}}
 ```
+
+**`variables.revision` is the code the tick ran** (broker#105): a release's
+`REVISION` file, or `dev` from a checkout. The `Bus health summary` line carries
+it too. It is never in `metadata`, where every deploy would open a new fault.
 
 **`metadata.fault` is the one value co-status compares** (CannObserv/status#28,
 broker#84): the sorted, duplicate-free `check:subject` of this tick's findings,

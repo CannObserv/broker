@@ -152,6 +152,7 @@ docs/            one reference doc per topic - see Detail Docs below
 scripts/         wheelhouse sync (runs before `uv sync`, must not import the project);
                  audit_lock.sh (#86)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
+                 revision.py (the build id both report, #105),
                  logging.py (service-local, not a mirror)
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/,
                  rehearses the restore against the node's engine, and guards the

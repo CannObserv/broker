@@ -65,6 +65,7 @@ from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
 from src.broker.logging import configure_logging, get_logger
+from src.broker.revision import read_revision
 
 # Literal rather than __name__: the timer runs this module via ``python -m``.
 logger = get_logger("src.broker.backup")
@@ -404,14 +405,16 @@ def save_backup_state(path: Path, state: dict) -> None:
     os.replace(tmp, path)
 
 
-def record_failure(state_path: Path, error: str, *, at: datetime) -> None:
+def record_failure(state_path: Path, error: str, *, at: datetime, revision: str) -> None:
     """A failure never erases the last success - the probe's staleness rule
     needs it to stay visible through a run of failures - but ``outcome`` is
     the last RUN's, so it must not keep saying ``uploaded`` from the hour
     before. An operator reading the file after a failed start would otherwise
     take the previous success for this run's."""
     state = load_backup_state(state_path)
-    state.update({"outcome": "failed", "last_failure_at": iso(at), "last_error": error})
+    state.update(
+        {"outcome": "failed", "last_failure_at": iso(at), "last_error": error, "revision": revision}
+    )
     save_backup_state(state_path, state)
 
 
@@ -430,6 +433,7 @@ def run_backup(
     checker: Callable[[Path], str] = check_rdb,
     host: str | None = None,
     now: datetime | None = None,
+    revision: str | None = None,
 ) -> dict:
     """One run: snapshot, verify, compress, preflight, create; then the ACL
     digests beside it; record the result.
@@ -441,6 +445,7 @@ def run_backup(
     """
     host = host or socket.gethostname()
     at = now or datetime.now(UTC)
+    revision = revision or read_revision()
     shipped: str | None = None
     try:
         snapshot = take_snapshot(rdb, workdir, checker=checker)
@@ -482,8 +487,11 @@ def run_backup(
         error = f"{type(exc).__name__}: {exc}"
         if shipped:
             error = f"{error} ({shipped})"
-        record_failure(state_path, error, at=at)
-        logger.error(f"Backup failed: {error}", extra={"rdb": str(rdb), "bucket": bucket})
+        record_failure(state_path, error, at=at, revision=revision)
+        logger.error(
+            f"Backup failed: {error}",
+            extra={"rdb": str(rdb), "bucket": bucket, "revision": revision},
+        )
         raise BackupError(error) from exc
 
     state = load_backup_state(state_path)
@@ -504,6 +512,7 @@ def run_backup(
             "digests_outcome": digests_outcome,
             "digests_sha256": digests_sha,
             "digests_users": digests_users,
+            "revision": revision,
         }
     )
     save_backup_state(state_path, state)
@@ -517,6 +526,7 @@ def run_backup(
             "keys": snapshot.keys,
             "digests_outcome": digests_outcome,
             "digests_users": digests_users,
+            "revision": revision,
         },
     )
     return state
@@ -549,8 +559,11 @@ def main(argv: list[str] | None = None) -> int:
             client = storage.Client()
         except Exception as exc:  # google.auth raises its own hierarchy
             error = f"{type(exc).__name__}: {exc}"
-            record_failure(args.state_file, error, at=datetime.now(UTC))
-            logger.error(f"Backup failed before it could start: {error}")
+            revision = read_revision()
+            record_failure(args.state_file, error, at=datetime.now(UTC), revision=revision)
+            logger.error(
+                f"Backup failed before it could start: {error}", extra={"revision": revision}
+            )
             return 1
         try:
             run_backup(
