@@ -132,6 +132,9 @@ exit 0
 # answers from it. What root owns is kept unwritable, and only a command run
 # through here opens it, so a write under the deploy root without sudo fails.
 STUB_SUDO = r"""#!/usr/bin/env bash
+# -n, or the call could wait at a password prompt holding the lock (CR 16).
+if [[ "$1" == -n ]]; then shift; else echo "sudo-without-n $*" >> "$FAKE_LOG"; fi
+[[ -n "${FAKE_SUDO_WANTS_PASSWORD:-}" ]] && { echo "sudo: a password is required" >&2; exit 1; }
 echo "sudo $*" >> "$FAKE_LOG"
 [[ "$1" == chown && -n "${FAKE_CHOWN_FAIL:-}" ]] && exit 1
 as_root() {
@@ -1486,6 +1489,20 @@ class TestOwnership:
             (world.release(world.main[-1]) / "x").write_text("x")
         with pytest.raises(PermissionError):
             (world.root / "live.new").symlink_to("/tmp")
+
+    def test_every_sudo_is_non_interactive(self, world):
+        """CR 16: a prompt would hang the deploy holding the lock, and in an
+        agent's shell until its tool call is killed."""
+        world.go_live()
+        assert_ok(world.run())
+        assert not [c for c in world.calls() if c.startswith("sudo-without-n")]
+        assert [c for c in world.calls() if c.startswith("sudo ")]
+
+    def test_a_sudo_that_wants_a_password_refuses_and_switches_nothing(self, world):
+        result = world.run(FAKE_SUDO_WANTS_PASSWORD="1")
+        assert result.returncode == 1
+        assert "a password is required" in result.stderr
+        assert world.target() is None
 
     def test_a_missing_releases_directory_is_made_by_root(self, world):
         assert_ok(world.run())

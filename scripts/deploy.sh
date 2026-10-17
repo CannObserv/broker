@@ -29,8 +29,9 @@
 #   4. on failure, switch back, units too, and prove the old build the same way
 #   5. compare the host configs (never installed), prune to KEEP releases plus live
 #
-# It restarts nothing, and never redis-server. Runs as exedev; sudo for every
-# write under the deploy root, for the unit files and for systemctl. exedev can
+# It restarts nothing, and never redis-server. Runs as exedev; sudo -n for every
+# write under the deploy root, for the unit files and for systemctl: a password
+# prompt would hang the deploy holding its lock, so it is a refusal instead. exedev can
 # sudo anything, so this is no boundary against it: what root ownership buys is
 # that changing what a unit runs takes sudo, which journals the command.
 set -euo pipefail
@@ -370,13 +371,13 @@ wheelhouse() {
 build_release() {
   local home out
   if [[ -e "$release" ]]; then
-    sudo rm -rf "$release" || die "cannot remove the unfinished releases/$build; nothing switched"
+    sudo -n rm -rf "$release" || die "cannot remove the unfinished releases/$build; nothing switched"
   fi
   note "building $build"
-  [[ -d "$ROOT/releases" ]] || sudo install -d -o root -g root -m 755 "$ROOT/releases" ||
+  [[ -d "$ROOT/releases" ]] || sudo -n install -d -o root -g root -m 755 "$ROOT/releases" ||
     die "cannot make $ROOT/releases; nothing switched"
   # Built where it will run, by exedev: a uv venv embeds its absolute path.
-  sudo install -d -m 755 -o "$(id -un)" -g "$(id -gn)" "$release" ||
+  sudo -n install -d -m 755 -o "$(id -un)" -g "$(id -gn)" "$release" ||
     die "cannot make releases/$build for $(id -un) to build in; nothing switched"
   git -C "$SRC" archive "$sha" | tar -x -C "$release" ||
     die "git archive failed for $build; nothing switched"
@@ -398,15 +399,15 @@ build_release() {
   # Readable by every user under any umask, writable by none: the probe runs as
   # exedev, and the synced wheels are 0600.
   chmod -R a-w,a+rX "$release" || die "cannot make $build read-only; nothing switched"
-  sudo chown -R root:root "$release" || die "cannot hand $build to root; nothing switched"
+  sudo -n chown -R root:root "$release" || die "cannot hand $build to root; nothing switched"
   # REVISION last, by root: a release without one is an interrupted build.
-  { echo "$build" | sudo tee "$release/REVISION" >/dev/null && sudo chmod 444 "$release/REVISION"; } ||
+  { echo "$build" | sudo -n tee "$release/REVISION" >/dev/null && sudo -n chmod 444 "$release/REVISION"; } ||
     die "cannot write $build's REVISION; nothing switched"
   # From the release, as exedev, after root wrote it: the path read_revision()
   # reads and the 444 read, in one line. A miss takes REVISION back off.
   out="$(reports)" || out=""
   if [[ "$out" != "$build" ]]; then
-    sudo rm -f "$release/REVISION" || :
+    sudo -n rm -f "$release/REVISION" || :
     die "$build reports ${out:-nothing} from the release, not $build ($(probe_error)); nothing switched"
   fi
 }
@@ -451,7 +452,7 @@ else
   build_release
 fi
 # Prune by last deploy, not first build. A failure only reorders the prune.
-sudo touch "$release" || note "cannot touch $release; the prune may take it sooner"
+sudo -n touch "$release" || note "cannot touch $release; the prune may take it sooner"
 
 # --- switch, verify, or switch back ----------------------------------------
 
@@ -473,7 +474,7 @@ served_build() { # <dir or link target>
 }
 
 swap() { # <link> <target>: rename(2) over the old link, so there is never no link
-  sudo ln -sfn "$2" "$1.new" && sudo mv -Tf "$1.new" "$1"
+  sudo -n ln -sfn "$2" "$1.new" && sudo -n mv -Tf "$1.new" "$1"
 }
 
 # --- units (D9) --------------------------------------------------------------
@@ -514,14 +515,14 @@ install_units() {
       echo "$name" >>"$backup/units.added"
       added+=("$name")
     fi
-    sudo install -m 644 "$release/deploy/$name" "$unit" ||
+    sudo -n install -m 644 "$release/deploy/$name" "$unit" ||
       {
         note "installing $name in $UNIT_DIR failed"
         return 1
       }
   done < <(units_of)
   ((${#changed[@]} + ${#added[@]})) || return 0
-  sudo systemctl daemon-reload || {
+  sudo -n systemctl daemon-reload || {
     note "systemctl daemon-reload failed"
     return 1
   }
@@ -529,7 +530,7 @@ install_units() {
   # probe's is the node's only always-on broker-side signal: fail, never verify
   # past it.
   for name in "${timers[@]}"; do
-    sudo systemctl try-restart "$name" ||
+    sudo -n systemctl try-restart "$name" ||
       {
         note "systemctl try-restart $name failed: systemctl status $name"
         return 1
@@ -563,7 +564,7 @@ restore_units() {
   for path in "$backup/units"/*; do
     [[ -f "$path" ]] || continue
     name="$(basename "$path")"
-    sudo install -m 644 "$path" "$UNIT_DIR/$name" || note "restoring $name failed: $path"
+    sudo -n install -m 644 "$path" "$UNIT_DIR/$name" || note "restoring $name failed: $path"
     [[ "$name" != *.timer ]] || timers+=("$name")
     any=1
   done
@@ -571,14 +572,14 @@ restore_units() {
   # failed redirect would end the rollback before it proves the old build.
   if [[ -f "$backup/units.added" ]]; then
     while read -r name; do
-      sudo rm -f "$UNIT_DIR/$name" || note "removing $UNIT_DIR/$name failed"
+      sudo -n rm -f "$UNIT_DIR/$name" || note "removing $UNIT_DIR/$name failed"
       any=1
     done <"$backup/units.added"
   fi
   ((any)) || return 0
-  sudo systemctl daemon-reload || note "systemctl daemon-reload failed"
+  sudo -n systemctl daemon-reload || note "systemctl daemon-reload failed"
   for name in "${timers[@]}"; do
-    sudo systemctl try-restart "$name" || note "systemctl try-restart $name failed"
+    sudo -n systemctl try-restart "$name" || note "systemctl try-restart $name failed"
   done
   logger -t broker-deploy "units restored" || true
 }
@@ -615,7 +616,7 @@ expected_of() { # <service>
 # failing build reached cannot refuse the run that proves the fix.
 verify_backup() { # <build it must report>
   local want="$1" deadline=$((SECONDS + BACKUP_WAIT_SECONDS)) outcome revision
-  sudo systemctl reset-failed "$BACKUP_UNIT" || true
+  sudo -n systemctl reset-failed "$BACKUP_UNIT" || true
   while [[ "$(systemctl show -p ActiveState --value "$BACKUP_UNIT" 2>/dev/null)" == activating ]]; do
     ((SECONDS < deadline)) || {
       note "$BACKUP_UNIT has been running for ${BACKUP_WAIT_SECONDS}s"
@@ -623,7 +624,7 @@ verify_backup() { # <build it must report>
     }
     sleep "$POLL_SECONDS"
   done
-  sudo systemctl start "$BACKUP_UNIT" || {
+  sudo -n systemctl start "$BACKUP_UNIT" || {
     note "the $BACKUP_UNIT run failed on $want: journalctl -u ${BACKUP_UNIT%.service} -n 50"
     return 1
   }
@@ -770,7 +771,7 @@ else
   stage="while switching back"
   if [[ -z "$previous_link" ]]; then
     # A first deploy: there was no link, so restoring it exactly is removing it.
-    sudo rm -f "$link" || note "removing $link failed"
+    sudo -n rm -f "$link" || note "removing $link failed"
     back="there was no previous release, so removed live and put back the units it replaced"
   elif [[ "$previous" == "$build" ]]; then
     # The link never moved, so the units are all that changed. A hand-fixed
@@ -811,6 +812,6 @@ ls -1t "$ROOT/releases" | { grep -vxF -- "$live_build" || :; } | tail -n +$((KEE
   note "pruning release $old"
   # REVISION first: a prune cut short leaves an interrupted build, never a
   # "complete" one with half its files. Verified by now: a failed prune is a note.
-  { sudo rm -f "$ROOT/releases/$old/REVISION" && sudo rm -rf "${ROOT:?}/releases/$old"; } ||
+  { sudo -n rm -f "$ROOT/releases/$old/REVISION" && sudo -n rm -rf "${ROOT:?}/releases/$old"; } ||
     note "prune failed for $old; remove it by hand: sudo rm -rf $ROOT/releases/$old"
 done
