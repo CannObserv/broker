@@ -100,6 +100,12 @@ dead() {
 
 usage() { sed -n '4,6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
+# Whole numbers, or refused before anything runs: bash arithmetic on "5x" is an
+# error that would otherwise end a verified deploy at the prune.
+for knob in KEEP CI_WAIT_SECONDS CI_POLL_SECONDS PROBE_WAIT_SECONDS BACKUP_WAIT_SECONDS POLL_SECONDS; do
+  [[ "${!knob}" =~ ^[0-9]+$ ]] || die "BROKER_DEPLOY_$knob=${!knob} is not a whole number"
+done
+
 skip_ci=0
 ref=""
 while (($#)); do

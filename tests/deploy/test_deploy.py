@@ -2105,6 +2105,24 @@ class TestOperation:
         assert result.returncode == 1
         assert "from a checkout" in result.stderr
 
+    @pytest.mark.parametrize(
+        "knob",
+        [
+            "BROKER_DEPLOY_KEEP",
+            "BROKER_DEPLOY_CI_WAIT_SECONDS",
+            "BROKER_DEPLOY_CI_POLL_SECONDS",
+            "BROKER_DEPLOY_PROBE_WAIT_SECONDS",
+            "BROKER_DEPLOY_BACKUP_WAIT_SECONDS",
+            "BROKER_DEPLOY_POLL_SECONDS",
+        ],
+    )
+    def test_a_knob_that_is_not_a_whole_number_is_refused_before_anything(self, world, knob):
+        """CR 15: 5x passed every gate, then ended a verified deploy at the prune."""
+        result = world.run(**{knob: "5x"})
+        assert result.returncode == 1
+        assert f"{knob}=5x" in result.stderr
+        assert not world.calls()
+
     def test_an_unknown_flag_is_refused(self, world):
         assert world.run("--live-only").returncode == 1
 
