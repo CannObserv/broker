@@ -39,6 +39,7 @@ import os
 import pwd
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import time
@@ -478,6 +479,34 @@ class World:
             (self.units / name).write_text(body)
 
     def run(self, *args: str, umask: int | None = None, **fake: str) -> subprocess.CompletedProcess:
+        argv, env = self._prepare(args, umask, fake)
+        return subprocess.run(
+            argv, cwd=self.tmp, env=env, capture_output=True, text=True, timeout=120
+        )
+
+    def run_and_signal(self, until, *args: str, **fake: str) -> subprocess.CompletedProcess:
+        """Run, and once ``until(calls)`` holds, SIGTERM the deploy's process
+        group, as Ctrl-C or a tool timeout ends a deploy (CR 14)."""
+        argv, env = self._prepare(args, None, fake)
+        proc = subprocess.Popen(
+            argv,
+            cwd=self.tmp,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + 60
+        while not until(self.calls()) and proc.poll() is None:
+            assert time.monotonic() < deadline, "never reached the point to signal at"
+            time.sleep(0.05)
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+        return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+    def _prepare(self, args, umask, fake):
         env = {
             "PATH": f"{self.stubs}:{os.environ['PATH']}",
             "HOME": str(self.tmp),
@@ -504,9 +533,7 @@ class World:
         argv = [str(self.checkout / "scripts" / "deploy.sh"), *args]
         if umask is not None:
             argv = ["bash", "-c", f'umask {umask:03o}; exec "$0" "$@"', *argv]
-        return subprocess.run(
-            argv, cwd=self.tmp, env=env, capture_output=True, text=True, timeout=120
-        )
+        return argv, env
 
     def build(self, sha: str) -> str:
         return git(self.checkout, "rev-parse", "--short=12", sha)
@@ -1982,6 +2009,58 @@ class TestHostConfigs:
                 or f"{Path(dest).parent}/" in install
                 or ('"/etc/systemd/system/$d"' in install and dest == f"/etc/systemd/system/{rel}")
             ), dest
+
+
+class TestInterruption:
+    """CR 14: a deploy outlasts an agent's 600 s tool call (CI up to 600 s, a
+    probe tick up to 900 s, twice on a switch back). Ended by a signal, it says
+    where it stopped and what live names, in the journal too."""
+
+    def test_before_the_switch_nothing_switched_and_exit_1(self, world):
+        sha = world.main[-1]
+        world.ci_answers([ci_run(7, sha, status="in_progress")])
+        result = world.run_and_signal(
+            lambda calls: len([c for c in calls if "/runs?" in c]) >= 2,
+            BROKER_DEPLOY_CI_WAIT_SECONDS="60",
+            BROKER_DEPLOY_CI_POLL_SECONDS="1",
+        )
+        assert result.returncode == 1, result.stderr
+        assert "interrupted before the switch; nothing switched" in result.stderr
+        assert world.target() is None
+
+    def test_mid_verify_says_live_is_unverified_and_exit_4(self, world):
+        old = world.go_live()
+        assert_ok(world.run(old))
+        world.push()
+        world.reset_log()
+        new = world.build(world.main[-1])
+        result = world.run_and_signal(
+            lambda calls: any(c.startswith("systemctl show") and PROBE in c for c in calls),
+            FAKE_TICK_EVERY="1000000",
+            BROKER_DEPLOY_PROBE_WAIT_SECONDS="60",
+            BROKER_DEPLOY_POLL_SECONDS="1",
+        )
+        assert result.returncode == 4, result.stderr
+        assert f"live -> releases/{new}, unverified" in result.stderr
+        logged = [c for c in world.calls() if c.startswith("logger ")]
+        assert any("interrupted" in c and "unverified" in c for c in logged), logged
+
+    def test_while_pruning_after_the_verify_is_still_a_deploy(self, world):
+        """Verified is verified: the prune only ever notes."""
+        for sha in world.main:
+            assert_ok(world.run(sha))
+        world.reset_log()
+        # Each rm through sudo takes 5 s, so the prune is where the signal lands.
+        (world.stubs / "rm").write_text(
+            '#!/usr/bin/env bash\n[[ "$1" == -f ]] && sleep 5\nexec /bin/rm "$@"\n'
+        )
+        result = world.run_and_signal(
+            lambda calls: any(c.startswith("sudo rm -f ") for c in calls),
+            world.main[-1],
+            BROKER_DEPLOY_KEEP="0",
+        )
+        assert result.returncode == 0, result.stderr + "\n".join(world.calls())
+        assert "interrupted while pruning" in result.stderr
 
 
 class TestOperation:

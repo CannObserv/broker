@@ -424,6 +424,14 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
      can read that journal because it is in `adm`.
 6. **Compare** the host configs, then **prune** to 5 releases plus `live`.
 
+**Run it detached when an agent runs it.** A deploy can outlast a 10-minute
+tool call: up to 600 s waiting for CI, then up to 900 s for a probe tick, and
+that twice when it switches back. Run it in the background and read
+`journalctl -t broker-deploy`. A deploy ended by a signal says where it stopped:
+- before the switch: nothing switched, exit 1;
+- after the switch: what `live` names, `unverified`, in the journal too, exit 4;
+- while pruning: still verified, exit 0.
+
 **Exit codes:**
 
 - `0`: deployed and verified.

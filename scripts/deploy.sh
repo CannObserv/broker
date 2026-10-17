@@ -153,6 +153,25 @@ backup="$(mktemp -d "${TMPDIR:-/tmp}/broker-deploy.XXXXXX")"
 # `|| :`: under set -e a failing command in the trap would replace the exit status.
 trap 'rm -rf "$backup" || :' EXIT
 
+# Ended by a signal (Ctrl-C, or an agent's tool call timing out: a deploy can
+# wait 600 s for CI, then 900 s for a probe tick, twice on a switch back), say
+# where it stopped and what live names, in the journal too. A signal to the
+# process group ends the step in progress; this runs when it has.
+stage="before the switch"
+interrupted() {
+  trap - INT TERM HUP
+  local now
+  case "$stage" in
+    "before the switch") die "interrupted before the switch; nothing switched" ;;
+    "while pruning") note "interrupted while pruning; live is on ${build:-?}, verified" && exit 0 ;;
+  esac
+  now="$(readlink "$ROOT/live" 2>/dev/null)" || now="nothing"
+  logger -t broker-deploy "interrupted on ${build:-?} $stage: live -> $now, unverified" || true
+  dead "interrupted on ${build:-?} $stage: live -> $now, unverified. Deploy again, or deploy" \
+    "the build it should run: scripts/deploy.sh <sha12> (journalctl -t broker-deploy -n 20)"
+}
+trap interrupted INT TERM HUP
+
 # --- which commit ----------------------------------------------------------
 
 git -C "$SRC" fetch --quiet --prune origin
@@ -728,7 +747,9 @@ previous="$(release_of)"
 moved=1
 [[ -n "$previous_link" && "$previous" == "$build" ]] && moved=0
 
+stage="while switching"
 swap "$link" "releases/$build" || die "cannot switch live to $build (sudo ln, mv); nothing switched"
+stage="after the switch, installing units and verifying"
 logger -t broker-deploy "live -> $build (was ${previous_link:-nothing})" || true
 units_ok=1
 install_units || units_ok=0
@@ -740,6 +761,7 @@ done < <(changed_services)
 if ((units_ok)) && verify_all; then
   note "live is on $build"
 else
+  stage="while switching back"
   if [[ -z "$previous_link" ]]; then
     # A first deploy: there was no link, so restoring it exactly is removing it.
     sudo rm -f "$link" || note "removing $link failed"
@@ -761,6 +783,7 @@ else
     fi
   fi
   restore_units
+  stage="after switching back, verifying the old build"
   if verify_all; then
     logger -t broker-deploy "live rolled back after $build failed: $back" || true
     die "live failed on $build; $back, which is answering"
@@ -768,6 +791,7 @@ else
   logger -t broker-deploy "live failed on $build; $back, which is NOT answering" || true
   dead "live failed on $build; $back, which is NOT answering: journalctl -t broker-deploy -n 20"
 fi
+stage="while pruning"
 note_units_not_in_release
 compare_host_configs
 
