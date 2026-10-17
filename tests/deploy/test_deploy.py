@@ -1923,10 +1923,13 @@ class TestHostConfigs:
         assert "redis-acl.conf changed" not in result.stderr
 
     def test_a_derived_config_on_a_first_deploy_points_at_the_parity_tests(self, world):
-        world.push({"redis.conf.broker": "maxmemory 512mb\n"})
+        world.push({"redis.conf.broker": "maxmemory 512mb\n", "redis-acl.conf": "user a on\n"})
         result = world.run()
         assert_ok(result)
         assert "tests/deploy" in result.stderr
+        # CR 11: each named by its path, once.
+        assert "deploy/redis.conf.broker and deploy/redis-acl.conf are" in result.stderr
+        assert result.stderr.count("installed derived") == 1
 
     def test_a_host_config_is_never_installed_as_a_unit(self, world):
         world.push({"earlyoom.default": "earlyoom v1\n"})

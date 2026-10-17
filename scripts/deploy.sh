@@ -708,8 +708,8 @@ compare_host_configs() {
   for rel in "${DERIVED_CONFIGS[@]}"; do
     [[ -f "$release/deploy/$rel" ]] || continue
     if [[ -z "$previous_dir" || ! -f "$previous_dir/deploy/$rel" ]]; then
-      ((told)) || note "deploy/${DERIVED_CONFIGS[*]} are installed derived, so not compared here;" \
-        "tests/deploy compares them with the node"
+      ((told)) || note "deploy/${DERIVED_CONFIGS[0]} and deploy/${DERIVED_CONFIGS[1]} are installed" \
+        "derived, so a first deploy compares them with nothing; tests/deploy compares them with the node"
       told=1
     elif ! cmp -s "$previous_dir/deploy/$rel" "$release/deploy/$rel"; then
       note "deploy/$rel changed since $(basename "$previous_dir"). A deploy never installs it:" \
