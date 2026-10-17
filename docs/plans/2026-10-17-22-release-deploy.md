@@ -1,7 +1,7 @@
 ---
 title: "#22: broker's units run a root-owned release, never the dev checkout"
 date: 2026-10-17
-status: draft
+status: approved
 ---
 
 # #22: broker's pilot - run releases, not `~/broker`
@@ -185,7 +185,7 @@ CannObserv/status request, filed with approval.
 
 ## Steps (children of #22, each switching at most one unit)
 
-1. **C1, `revision` (code only, no unit change).** Add `REVISION` reading
+1. **C1 (#105), `revision` (code only, no unit change).** Add `REVISION` reading
    (`dev` when absent) to the probe's summary line, the probe's check-in
    `variables`, and the backup's `state.json` and log. It ships the way it
    does today, merged into `~/broker`.
@@ -195,7 +195,7 @@ CannObserv/status request, filed with approval.
    - the check-in lands;
    - the next backup's `state.json` has `revision`;
    - `ACL LOG` has no new entry.
-2. **C2, `scripts/deploy.sh` and the first release (no unit switched).**
+2. **C2 (#106), `scripts/deploy.sh` and the first release (no unit switched).**
    Includes the CI gate, the wheelhouse copy, unit install (a no-op here, since
    the release's units still match the installed ones), the stub harness, and a
    one-time `sudo install -d -m 755 /srv/broker`.
@@ -209,7 +209,7 @@ CannObserv/status request, filed with approval.
      refused;
    - the journal shows `CI passed`;
    - both units still read `WorkingDirectory=/home/exedev/broker`.
-3. **C3, switch `broker-bus-health`.** `WorkingDirectory=/srv/broker/live`,
+3. **C3 (#107), switch `broker-bus-health`.** `WorkingDirectory=/srv/broker/live`,
    `ExecStart=` the release venv, `PYTHONDONTWRITEBYTECODE=1`. Installed by
    `deploy.sh`.
    **Verify:**
@@ -221,7 +221,7 @@ CannObserv/status request, filed with approval.
      both revisions on ticks;
    - `ACL LOG` has no new entry;
    - `tests/deploy` passes on the node.
-4. **C4, switch `broker-backup` (still root).** `WorkingDirectory=` and
+4. **C4 (#108), switch `broker-backup` (still root).** `WorkingDirectory=` and
    `ExecStart=` on the release; `ProtectHome=yes`, since it no longer reads
    `/home`. The deploy forces one run.
    **Verify:**
@@ -230,7 +230,7 @@ CannObserv/status request, filed with approval.
    - the next timer run succeeds;
    - the probe reports no `backup` finding;
    - the knob's lines are unchanged.
-5. **C5, `broker-backup` drops root.** `useradd --system broker-backup`, then
+5. **C5 (#109), `broker-backup` drops root.** `useradd --system broker-backup`, then
    B1's unit shape. `backup.env`'s `GOOGLE_APPLICATION_CREDENTIALS` points at
    the credential path.
    **Verify:**
@@ -242,13 +242,13 @@ CannObserv/status request, filed with approval.
    - `StateDirectory` is the new user's and `state.json` is still `0644`;
    - the probe reports no `backup` finding;
    - the next hourly run succeeds.
-6. **C6, the drift check** (one new unit). D6. Needs the co-status monitor
+6. **C6 (#110), the drift check** (one new unit). D6. Needs the co-status monitor
    first.
    **Verify:**
    - a forced run logs `drift check` with `kind: ok` and `checkin: 202`;
    - `--test-alert` reaches notifier;
    - `co-broker-drift` reads `ok`.
-7. **C7, retire the live-tree convention** (no unit). Finish B6's list.
+7. **C7 (#111), retire the live-tree convention** (no unit). Finish B6's list.
    Write `.skills/deploy_command` if skills#345 has merged, or name
    `scripts/deploy.sh` in AGENTS.md if not. Hand #80's recipe change to the
    coordinator.
@@ -265,7 +265,10 @@ CannObserv/status request, filed with approval.
   it is the alarm if C4 breaks the backup.
 - C6 needs C2 and an answer from co-status. It blocks nothing else.
 
-## Decisions (for the operator)
+## Decisions (approved by the operator, 2026-10-17)
+
+All of D1-D11 are approved as written. For D11, #22 is the epic and #105-#111 are its sub-issues.
+
 
 - **D1:** root-owned releases under `/srv/broker`, built and switched by
   `scripts/deploy.sh` (run as `exedev` with `sudo`) from a CI-green commit on
