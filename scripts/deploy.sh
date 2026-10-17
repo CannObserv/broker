@@ -284,9 +284,12 @@ fi
 
 # What the release's venv says it is, run from the release as exedev: it
 # imports both modules and co-core, and prints read_revision(). Its stderr is
-# kept for the message. Bytecode is the build's to write, never a probe's.
+# kept for the message. -I: no PYTHONPATH, PYTHONHOME or user site from the
+# caller, and no cwd on sys.path, so src comes through the release's own
+# editable .pth and co_core from its own venv. -B: bytecode is the build's to
+# write, never a probe's (-I ignores PYTHONDONTWRITEBYTECODE).
 reports() {
-  (cd "$release" && PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "$IMPORT_PROBE" 2>"$backup/probe.err")
+  (cd "$release" && .venv/bin/python -I -B -c "$IMPORT_PROBE" 2>"$backup/probe.err")
 }
 probe_error() { tr '\n' ' ' <"$backup/probe.err" 2>/dev/null | sed 's/ *$//'; }
 

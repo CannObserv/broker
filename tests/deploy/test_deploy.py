@@ -112,6 +112,7 @@ exit 0
 # src/broker/revision.py's read_revision() would: REVISION beside it, else dev.
 STUB_PYTHON = r"""#!/usr/bin/env bash
 echo "python $PWD $*" >> "$FAKE_LOG"
+while [[ "$1" == -I || "$1" == -B ]]; do shift; done
 case "$1" in
   -m) [[ "$2" == compileall && -n "${FAKE_COMPILE_FAIL:-}" ]] && exit 1 ;;
   -c)
@@ -711,11 +712,11 @@ class TestADeploy:
             index_of(calls, "sync_wheelhouse.py"),
             index_of(calls, " sync --locked "),
             index_of(calls, " -m compileall -q src"),
-            index_of(calls, f"python {release} -c "),
+            index_of(calls, f"python {release} -I -B -c "),
             calls.index(f"sudo chown -R root:root {release}"),
             calls.index(f"sudo tee {release}/REVISION"),
             calls.index(f"sudo chmod 444 {release}/REVISION"),
-            max(i for i, c in enumerate(calls) if c.startswith(f"python {release} -c ")),
+            max(i for i, c in enumerate(calls) if c.startswith(f"python {release} -I -B -c ")),
             index_of(calls, "logger -t broker-deploy live -> "),
         ]
         assert steps == sorted(steps), steps
@@ -733,6 +734,16 @@ class TestADeploy:
         for module in ("src.broker.bus_health", "src.broker.backup", "co_core"):
             assert module in probe, module
         assert "read_revision" in probe
+
+    def test_the_import_probe_is_isolated_from_the_callers_python(self, world):
+        """CR 9: an operator's PYTHONPATH, PYTHONHOME or user site could supply
+        co_core to a venv without it, and the cwd on sys.path hid a missing
+        editable .pth. -I drops all four, so src comes through the release's own
+        .pth; -B stands in for PYTHONDONTWRITEBYTECODE, which -I ignores."""
+        assert_ok(world.run(PYTHONPATH=str(world.checkout)))
+        probes = [c for c in world.calls() if c.startswith("python ") and " -c " in c]
+        assert len(probes) == 2, "after the import, and the self-check after REVISION"
+        assert all(" -I -B -c " in c for c in probes), probes
 
     def test_the_deploy_is_recorded_in_the_journal(self, world):
         assert_ok(world.run())
