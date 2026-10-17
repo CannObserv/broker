@@ -256,6 +256,7 @@ case "$1" in
     printf '{"outcome": "%s", "revision": "%s"}\n' "${FAKE_BACKUP_OUTCOME:-uploaded}" \
       "${FAKE_BACKUP_SAYS:-$build}" > "$FAKE_BACKUP_STATE" ;;
   try-restart) [[ "$2" == "${FAKE_TRY_RESTART_FAIL:-none}" ]] && exit 1 ;;
+  daemon-reload) [[ -z "${FAKE_SLOW_RELOAD:-}" ]] || sleep "$FAKE_SLOW_RELOAD" ;;
 esac
 exit 0
 """
@@ -2086,6 +2087,50 @@ class TestInterruption:
         )
         assert result.returncode == 0, result.stderr + "\n".join(world.calls())
         assert "interrupted while pruning" in result.stderr
+
+
+class TestKeptUnits:
+    """CR 18: the units a deploy replaced are its only copies. An exit that
+    leaves them neither installed back nor needed keeps them, and says where."""
+
+    def kept(self, world: World) -> list[Path]:
+        return sorted(world.tmpdir.glob("broker-deploy.*/units/*"))
+
+    def test_a_signal_after_the_install_keeps_them_and_names_where(self, world):
+        world.tmpdir = world.tmp / "tmpdir"
+        world.tmpdir.mkdir()
+        (world.units / BACKUP).write_text("hand fix\n")
+        result = world.run_and_signal(
+            lambda calls: any("daemon-reload" in c for c in calls),
+            FAKE_SLOW_RELOAD="5",
+            TMPDIR=str(world.tmpdir),
+        )
+        assert result.returncode == 4, result.stderr
+        (copy,) = self.kept(world)
+        assert copy.name == BACKUP and copy.read_text() == "hand fix\n"
+        assert str(copy.parent) in result.stderr
+
+    def test_a_failed_switch_back_keeps_them(self, world):
+        world.tmpdir = world.tmp / "tmpdir"
+        world.tmpdir.mkdir()
+        assert_ok(world.run(world.main[0]))
+        (world.units / BACKUP).write_text("hand fix\n")
+        result = world.run(
+            FAKE_BACKUP_NEEDS="never there", FAKE_MV_FAIL="2", TMPDIR=str(world.tmpdir)
+        )
+        assert result.returncode == 4, result.stderr
+        (copy,) = self.kept(world)
+        assert copy.read_text() == "hand fix\n"
+        assert "kept in" in result.stderr
+
+    def test_a_clean_switch_back_keeps_nothing(self, world):
+        world.tmpdir = world.tmp / "tmpdir"
+        world.tmpdir.mkdir()
+        assert_ok(world.run(world.main[0]))
+        (world.units / BACKUP).write_text("hand fix\n")
+        result = world.run(FAKE_BACKUP_NEEDS="hand fix", TMPDIR=str(world.tmpdir))
+        assert result.returncode == 1, result.stderr
+        assert not list(world.tmpdir.iterdir())
 
 
 class TestOperation:

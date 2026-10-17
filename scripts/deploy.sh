@@ -156,10 +156,22 @@ roots_alone "$ROOT"
 exec 9<"$ROOT"
 flock -n 9 || die "another deploy is running (it holds the lock on $ROOT)"
 
-# The installed units this deploy replaces, kept for a switch back.
+# The installed units this deploy replaces, kept for a switch back. They are
+# the only copies left, a hand fix included: an exit that leaves them neither
+# installed back nor needed (a signal, a switch back that could not rename)
+# keeps them and says where (CR 18).
 backup="$(mktemp -d "${TMPDIR:-/tmp}/broker-deploy.XXXXXX")"
-# `|| :`: under set -e a failing command in the trap would replace the exit status.
-trap 'rm -rf "$backup" || :' EXIT
+keep_units=0
+cleanup() {
+  if ((keep_units)) && [[ -n "$(units_touched 2>/dev/null)" ]]; then
+    note "the units this deploy replaced are kept in $backup/units, and the ones it added are" \
+      "named in $backup/units.added: put them back by hand (sudo install -m 644, daemon-reload)"
+  else
+    # `|| :`: under set -e a failing command in the trap would replace the exit status.
+    rm -rf "$backup" || :
+  fi
+}
+trap cleanup EXIT
 
 # Ended by a signal (Ctrl-C, or an agent's tool call timing out: a deploy can
 # wait 600 s for CI, then 900 s for a probe tick, twice on a switch back), say
@@ -760,6 +772,7 @@ swap "$link" "releases/$build" || die "cannot switch live to $build (sudo ln, mv
 stage="after the switch, installing units and verifying"
 logger -t broker-deploy "live -> $build (was ${previous_link:-nothing})" || true
 units_ok=1
+keep_units=1
 install_units || units_ok=0
 verify=()
 while read -r svc; do
@@ -767,6 +780,7 @@ while read -r svc; do
 done < <(changed_services)
 
 if ((units_ok)) && verify_all; then
+  keep_units=0
   note "live is on $build"
 else
   stage="while switching back"
@@ -791,6 +805,7 @@ else
     fi
   fi
   restore_units
+  keep_units=0
   stage="after switching back, verifying the old build"
   if verify_all; then
     logger -t broker-deploy "live rolled back after $build failed: $back" || true
