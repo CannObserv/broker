@@ -55,6 +55,8 @@ PROBE = "broker-bus-health.service"
 BACKUP = "broker-backup.service"
 CO_CORE_WHEEL = "co_core-0.36.0-py3-none-any.whl"
 CO_CORE_SDIST = "co_core-0.36.0.tar.gz"
+# ci.yml's one job, by its name.
+JOB = "lint + test"
 
 # A uv.lock with one wheelhouse package, as broker's has (co-core), between two
 # that are not.
@@ -552,13 +554,9 @@ class World:
             (self.ci / f"runs-{n}.json").write_text(body)
 
     def ci_jobs(self, run_id: int, **conclusions: str) -> None:
-        """A run's jobs by conclusion; ``lint + test`` left out is green."""
-        jobs = {
-            "lint + test": "success",
-            **{k.replace("_", " "): v for k, v in conclusions.items()},
-        }
-        if "lint" in conclusions:
-            jobs["lint + test"] = jobs.pop("lint")
+        """A run's jobs by name and conclusion; ``lint + test`` left out is green.
+        Its name has spaces, so pass it as ``**{JOB: ...}``."""
+        jobs = {JOB: "success", **conclusions}
         body = [
             {"name": name, "status": "completed", "conclusion": conclusion}
             for name, conclusion in jobs.items()
@@ -933,7 +931,7 @@ class TestTheCIGate:
 
     def test_the_lint_and_test_job_failing_is_refused_by_name(self, world):
         world.ci_answers([ci_run(7, world.main[-1])])
-        world.ci_jobs(7, lint="failure")
+        world.ci_jobs(7, **{JOB: "failure"})
         result = world.run()
         assert result.returncode == 1
         assert "lint + test (failure)" in result.stderr
@@ -944,7 +942,7 @@ class TestTheCIGate:
     def test_a_job_that_did_not_succeed_is_not_a_pass(self, world, conclusion):
         """A skipped job leaves the run's own conclusion 'success'."""
         world.ci_answers([ci_run(7, world.main[-1])])
-        world.ci_jobs(7, lint=conclusion)
+        world.ci_jobs(7, **{JOB: conclusion})
         result = world.run()
         assert result.returncode == 1
         assert "lint + test (" in result.stderr
@@ -963,7 +961,7 @@ class TestTheCIGate:
         """A pending push run on main is replaced when a newer push queues
         behind a running one; it lists no jobs, and has nothing to fix."""
         world.ci_answers([ci_run(7, world.main[-1], conclusion="cancelled")])
-        world.ci_jobs(7, lint="absent")
+        world.ci_jobs(7, **{JOB: "absent"})
         result = world.run()
         assert result.returncode == 1
         assert "run concluded cancelled" in result.stderr
@@ -1049,7 +1047,7 @@ class TestTheCIGate:
     @OTHER_RUNS
     def test_only_the_push_run_on_main_decides(self, world, event, branch):
         self.other_and_push(world, event, branch)
-        world.ci_jobs(8, lint="failure")
+        world.ci_jobs(8, **{JOB: "failure"})
         world.ci_jobs(7)
         assert_ok(world.run())
         assert world.github_calls()[-1].endswith("/actions/runs/7/jobs?per_page=100")
@@ -1060,7 +1058,7 @@ class TestTheCIGate:
     ):
         self.other_and_push(world, event, branch)
         world.ci_jobs(8)
-        world.ci_jobs(7, lint="failure")
+        world.ci_jobs(7, **{JOB: "failure"})
         result = world.run()
         assert result.returncode == 1
         assert "lint + test (failure)" in result.stderr
@@ -1074,8 +1072,8 @@ class TestTheCIGate:
                 ci_run(8, sha, created="2026-10-01T02:00:00Z"),
             ]
         )
-        world.ci_jobs(7, lint="failure")
-        world.ci_jobs(8, lint="failure")
+        world.ci_jobs(7, **{JOB: "failure"})
+        world.ci_jobs(8, **{JOB: "failure"})
         world.ci_jobs(9)
         assert_ok(world.run())
         assert world.github_calls()[-1].endswith("/actions/runs/9/jobs?per_page=100")
@@ -1107,7 +1105,7 @@ class TestTheCIGate:
 
     def test_skip_ci_deploys_without_asking_and_journals_it_first(self, world):
         world.ci_answers([ci_run(7, world.main[-1])])
-        world.ci_jobs(7, lint="failure")
+        world.ci_jobs(7, **{JOB: "failure"})
         assert_ok(world.run("--skip-ci"))
         assert not world.github_calls()
         calls = world.calls()
