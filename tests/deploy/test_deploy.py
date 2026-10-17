@@ -176,7 +176,12 @@ case "$1" in
       [[ -e "$path" || -L "$path" ]] || sed -i "\#^[DR] $path\(/.*\)\{0,1\}\$#d" "$FAKE_ROOT_OWNED"
     done
     exit 0 ;;
-  ln | mv | chmod | touch | tee) as_root "$@"; exit ;;
+  mv)
+    # FAKE_MV_FAIL=<n> fails this run's nth `sudo mv`: the switch, or the switch back.
+    n=$(( $(cat "$(dirname "$FAKE_LOG")/mv-count") + 1 )); echo "$n" > "$(dirname "$FAKE_LOG")/mv-count"
+    [[ "$n" == "${FAKE_MV_FAIL:-0}" ]] && exit 1
+    as_root "$@"; exit ;;
+  ln | chmod | touch | tee) as_root "$@"; exit ;;
   systemctl) shift; FAKE_VIA_SUDO=1 exec systemctl "$@" ;;
 esac
 echo "stub sudo: $*?" >&2
@@ -491,6 +496,7 @@ class World:
         (self.tmp / "probe-polls").write_text("0")
         (self.tmp / "probe-tick").write_text("none none\n")
         (self.ci / "polls").write_text("0")
+        (self.tmp / "mv-count").write_text("0")
         argv = [str(self.checkout / "scripts" / "deploy.sh"), *args]
         if umask is not None:
             argv = ["bash", "-c", f'umask {umask:03o}; exec "$0" "$@"', *argv]
@@ -1575,6 +1581,26 @@ class TestVerification:
         )
         assert result.returncode == 4
         assert f"switched back to {old}, which is NOT answering" in result.stderr
+
+    def test_a_switch_that_fails_says_so_and_switches_nothing(self, world):
+        """CR 3: under set -e a failed rename ended the deploy without a word."""
+        old = self.on_live(world)
+        result = world.run(FAKE_MV_FAIL="1")
+        assert result.returncode == 1, result.stderr
+        assert "cannot switch live" in result.stderr and "nothing switched" in result.stderr
+        assert world.target() == f"releases/{old}"
+        assert not forced_backups(world)
+
+    def test_a_switch_back_that_fails_is_exit_4(self, world):
+        """CR 3: live is left on the build that failed, so nothing answers."""
+        self.on_live(world)
+        new = world.build(world.main[-1])
+        result = world.run(FAKE_BACKUP_FAIL_BUILD=new, FAKE_MV_FAIL="2")
+        assert result.returncode == 4, result.stderr
+        assert "switching it back" in result.stderr
+        assert world.target() == f"releases/{new}"
+        logged = [c for c in world.calls() if c.startswith("logger ")]
+        assert [c for c in logged if "switching it back" in c]
 
     def test_redeploying_the_running_build_verifies_nothing_it_did_not_change(self, world):
         self.on_live(world)

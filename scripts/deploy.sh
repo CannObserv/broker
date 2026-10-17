@@ -420,7 +420,8 @@ else
   [[ "$why" == "not built" ]] || note "release $build is $why; rebuilding"
   build_release
 fi
-sudo touch "$release" # prune by last deploy, not first build
+# Prune by last deploy, not first build. A failure only reorders the prune.
+sudo touch "$release" || note "cannot touch $release; the prune may take it sooner"
 
 # --- switch, verify, or switch back ----------------------------------------
 
@@ -442,8 +443,7 @@ served_build() { # <dir or link target>
 }
 
 swap() { # <link> <target>: rename(2) over the old link, so there is never no link
-  sudo ln -sfn "$2" "$1.new"
-  sudo mv -Tf "$1.new" "$1"
+  sudo ln -sfn "$2" "$1.new" && sudo mv -Tf "$1.new" "$1"
 }
 
 # --- units (D9) --------------------------------------------------------------
@@ -723,7 +723,7 @@ previous="$(release_of)"
 moved=1
 [[ -n "$previous_link" && "$previous" == "$build" ]] && moved=0
 
-swap "$link" "releases/$build"
+swap "$link" "releases/$build" || die "cannot switch live to $build (sudo ln, mv); nothing switched"
 logger -t broker-deploy "live -> $build (was ${previous_link:-nothing})" || true
 units_ok=1
 install_units || units_ok=0
@@ -749,7 +749,11 @@ else
     back="put back the units it replaced, on $build"
   else
     back="switched back to $(served_build "$previous_link")"
-    swap "$link" "$previous_link"
+    if ! swap "$link" "$previous_link"; then
+      logger -t broker-deploy "live failed on $build; switching it back to $previous_link failed" || true
+      dead "live failed on $build, and switching it back to $previous_link failed (sudo ln, mv):" \
+        "live still runs $build. sudo ln -sfn $previous_link $link.new && sudo mv -Tf $link.new $link"
+    fi
   fi
   restore_units
   if verify_all; then
