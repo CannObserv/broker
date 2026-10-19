@@ -778,11 +778,14 @@ def test_info_watch_check_is_a_never_trimmed_command_stream_with_one_pool() -> N
 
 async def test_the_headless_watcher_pair_is_silent_before_either_end_ships(fake_redis) -> None:
     """Neither stream exists on the node at registration (CannObserv/broker#93),
-    and a stream nothing has written is dormant: no row may warn until
-    watcher and archiver ship."""
-    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
-    subjects = [f.subject for f in findings]
-    assert not [s for s in subjects if s.startswith(("info.watch-events", "info.watch-check"))]
+    and a stream nothing has written is dormant: both rows are probed, neither
+    warns, and neither records a baseline, so a stream that never existed
+    cannot later read as a `stream-reset`."""
+    topics = (INFO_WATCH_EVENTS, INFO_WATCH_CHECK)
+    assert set(topics) <= {c.topic for c in STREAM_CHECKS}, "a pair row is not probed"
+    findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    assert not [f for f in findings if f.subject.startswith(topics)]
+    assert not [k for k in state if any(t in k for t in topics)], state
 
 
 async def test_watch_events_written_before_archivers_group_is_not_a_finding(fake_redis) -> None:
