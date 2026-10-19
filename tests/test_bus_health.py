@@ -1613,6 +1613,48 @@ def test_replay_republishing_more_often_than_the_period_is_named_not_absorbed(
     )
 
 
+# Two producers on content.fetch-policy from CannObserv/broker#93 until #95:
+# docs/LWW-CAP.md, "Two producers across F1", is this replay's output.
+_DUAL_RUN_FROM = 30 * _PERIOD_MS
+
+
+def _dual_run(watcher_set: int, archiver_set: int) -> list[tuple[int, list[str]]]:
+    """Each producer on its own `*/5`, Archiver's a minute behind Watcher's,
+    both writing from `_DUAL_RUN_FROM` - the D8 failure no ACL can refuse."""
+    schedule = _cron(watcher_set, end_ms=_DAY_MS) + _cron(
+        archiver_set, start_ms=_DUAL_RUN_FROM + 60_000, end_ms=_DAY_MS
+    )
+    return [(t, fs) for t, fs in _replay(schedule, until_ms=_DAY_MS) if t > _DUAL_RUN_FROM]
+
+
+@pytest.mark.parametrize(("watcher_set", "archiver_set"), [(3, 4), (4, 4), (30, 30)])
+def test_replay_two_producers_below_the_floor_are_silent(watcher_set, archiver_set) -> None:
+    """Below the floor each producer caps at its own `MAXLEN ~500`, and the
+    threshold never falls under 550, so the length cannot breach - whatever
+    the summed set read off the stream does to the threshold, it only raises
+    it. At today's sizes dual-run is invisible to this probe."""
+    after = _dual_run(watcher_set, archiver_set)
+    assert after
+    assert not [f for _, fs in after for f in fs if f.startswith("stream-length")]
+
+
+@pytest.mark.parametrize("each", [60, 100])
+def test_replay_two_producers_above_the_floor_are_named(each: int) -> None:
+    """Once each set is big enough for its floor to govern, the stream sits at a
+    cap with too few periods in it for ten summed sets, the window is refused,
+    and the mirrored default governs: a standing finding from 8.5 periods,
+    naming the faster republish - the `R > 1` path."""
+    ticks = _dual_run(each, each)
+    flagged = [
+        t
+        for t, fs in ticks
+        if any(f.startswith("stream-length") and "more often than every 300s" in f for f in fs)
+    ]
+    assert flagged
+    assert (flagged[0] - _DUAL_RUN_FROM) / _PERIOD_MS == pytest.approx(8.5, abs=0.5)
+    assert flagged == [t for t, _ in ticks if t >= flagged[0]], "the finding does not stand"
+
+
 def test_a_floor_must_agree_with_the_row_it_sits_on() -> None:
     """The mirrored cap would otherwise have two spellings on one row - the
     `warn_length` the length check uses and the `default_maxlen` the floor
