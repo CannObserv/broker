@@ -345,10 +345,7 @@ output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 `provisioner.revisions`, `archiver.artifacts`, `replicator.replicate`,
 `replicator.persist`, `processor.process`, `watcher.derived`,
 `archiver.watch-events`, `watcher.watch-check` - present, pending
-0, at the tip once an entry arrives. The last two are absent, with their
-streams, until watcher and archiver ship (CannObserv/broker#93); `archiver.watch-events`
-can also be absent from a stream that exists, until archiver's consumer first
-runs. The exception is `provisioner.revisions`,
+0, at the tip once an entry arrives (the last two once they ship, #93). The exception is `provisioner.revisions`,
 whose consumer holds entries on purpose: judge it by pending age, not pending
 count ([BUS-HEALTH.md](BUS-HEALTH.md), *Pending age*).
 
