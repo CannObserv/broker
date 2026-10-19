@@ -128,19 +128,21 @@ the readings above already survive, with `stream-age` if the gap passes 15 min.
 The mirrored 500 and the 10-set floor move from Watcher's environment to
 Archiver's at F1 (CannObserv/broker#94).
 
-**Both at once is invisible while the sets are small.** Replayed with the
-harness above, each producer on its own `*/5`, offset a minute
-[measured 2026-10-19]:
+**Both at once is invisible while the sets are small.** Replayed as above,
+each producer on its own `*/5`, offset a minute
+(`test_replay_two_producers_below_the_floor_are_silent`,
+`test_replay_two_producers_above_the_floor_are_named`):
 
 | Sets (Watcher + Archiver) | `stream-length` after dual-run starts |
 |---|---|
 | 3 + 4, 4 + 4, 30 + 30 | never |
 | 60 + 60, 100 + 100 | standing from 8.5 periods, naming the faster republish |
 
-Below the floor each producer's own `MAXLEN ~500` holds the length under the
-550 threshold, and the summed set read off the stream times ten stays under the
-500 default. The probe only sees dual-run once the floor governs, as the
-`R > 1` case. At today's sizes it shows in Replicator's journal instead: one
+Below the floor each producer caps at its own `MAXLEN ~500`, and the
+threshold never falls under 550, so the length cannot breach: the summed set
+read off the stream can only raise the threshold. Once each floor governs, the
+stream sits at a cap holding too few periods for ten summed sets, the window is
+refused, and the mirrored default governs - the `R > 1` path. At today's sizes it shows in Replicator's journal instead: one
 `ignoring a fetch policy without a generation` line per Watcher frame once a
 host holds an Archiver frame (CannObserv/replicator#135, stated on
 CannObserv/archiver#366).
