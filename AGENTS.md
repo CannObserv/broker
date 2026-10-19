@@ -174,7 +174,8 @@ initialised: `bash .skills/doctor.sh`. Unprompted commits land on `main`:
 a `SessionStart` hook bumping the submodule daily, and a Thursday workflow
 appending a context measurement - pull before pushing. Review/ship are the
 `-python-fastapi` variants - right gate, wrong deploy step: broker has no service
-to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
+to restart, and since #107 the probe's post-merge step is `scripts/deploy.sh`.
+[docs/SKILLS.md](docs/SKILLS.md).
 
 ## Related
 

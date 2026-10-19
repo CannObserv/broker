@@ -8,7 +8,7 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `redis.conf.broker` | appended to `/etc/redis/redis.conf` | The tuning: bind, `requirepass`, AOF `everysec`, `maxmemory-policy noeviction`, explicit `maxmemory`. `__REQUIREPASS__` is substituted at install time with a value minted there and kept nowhere - nobody's password since broker#52 |
 | `redis-server.service.d/broker.conf` | `/etc/systemd/system/redis-server.service.d/broker.conf` | Unit **ordering only**: `After=tailscaled.service`, widened restart limits, and the `ExecStartPre=+` wait |
 | `wait-for-tailnet-addr.sh` | `/usr/local/sbin/` | R1's boot-race insurance. Probes `/proc/net/fib_trie`, never `ip addr` |
-| `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory and eviction policy, per-stream length, last-entry age, per-group pending count and undelivered age, DLQ depth + evidence capture + `entries-added` continuity, disk, persistence status, backup freshness. Never blocks anything |
+| `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory and eviction policy, per-stream length, last-entry age, per-group pending count and undelivered age, DLQ depth + evidence capture + `entries-added` continuity, disk, persistence status, backup freshness. Never blocks anything. Runs `/srv/broker/live`, a release, and `scripts/deploy.sh` installs it (#107) |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
 | `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day, and `default` made a tombstone on 2026-09-29 (broker#52). Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
 | `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). Ships the service users' ACL digests beside each snapshot, refusing any plaintext line (broker#72). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
@@ -316,11 +316,16 @@ sudo install -m 0755 deploy/wait-for-tailnet-addr.sh /usr/local/sbin/
 sudo install -m 0644 -D deploy/redis-server.service.d/broker.conf \
     /etc/systemd/system/redis-server.service.d/broker.conf
 
-# The health timer
+# The health timer. The unit runs /srv/broker/live (#107), which the first
+# deploy makes (Deploying, below): install and enable it BEFORE that deploy.
+# The deploy installs a unit it finds absent but never enables it, then waits
+# on the probe's next natural tick, which a timer not enabled never gives.
+# Ticks before live exists fail at chdir: a missed check-in, nothing worse.
 sudo install -m 0644 deploy/broker-bus-health.service \
     deploy/broker-bus-health.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now broker-bus-health.timer
+# then ~/broker/scripts/deploy.sh, detached (Deploying, below)
 
 # The backup (broker#4): its env names the bucket and the writer key's path.
 # The timer is enabled only once the key is at that path - see docs/RECOVERY.md,
@@ -376,9 +381,16 @@ being applied in passing.
 of one CI-green commit on `origin/main`, with only the wheels `uv.lock` names
 and a venv of its own. It then points `/srv/broker/live` at the release. The
 design is `docs/plans/2026-10-17-22-release-deploy.md`. A unit runs a release
-once its `WorkingDirectory=` is `/srv/broker/live`. Until #107 and #108 switch
-them, **both units still run `~/broker`**, so a deploy builds and links a
-release and changes nothing that runs.
+once its `WorkingDirectory=` is `/srv/broker/live`.
+
+- **The probe has run `live` since #107.** A merge alone no longer reaches it:
+  a change to `src/`, `uv.lock`, `pyproject.toml` or its unit is live only once
+  deployed.
+- **The backup still runs `~/broker` until #108**, so a deploy changes nothing
+  it runs. Nothing syncs that checkout's venv any more, since the probe's
+  `uv run` did. Until #108, a pull that moves `uv.lock` or `pyproject.toml`
+  needs `uv sync --frozen` in `~/broker`, after the wheelhouse sync in
+  AGENTS.md.
 
 ```bash
 # Once, on a new or rebuilt node: root's, and writable by root alone. The
@@ -632,14 +644,18 @@ rewrite time, which `maxmemory` also caps.
   probe runs *on* the broker and `redis.conf` binds loopback as well as the
   tailnet address, deliberately.
 - `GOOGLE_APPLICATION_CREDENTIALS` - the read-only `co-pypi-reader` key. **It
-  is the operator's, not the probe's:** it authenticates the wheelhouse sync in
-  AGENTS.md, and it is here so that sync is one `source` away. The unit unsets
-  it. `uv run` resolves `co-core` from `./.wheelhouse`, a local directory, and
-  needs no credential (CannObserv/broker#37).
+  is the operator's and the deploy's, not the probe's:** it authenticates the
+  wheelhouse sync in AGENTS.md and `scripts/deploy.sh`'s, and it is here so
+  either is one `source` away. The unit unsets it. The probe runs a release
+  whose venv was resolved at build, so nothing resolves at start
+  (CannObserv/broker#37, #107).
 
-**No unit syncs the wheelhouse.** CI syncs on every run; on the node the sync is
-manual, and it is due before any `uv sync` or `uv run` that follows a `co-core`
-pin change. Miss it and the probe's `ExecStart` fails with a resolution error.
+**No unit syncs the wheelhouse.** CI syncs on every run. `scripts/deploy.sh`
+syncs before each build and copies into the release only the wheels `uv.lock`
+names. In the checkout the sync is manual, and it is due before any `uv sync`
+or `uv run` there that follows a `co-core` pin change. Miss it and that command
+fails with a resolution error. Until #108 that includes the `uv sync` the
+backup's venv needs.
 
 The probe holds **no** database credential, joins **no** consumer group, and
 inherits no variable from `/etc/broker/.env` that it does not read. All three
@@ -701,7 +717,7 @@ the rule that stays.
 
 **The report goes every tick regardless of `finding_count`, and that is the
 design rather than chattiness.** A findings-only push is silent in exactly the
-cases that matter most - a dead probe, a stopped timer, a wedged `uv run` or a
+cases that matter most - a dead probe, a stopped timer, a wedged tick or a
 dead node all produce zero findings and zero traffic, which is indistinguishable
 from a healthy broker. co-status alarms on the *absence* of a report, so the
 arrival is the signal. `status` is the probe's own judgement (`finding_count > 0`
