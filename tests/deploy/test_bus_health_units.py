@@ -16,9 +16,12 @@ from urllib.parse import urlsplit
 import pytest
 
 from src.broker.bus_health import BROKER_CREDENTIAL
+from src.broker.revision import REVISION_PATH
 from tests.deploy.conftest import outcome_of, pretend_node, read_installed
 
 _ROOT = Path(__file__).resolve().parents[2]
+# What scripts/deploy.sh points at the release it switched to (#22, #106).
+LIVE = "/srv/broker/live"
 _DEPLOY = _ROOT / "deploy"
 REPO_SERVICE = _DEPLOY / "broker-bus-health.service"
 REPO_TIMER = _DEPLOY / "broker-bus-health.timer"
@@ -112,6 +115,56 @@ def test_service_is_a_oneshot_probe() -> None:
     text = REPO_SERVICE.read_text()
     assert "Type=oneshot" in text
     assert "src.broker.bus_health" in text
+
+
+def test_no_line_of_the_unit_names_the_dev_tree() -> None:
+    """The probe runs a release, never the checkout (#22 Q12, #107).
+
+    Comments included: one that still says the dev tree is a runbook pointing
+    the next reader back at it."""
+    assert "/home/exedev" not in REPO_SERVICE.read_text()
+
+
+def test_the_probe_runs_from_live() -> None:
+    """``live`` is resolved at each start, so a tick already running finishes
+    on the release it started on (#22 Q7), and ``scripts/deploy.sh``'s
+    ``expected_of`` reads this line for the build a tick must report."""
+    assert _directive(REPO_SERVICE.read_text(), "WorkingDirectory") == [LIVE]
+
+
+def test_the_probe_runs_the_release_venv_never_uv() -> None:
+    """``uv run`` synced a venv every tick (#22 B2). The release's venv is
+    frozen at build, so nothing resolves at start, and the arguments are the
+    ones the probe took before the switch."""
+    (exec_start,) = _directive(REPO_SERVICE.read_text(), "ExecStart")
+    argv = exec_start.split()
+    assert argv[:3] == [f"{LIVE}/.venv/bin/python", "-m", "src.broker.bus_health"], argv
+    assert argv[3:] == [
+        "--state-file",
+        "${STATE_DIRECTORY}/state.json",
+        "--backup-state-file",
+        "/var/lib/broker-backup/state.json",
+    ], argv
+    assert not any(Path(word).name == "uv" for word in argv), argv
+
+
+def test_the_release_reports_the_build_the_unit_runs() -> None:
+    """#105 CR 2: ``REVISION_PATH`` is two levels above ``src/broker/``, so a
+    tick reports its release's ``REVISION`` only while the ``src`` it imports is
+    the release's own. ``-m src.broker.*`` from ``WorkingDirectory=`` is that
+    shape. Another, such as a script path or a package installed elsewhere,
+    reports ``dev`` from every release with nothing failing but the deploy's
+    verification."""
+    assert REVISION_PATH.parent == _ROOT, "REVISION is read from the project root"
+    (exec_start,) = _directive(REPO_SERVICE.read_text(), "ExecStart")
+    assert exec_start.split()[1:3] == ["-m", "src.broker.bus_health"]
+    assert (_ROOT / "src" / "broker" / "bus_health.py").is_file()
+
+
+def test_the_probe_writes_no_bytecode() -> None:
+    """The release is ``555`` and compiled at build (#22 Q6). A write would
+    fail anyway; this says no tick ever tries."""
+    assert "PYTHONDONTWRITEBYTECODE=1" in _directive(REPO_SERVICE.read_text(), "Environment")
 
 
 def test_service_holds_no_database_opt_in() -> None:
@@ -281,11 +334,11 @@ def test_the_unit_unsets_the_wheelhouse_key() -> None:
     """``GOOGLE_APPLICATION_CREDENTIALS`` is the operator's, not the probe's
     (CannObserv/broker#37).
 
-    It shares ``/etc/broker/.env`` with ``BROKER_REDIS_URL`` so the manual sync
-    is one ``source`` away. The unit has no use for it: ``uv run`` resolves
-    ``co-core`` from ``./.wheelhouse``, a local directory, and the probe imports
-    no storage SDK. Unset rather than split into a second file, so the operator's
-    command stays what AGENTS.md says it is.
+    It shares ``/etc/broker/.env`` with ``BROKER_REDIS_URL`` so the manual sync,
+    and ``scripts/deploy.sh``'s, is one ``source`` away. The unit has no use for
+    it: the release's venv was resolved at build, nothing resolves at start
+    (#107), and the probe imports no storage SDK. Unset rather than split into a
+    second file, so the operator's command stays what AGENTS.md says it is.
     """
     unset = " ".join(_directive(REPO_SERVICE.read_text(), "UnsetEnvironment")).split()
     assert WHEELHOUSE_KEY in unset

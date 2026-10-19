@@ -8,17 +8,25 @@ After=network.target
 [Service]
 Type=oneshot
 User=exedev
-WorkingDirectory=/home/exedev/broker
+# The release scripts/deploy.sh last switched to (#22, #107): root's, read-only,
+# one commit on origin/main with its own frozen venv. Resolved at each start,
+# so a tick already running finishes on the release it started on, and nothing
+# done in a checkout reaches a tick until a deploy puts it here. The build the
+# tick reports is that release's REVISION, read beside the src/ that `-m
+# src.broker.*` imports from here (#105 CR 2): ExecStart= keeps that shape.
+WorkingDirectory=/srv/broker/live
+# Compiled at build, and the release is 555: no tick writes bytecode.
+Environment=PYTHONDONTWRITEBYTECODE=1
 
 # BROKER_REDIS_URL, which names the user and never the password
 # (CannObserv/broker#52; tests/deploy/test_bus_health_units.py reads the live
 # file for one). The file also carries GOOGLE_APPLICATION_CREDENTIALS, the
 # read-only co-pypi-reader key, and that one is the OPERATOR'S: it is what the
-# manual wheelhouse sync in AGENTS.md authenticates with, and it shares this
-# file so that sync is one `source` away. No unit runs the sync. This one has no
-# use for the key - `uv run` resolves co-core from ./.wheelhouse, a local
-# directory, and the probe imports no storage SDK - so it is unset rather than
-# inherited (CannObserv/broker#37).
+# manual wheelhouse sync in AGENTS.md and scripts/deploy.sh's sync authenticate
+# with, and it shares this file so either is one `source` away. No unit runs
+# the sync. This one has no use for the key - the release's venv was resolved
+# at build, nothing resolves at start, and the probe imports no storage SDK -
+# so it is unset rather than inherited (CannObserv/broker#37).
 #
 # Nothing from the dev tree's .env either. It carries the cohort's GitHub
 # tokens and an Anthropic key, none of which the probe reads.
@@ -48,9 +56,9 @@ EnvironmentFile=-/etc/broker/status.env
 # BROKER_REDIS_URL above, plaintext in a file this unit's User= can read at any
 # time. What is left: while a tick runs, systemd grants that same User= read on
 # the decrypted copy, so another process of the account can read it for that
-# second - in RAM, never on disk. Closing that means a User= of its own, which
-# `uv run` in the dev tree makes a separate change. Minted and installed by
-# docs/NODE-CREDENTIALS.md.
+# second - in RAM, never on disk. Closing that means a User= of its own: #22's
+# D3 follow-up, which nothing in this unit blocks now that it runs a release
+# rather than the checkout. Minted and installed by docs/NODE-CREDENTIALS.md.
 LoadCredentialEncrypted=broker-brokeradmin:/etc/credstore.encrypted/broker-brokeradmin
 
 # This probe holds NO database credential. The outbox half of the old combined
@@ -78,4 +86,4 @@ TimeoutStartSec=60
 # unit's StateDirectory, which this unit's User= cannot write - and its absence
 # where the directory itself is absent means "no backup unit on this node",
 # which is a deploy checklist item rather than a finding every ten minutes.
-ExecStart=/usr/local/bin/uv run python -m src.broker.bus_health --state-file ${STATE_DIRECTORY}/state.json --backup-state-file /var/lib/broker-backup/state.json
+ExecStart=/srv/broker/live/.venv/bin/python -m src.broker.bus_health --state-file ${STATE_DIRECTORY}/state.json --backup-state-file /var/lib/broker-backup/state.json
