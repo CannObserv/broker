@@ -344,9 +344,9 @@ re-issued**: that is an operator act. Read all eleven in the `XINFO GROUPS`
 output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 `provisioner.revisions`, `archiver.artifacts`, `replicator.replicate`,
 `replicator.persist`, `processor.process`, `watcher.derived`,
-`archiver.watch-events`, `watcher.watch-check` - present, pending
-0, at the tip once an entry arrives (the last two once they ship, #93). The exception is `provisioner.revisions`,
-whose consumer holds entries on purpose: judge it by pending age, not pending
+`archiver.watch-events`, `watcher.watch-check` - present, pending 0, at the
+tip once an entry arrives (the last two once they ship, #93). The exception is
+`provisioner.revisions`, whose consumer holds entries on purpose: judge it by pending age, not pending
 count ([BUS-HEALTH.md](BUS-HEALTH.md), *Pending age*).
 
 How each participant came back on 2026-10-13, and how long each can wait:
