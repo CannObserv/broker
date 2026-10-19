@@ -49,6 +49,8 @@ def _problems(
     release = live.resolve()
     if release.parent != (live.parent / "releases").resolve():
         return [f"{live} -> {release}, which is not under {live.parent}/releases"]
+    if not release.is_dir():
+        return [f"{live} -> {release}, and there is no release there: deploy one"]
     problems = []
     if (release.stat().st_uid, release.stat().st_gid) != owner:
         problems.append(f"{release} is not root's, so exedev can change what the probe runs")
@@ -152,3 +154,10 @@ def test_main_ancestry_is_asked_of_git(tmp_path) -> None:
     """The real seam, against this checkout: a sha12 git has never seen is not
     on ``origin/main``, whatever else is true of it."""
     assert not _on_origin_main("000000000000")
+
+
+def test_a_link_to_a_removed_release_is_named(tmp_path) -> None:
+    (tmp_path / "releases").mkdir()
+    (tmp_path / "live").symlink_to("releases/0123456789ab")
+    (problem,) = _problems(tmp_path / "live", owner=MINE, on_main=_on_main)
+    assert "no release there" in problem
