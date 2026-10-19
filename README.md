@@ -111,6 +111,14 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   command on the stream 16:01:01Z). #76 then moved the undelivered threshold
   onto Replicator's own timing of the handler, and confirmed the probe clean
   over the first three commands.
+- CannObserv/broker#93 - the headless-Watcher pair (CannObserv/broker#92,
+  cannobserv#563, #564), registered 2026-10-19 before either end shipped:
+  `info.watch-events` (watcher -> archiver, `archiver.watch-events`, dormant
+  until seen, created by archiver at `0`) and `info.watch-check` (archiver ->
+  watcher, `watcher.watch-check`, never trimmed). Archiver is
+  `content.fetch-policy`'s second producer until #95 withdraws watcher's
+  grant. Grants live 2026-10-19T17:46:17Z. co-core is held `<0.37.1`, because
+  0.37.1's `content.capture` has no requester yet.
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,

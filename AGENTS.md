@@ -186,8 +186,9 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   (processor's root already named only its own stream and queue). #78
   (provisioner, `content.revisions`' read-only second consumer) was minted on
   that shape, 2026-10-07, and consumes since 2026-10-12.
-- The history of #62, #64 (`content.persist` live 2026-10-01, #76), #75, #53
-  and archiver#251: [README.md](README.md), *Provenance*.
+- The history of #62, #64 (`content.persist` live 2026-10-01, #76), #75, #53,
+  #93 (the headless-Watcher pair) and archiver#251: [README.md](README.md),
+  *Provenance*.
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
   2026-09-29; what it leaves open: `docs/NODE-CREDENTIALS.md`. #72 (the ACL
   digests shipped with each backup) closed the same day.
@@ -196,10 +197,6 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*
   (`WATCHER_WATCH_STATUS_REPUBLISH_CRON`) with no commit anywhere.
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
-- CannObserv/broker#92 - headless Watcher. #93 registered `info.watch-events`
-  and `info.watch-check` before either end shipped, with archiver as
-  `content.fetch-policy`'s second producer until #95; co-core is held
-  `<0.37.1` until `content.capture` is requested.
 
 ## Detail Docs
 
