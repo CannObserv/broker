@@ -33,6 +33,17 @@ def _on_origin_main(sha12: str) -> bool:
     return result.returncode == 0
 
 
+def _held_by_root(directory: Path, owner: tuple[int, int]) -> str | None:
+    """deploy.sh's ``roots_alone`` for one directory holding ``live``, or ``None``."""
+    if not directory.is_dir():
+        return f"{directory} is not a directory"
+    if (directory.stat().st_uid, directory.stat().st_gid) != owner:
+        return f"{directory} is not root's, so exedev can repoint live"
+    if directory.stat().st_mode & 0o022:
+        return f"{directory} is writable by more than root, so exedev can repoint live"
+    return None
+
+
 def _problems(
     live: Path,
     *,
@@ -41,17 +52,21 @@ def _problems(
 ) -> list[str]:
     """What is wrong with the release ``live`` names; nothing when it is sound.
 
+    The directories holding ``live`` first: a link is only as safe as they are.
     ``owner`` and ``on_main`` are seams for the pins below, which cannot make a
     root-owned file or vouch for a commit on any host's ``origin/main``.
     """
     if not live.is_symlink():
         return [f"{live} is not a link: scripts/deploy.sh makes it (deploy/README.md, Deploying)"]
+    held = (_held_by_root(d, owner) for d in (live.parent, live.parent / "releases"))
+    problems = [problem for problem in held if problem]
+    if live.lstat().st_uid != owner[0]:
+        problems.append(f"{live} is not root's link")
     release = live.resolve()
     if release.parent != (live.parent / "releases").resolve():
-        return [f"{live} -> {release}, which is not under {live.parent}/releases"]
+        return [*problems, f"{live} -> {release}, which is not under {live.parent}/releases"]
     if not release.is_dir():
-        return [f"{live} -> {release}, and there is no release there: deploy one"]
-    problems = []
+        return [*problems, f"{live} -> {release}, and there is no release there: deploy one"]
     if (release.stat().st_uid, release.stat().st_gid) != owner:
         problems.append(f"{release} is not root's, so exedev can change what the probe runs")
     if release.stat().st_mode & 0o222:
@@ -109,9 +124,26 @@ def test_a_release_as_the_deploy_leaves_it_has_no_problem(tmp_path) -> None:
 
 
 def test_a_release_not_roots_is_named(tmp_path) -> None:
-    release, revision = _problems(_release(tmp_path), on_main=_on_main)
-    assert "not root's, so exedev" in release
-    assert "not root's 444" in revision
+    problems = "\n".join(_problems(_release(tmp_path), on_main=_on_main))
+    assert "is not root's, so exedev can change what the probe runs" in problems
+    assert "not root's 444" in problems
+
+
+@pytest.mark.parametrize("held", ["root", "releases"])
+def test_a_directory_more_than_root_can_write_is_named(tmp_path, held) -> None:
+    """deploy.sh's ``roots_alone``: a link is only as safe as its directory.
+    Writable by ``exedev``, ``live`` can be repointed at any release without
+    sudo, an older sound one included, and every other check would pass."""
+    live = _release(tmp_path)
+    (tmp_path if held == "root" else tmp_path / "releases").chmod(0o777)
+    (problem,) = _problems(live, owner=MINE, on_main=_on_main)
+    assert "writable by more than root" in problem
+
+
+def test_directories_and_link_not_roots_are_named(tmp_path) -> None:
+    problems = _problems(_release(tmp_path), on_main=_on_main)
+    assert sum("so exedev can repoint live" in p for p in problems) == 2, problems
+    assert any("not root's link" in p for p in problems), problems
 
 
 def test_a_writable_release_is_named(tmp_path) -> None:
@@ -145,6 +177,7 @@ def test_a_build_off_main_is_named(tmp_path) -> None:
 def test_a_link_outside_releases_is_named(tmp_path) -> None:
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
+    (tmp_path / "releases").mkdir()
     (tmp_path / "live").symlink_to(elsewhere)
     (problem,) = _problems(tmp_path / "live", owner=MINE, on_main=_on_main)
     assert "not under" in problem
