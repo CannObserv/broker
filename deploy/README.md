@@ -387,10 +387,10 @@ once its `WorkingDirectory=` is `/srv/broker/live`.
   a change to `src/`, `uv.lock`, `pyproject.toml` or its unit is live only once
   deployed.
 - **The backup still runs `~/broker` until #108**, so a deploy changes nothing
-  it runs. Nothing syncs that checkout's venv any more, since the probe's
-  `uv run` did. Until #108, a pull that moves `uv.lock` or `pyproject.toml`
-  needs `uv sync --frozen` in `~/broker`, after the wheelhouse sync in
-  AGENTS.md.
+  it runs. Nothing syncs that checkout's venv any more: the probe's `uv run`
+  did, and it is gone. Until #108, a pull that moves `uv.lock` or
+  `pyproject.toml` needs `uv sync --frozen` in `~/broker`, after the wheelhouse
+  sync in AGENTS.md.
 
 ```bash
 # Once, on a new or rebuilt node: root's, and writable by root alone. The
