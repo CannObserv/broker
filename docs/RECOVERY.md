@@ -308,8 +308,9 @@ Once they are back:
 
 ```bash
 sudo systemctl enable --now broker-bus-health.timer broker-backup.timer
-# The probe runs /srv/broker/live (#107): no link yet, deploy (deploy/README.md, Deploying)
-readlink /srv/broker/live || { sudo install -d -o root -g root -m 755 /srv/broker && ~/broker/scripts/deploy.sh; }
+# No live link yet (#107): make the root, then deploy (deploy/README.md)
+readlink /srv/broker/live ||
+    { sudo install -d -o root -g root -m 755 /srv/broker && ~/broker/scripts/deploy.sh; }
 sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -o cat --no-pager
 set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy -rs         # the only skips: test_redis_acl.py's unassigned-DLQ rows
