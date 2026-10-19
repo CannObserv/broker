@@ -142,7 +142,8 @@ Below the floor each producer caps at its own `MAXLEN ~500`, and the
 threshold never falls under 550, so the length cannot breach: the summed set
 read off the stream can only raise the threshold. Once each floor governs, the
 stream sits at a cap holding too few periods for ten summed sets, the window is
-refused, and the mirrored default governs - the `R > 1` path. At today's sizes it shows in Replicator's journal instead: one
-`ignoring a fetch policy without a generation` line per Watcher frame once a
-host holds an Archiver frame (CannObserv/replicator#135, stated on
+refused, and the mirrored default governs - the `R > 1` path. At today's
+sizes dual-run shows in Replicator's journal instead: one `ignoring a fetch
+policy without a generation` line per Watcher frame once a host holds an
+Archiver frame (CannObserv/replicator#135, stated on
 CannObserv/archiver#366).
