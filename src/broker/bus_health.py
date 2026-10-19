@@ -1527,7 +1527,10 @@ def evaluate_stream(
         ):
             diagnosis = (
                 "the retention cap for this stream is not being applied, or its producer "
-                f"republishes more often than every {floor.republish_period_seconds:.0f}s: "
+                f"republishes more often than every {floor.republish_period_seconds:.0f}s, "
+                # Two producers hold content.fetch-policy's +xadd from broker#93 until
+                # #95, and dual-run reads exactly like a faster republish.
+                "or a second producer is publishing it too: "
                 f"the trimmed window spans {set_reading.narrow_periods} republish periods "
                 f"where {floor.retained_full_sets} full sets need at least "
                 f"{floor.retained_full_sets - 1}, so no set size can be read off it and the "

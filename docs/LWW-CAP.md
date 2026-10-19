@@ -136,7 +136,7 @@ each producer on its own `*/5`, offset a minute
 | Sets (Watcher + Archiver) | `stream-length` after dual-run starts |
 |---|---|
 | 3 + 4, 4 + 4, 30 + 30 | never |
-| 60 + 60, 100 + 100 | standing from 8.5 periods, naming the faster republish |
+| 60 + 60, 100 + 100 | standing from 8.5 periods, naming a faster republish or a second producer |
 
 Below the floor each producer caps at its own `MAXLEN ~500`, and the
 threshold never falls under 550, so the length cannot breach: the summed set

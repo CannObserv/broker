@@ -1643,7 +1643,7 @@ def test_replay_two_producers_above_the_floor_are_named(each: int) -> None:
     """Once each set is big enough for its floor to govern, the stream sits at a
     cap with too few periods in it for ten summed sets, the window is refused,
     and the mirrored default governs: a standing finding from 8.5 periods,
-    naming the faster republish - the `R > 1` path."""
+    naming a faster republish or a second producer - the `R > 1` path."""
     ticks = _dual_run(each, each)
     flagged = [
         t
@@ -1652,6 +1652,13 @@ def test_replay_two_producers_above_the_floor_are_named(each: int) -> None:
     ]
     assert flagged
     assert (flagged[0] - _DUAL_RUN_FROM) / _PERIOD_MS == pytest.approx(8.5, abs=0.5)
+    # The suspect an operator should check first while both hold +xadd.
+    assert all(
+        "or a second producer is publishing it too" in f
+        for _, fs in ticks
+        for f in fs
+        if f.startswith("stream-length")
+    )
     assert flagged == [t for t, _ in ticks if t >= flagged[0]], "the finding does not stand"
 
 
