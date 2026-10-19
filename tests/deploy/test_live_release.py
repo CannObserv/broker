@@ -16,10 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.deploy.conftest import outcome_of, pretend_node, require_broker_node
+from tests.deploy.conftest import LIVE, outcome_of, pretend_node, require_broker_node
 
 _ROOT = Path(__file__).resolve().parents[2]
-LIVE = Path("/srv/broker/live")
 SHA12 = re.compile(r"[0-9a-f]{12}")
 
 

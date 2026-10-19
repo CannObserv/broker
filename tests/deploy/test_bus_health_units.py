@@ -17,11 +17,9 @@ import pytest
 
 from src.broker.bus_health import BROKER_CREDENTIAL
 from src.broker.revision import REVISION_PATH
-from tests.deploy.conftest import outcome_of, pretend_node, read_installed
+from tests.deploy.conftest import LIVE, outcome_of, pretend_node, read_installed
 
 _ROOT = Path(__file__).resolve().parents[2]
-# What scripts/deploy.sh points at the release it switched to (#22, #106).
-LIVE = "/srv/broker/live"
 _DEPLOY = _ROOT / "deploy"
 REPO_SERVICE = _DEPLOY / "broker-bus-health.service"
 REPO_TIMER = _DEPLOY / "broker-bus-health.timer"
@@ -129,7 +127,7 @@ def test_the_probe_runs_from_live() -> None:
     """``live`` is resolved at each start, so a tick already running finishes
     on the release it started on (#22 Q7), and ``scripts/deploy.sh``'s
     ``expected_of`` reads this line for the build a tick must report."""
-    assert _directive(REPO_SERVICE.read_text(), "WorkingDirectory") == [LIVE]
+    assert _directive(REPO_SERVICE.read_text(), "WorkingDirectory") == [str(LIVE)]
 
 
 def test_the_probe_runs_the_release_venv_never_uv() -> None:

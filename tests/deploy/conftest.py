@@ -392,6 +392,10 @@ NODE_MARKERS = (
     Path("/etc/systemd/system/redis-server.service.d/broker.conf"),
 )
 
+#: The link ``scripts/deploy.sh`` switches, and the probe's ``WorkingDirectory=``
+#: (#22, #107): the unit's tests read it as the unit's text, the node's as a path.
+LIVE = Path("/srv/broker/live")
+
 
 def on_broker_node() -> bool:
     return any(marker.exists() for marker in NODE_MARKERS)
