@@ -96,7 +96,8 @@ Per tick it probes:
   `max(500, 10 x the set Watcher republishes)` + 10% - the 550 while the sets are small,
   which is the state the node is in today, and the floor past ~50 entries per
   set. See [LWW-CAP.md](LWW-CAP.md) and *Mirrored constants*
-  below. **The eight `content.*` streams get no length threshold**: nothing trims
+  below. **The eight `content.*` streams and the headless-Watcher pair get no
+  length threshold**: nothing trims
   them, so there is no cap to mirror and a breach could only mean traffic grew.
   `maxmemory` is their only bound and the memory check above is the finding for
   it, naming the longest streams when it fires. Until CannObserv/broker#60 four
@@ -108,12 +109,14 @@ Per tick it probes:
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
   is empty - the corpus-size guard);
-- the `pending` count of **all nine** consumer groups on the node -
+- the `pending` count of **all eleven** consumer groups on the node -
   `archiver.revisions`, `archiver.artifacts`, `watcher.blobs`,
   `replicator.fetch`, `replicator.replicate`, the processing pair's
   `processor.process` and `watcher.derived` (CannObserv/broker#62, #75),
-  `replicator.persist` (CannObserv/broker#64), and `provisioner.revisions`
-  (CannObserv/broker#78), `content.revisions`' second group - WARN on non-zero
+  `replicator.persist` (CannObserv/broker#64), `provisioner.revisions`
+  (CannObserv/broker#78), `content.revisions`' second group, and the
+  headless-Watcher pair's `archiver.watch-events` and `watcher.watch-check`
+  (CannObserv/broker#93), declared before either end ships - WARN on non-zero
   across two consecutive ticks, with the count carried in
   `StateDirectory=broker-bus-health`. `provisioner.revisions` alone takes an
   entry age instead (*Pending age* below). Widened from
@@ -121,7 +124,7 @@ Per tick it probes:
   from a probe running on Archiver's own host, where a downstream service's
   group lag was plausibly its own alerting problem. On a neutral node it is not
   - nobody else watches these, and this is the one place that can;
-- **a consumer group that does not exist** on one of those eight streams
+- **a consumer group that does not exist** on one of those ten streams
   (`group-missing`) - absent from the stream's `XINFO GROUPS` reply, so its lag
   cannot be read at all and a stalled consumer is invisible to the rule above.
   WARN on **every** tick it is absent, with no two-tick grace: nothing about it
@@ -145,7 +148,9 @@ Per tick it probes:
     (*Detecting loss* below).
 
   Only a stream that exists is checked - one nothing has written yet is
-  dormant, not a fault. Neither processing-pair stream is dormant now, and
+  dormant, not a fault. Both headless-Watcher streams are, from their
+  registration (CannObserv/broker#93) until Watcher and Archiver ship.
+  Neither processing-pair stream is dormant now, and
   `content.process` never was: `processor ensure-group`
   created it and `processor.process` on 2026-10-02, ahead of Watcher's first
   command (CannObserv/broker#75), so on that stream "Processor is down" is the
@@ -154,11 +159,12 @@ Per tick it probes:
   streams, where `StreamCheck` refuses a group at import time. A missing group
   records no pending count, so when it comes back its two-tick rule starts
   again from zero. A group declared **dormant until seen**
-  (`provisioner.revisions`, until its consumer's first `ensure-group`) is not
+  (`provisioner.revisions`, until its consumer's first `ensure-group`;
+  `archiver.watch-events`, whose producer ships first, CannObserv/broker#93) is not
   this finding while it has never existed; once seen, its pending count rides
   the state file and its absence is this finding every tick;
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
-  minutes on each of the nine groups. The check a pending count cannot make,
+  minutes on each of the eleven groups. The check a pending count cannot make,
   and the one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer

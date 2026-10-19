@@ -44,7 +44,8 @@ nothing. The ACL declares no CI identity (#53).
 
 ## Rules
 
-- **No retention opinion on the eight `content.*` streams.** No *retention*
+- **No retention opinion on the eight `content.*` streams, nor the two
+  `info.watch-*` ones (broker#93).** No *retention*
   length or age row for any of them: nothing trims them, this repo owns no cap,
   and a threshold with no owner cries wolf - `maxmemory` is their only bound.
   They are `content.fetch`, `content.revisions`, `content.artifacts`,
@@ -53,7 +54,7 @@ nothing. The ACL declares no CI identity (#53).
   `content.blobs` had the rule first (broker#20); four joined it when they lost
   `info.changes`'s borrowed 110k (broker#60); the processing pair arrived with
   no cap by contract (broker#62), as did `content.persist` (broker#64). All
-  but `content.derived` are also **Never XTRIMmed**: no `+xtrim` selector names
+  but `content.derived` are also **Never XTRIMmed**, as are both watch streams: no `+xtrim` selector names
   them since broker#41, and a trim grant returns only as a producer's named
   request. `docs/STREAMS.md`'s **No retention cap** is pinned to the probe's
   unthresholded rows; a cap comes back only with a producer that owns one. Their
@@ -195,6 +196,10 @@ to restart after a merge. [docs/SKILLS.md](docs/SKILLS.md).
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*
   (`WATCHER_WATCH_STATUS_REPUBLISH_CRON`) with no commit anywhere.
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
+- CannObserv/broker#92 - headless Watcher. #93 registered `info.watch-events`
+  and `info.watch-check` before either end shipped, with archiver as
+  `content.fetch-policy`'s second producer until #95; co-core is held
+  `<0.37.1` until `content.capture` is requested.
 
 ## Detail Docs
 

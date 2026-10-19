@@ -94,8 +94,12 @@ publish - the window replicate's `duration_ms` covers. Archiver saw 1.35-1.68 s
 from issue to `blob_persisted`, so delivery is immediate there too. The 64 MiB
 ceiling is inferred, not measured: replicate's 5.4 s transfer plus a SHA-256
 over 64 MiB. Five minutes is ~500x the measured persists and ~50x the inferred
-ceiling. `test_every_probed_group_carries_an_undelivered_threshold` fails if a
-ninth group arrives without one, and `StreamCheck` refuses the other direction - a
+ceiling. The headless-Watcher pair (CannObserv/broker#93), `archiver.watch-events`
+and `watcher.watch-check`, take it on the shared assumption too, before either
+consumer exists (CannObserv/archiver#369, CannObserv/watcher#371); a
+watch-check's handler is a pre-flight and a deferred job, not the fetch it
+asks for. `test_every_probed_group_carries_an_undelivered_threshold` fails if a
+twelfth group arrives without one, and `StreamCheck` refuses the other direction - a
 threshold on a row with no group - at import.
 
 **What no duration sizes: a consumer alive and not reading**, since a reader

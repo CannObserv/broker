@@ -119,6 +119,8 @@ from co_core.pure.adapters.bus.streams import (
     CONTENT_REVISIONS,
     INFO_CHANGES,
     INFO_REGISTRY,
+    INFO_WATCH_CHECK,
+    INFO_WATCH_EVENTS,
     INFO_WATCH_STATUS,
     dlq_name,
     group_name,
@@ -366,6 +368,12 @@ PERSIST_GROUP = group_name(CONTENT_PERSIST, "replicator")
 # second group, beside archiver's - one per consuming service, never a second
 # process in `archiver.revisions`.
 PROVISIONER_GROUP = group_name(CONTENT_REVISIONS, "provisioner")
+# The headless-Watcher pair (CannObserv/broker#93; cannobserv#563, #564, co-core
+# 0.37.0, where both are marked *pending* until broker registers them). Each is
+# created by its consumer, as every group here is: Archiver's on Watcher's fact
+# stream, Watcher's on Archiver's command stream.
+WATCH_EVENTS_GROUP = group_name(INFO_WATCH_EVENTS, "archiver")
+WATCH_CHECK_GROUP = group_name(INFO_WATCH_CHECK, "watcher")
 
 
 # --- the one group whose pending rule is an entry age (CannObserv/broker#78) ---
@@ -461,6 +469,11 @@ DLQ_DRAINERS: dict[str, str] = {
     # The persist command (CannObserv/broker#64): replicator's loop dead-letters
     # an undecodable persist here, as it does for its other two streams.
     dlq_name(CONTENT_PERSIST): "replicator",
+    # The headless-Watcher pair (CannObserv/broker#93): co-core permits both a
+    # DLQ, and each consumer's driver dead-letters an undecodable frame into it
+    # - Archiver's for a watch fact, Watcher's for a malformed WatchCheckCommand.
+    dlq_name(INFO_WATCH_EVENTS): "archiver",
+    dlq_name(INFO_WATCH_CHECK): "watcher",
     # Prospective: info.changes has no consumer group yet (CannObserv/archiver#155),
     # so nothing writes this queue. Recorded now because the day it appears is
     # the day nobody remembers who owns it.
@@ -937,6 +950,49 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         groups=(
             GroupCheck(
                 PERSIST_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
+    ),
+    # The headless-Watcher pair (CannObserv/broker#93), registered before either
+    # end ships: neither stream exists on the node, and a stream nothing has
+    # written is dormant. Each row takes the posture of the stream it is shaped
+    # like, and the two differ in who ships first.
+    #
+    # info.watch-events is content.revisions': Watcher's observed edges, one
+    # group per consuming service, no length or age opinion - a fact publish
+    # carries no maxlen (CannObserv/watcher#327, #369) and no +xtrim selector
+    # names it. Watcher's outbox deploys first and the facts accumulate
+    # ungrouped until Archiver's consumer (CannObserv/archiver#369) creates its
+    # group, at `0` so the backlog is delivered. So the group is dormant until
+    # seen, provisioner's shape, and group-missing every tick once it has been.
+    #
+    # info.watch-check is content.persist's: a command stream with one worker
+    # pool, in no trim path, so any decrease in its length is a fault. Watcher's
+    # consumer runs live before anyone issues (CannObserv/watcher#371; Archiver
+    # issues at F4), so its group exists before the first command and is not
+    # dormant: a stream Archiver has written without it is the go-live order
+    # inverted, which a later create at `$` would turn into skipped checks.
+    #
+    # Both undelivered thresholds are the shared one on the shared assumption -
+    # a blocking XREADGROUP through co-core-aio's driver - and neither consumer
+    # has timed its handler. A watch-check's is a pre-flight and a deferred job,
+    # not the fetch; a watch fact's is a composition recorded in shadow mode.
+    StreamCheck(
+        INFO_WATCH_EVENTS,
+        groups=(
+            GroupCheck(
+                WATCH_EVENTS_GROUP,
+                warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+                dormant_until_seen=True,
+            ),
+        ),
+    ),
+    StreamCheck(
+        INFO_WATCH_CHECK,
+        never_trimmed=True,
+        groups=(
+            GroupCheck(
+                WATCH_CHECK_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
             ),
         ),
     ),

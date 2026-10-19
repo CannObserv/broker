@@ -40,6 +40,8 @@ from co_core.pure.adapters.bus.streams import (
     CONTENT_REVISIONS,
     INFO_CHANGES,
     INFO_REGISTRY,
+    INFO_WATCH_CHECK,
+    INFO_WATCH_EVENTS,
     INFO_WATCH_STATUS,
     StreamKind,
     dlq_name,
@@ -619,7 +621,10 @@ def test_content_blobs_carries_no_retention_opinion() -> None:
 def test_inventory_covers_every_consumer_group_on_the_node() -> None:
     """Widened from Archiver's two to all five (CannObserv/broker#1 Phase 5),
     then to seven with the processing pair (CannObserv/broker#62), then to
-    eight with `replicator.persist` (CannObserv/broker#64).
+    eight with `replicator.persist` (CannObserv/broker#64), nine with
+    `provisioner.revisions` (CannObserv/broker#78), and eleven with the
+    headless-Watcher pair, `archiver.watch-events` and `watcher.watch-check`
+    (CannObserv/broker#93).
 
     The exclusion was inherited from a probe that ran on Archiver's own host,
     where a downstream service's group lag was plausibly its own alerting
@@ -649,6 +654,8 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
         "replicator.replicate",
         "replicator.persist",
         "processor.process",
+        "archiver.watch-events",
+        "watcher.watch-check",
     }
 
 
@@ -720,6 +727,87 @@ def test_content_persist_is_a_never_trimmed_command_stream_with_one_pool() -> No
         == bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
     )
     assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_PERSIST)] == "replicator"
+
+
+# --- the headless-Watcher pair (CannObserv/broker#93) ---
+
+
+def test_info_watch_events_is_an_uncapped_fact_stream_archivers_group_awaits() -> None:
+    """Watcher's observed edges, Archiver's group (cannobserv#563): a fact
+    stream in `content.revisions`' posture - one group per consuming service,
+    no length or age opinion, since a fact publish carries no `maxlen`
+    (CannObserv/watcher#327, #369) and nothing on the instance trims it.
+
+    **Dormant until seen**, provisioner's shape: Watcher deploys its outbox
+    first and the facts accumulate ungrouped until Archiver's consumer
+    (CannObserv/archiver#369) creates the group, at `0`. Before that, absence
+    is go-live not yet run; once seen, it is `group-missing` every tick.
+    """
+    events = _check_for(INFO_WATCH_EVENTS)
+    assert _only_group(events) == GroupCheck(
+        "archiver.watch-events",
+        warn_undelivered_age_seconds=bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        dormant_until_seen=True,
+    )
+    assert events.never_trimmed is False
+    assert events.warn_length is None
+    assert events.warn_last_entry_age_seconds is None
+    assert bus_health.DLQ_DRAINERS[dlq_name(INFO_WATCH_EVENTS)] == "archiver"
+
+
+def test_info_watch_check_is_a_never_trimmed_command_stream_with_one_pool() -> None:
+    """Archiver's "check this item now" (cannobserv#564), Watcher's one
+    worker pool, `watcher.watch-check`: `content.persist`'s posture - never
+    trimmed, so any decrease in its length is a fault.
+
+    **Not dormant.** Watcher's consumer runs live before anyone issues
+    (CannObserv/watcher#371; Archiver issues at F4), so the group exists
+    before the first command. A stream Archiver has written without it is the
+    go-live order inverted, and commands a later `$` create would skip.
+    """
+    check = _check_for(INFO_WATCH_CHECK)
+    assert _only_group(check) == GroupCheck(
+        "watcher.watch-check",
+        warn_undelivered_age_seconds=bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    )
+    assert check.never_trimmed is True
+    assert check.warn_length is None
+    assert check.warn_last_entry_age_seconds is None
+    assert bus_health.DLQ_DRAINERS[dlq_name(INFO_WATCH_CHECK)] == "watcher"
+
+
+async def test_the_headless_watcher_pair_is_silent_before_either_end_ships(fake_redis) -> None:
+    """Neither stream exists on the node at registration (CannObserv/broker#93),
+    and a stream nothing has written is dormant: no row may warn until
+    watcher and archiver ship."""
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    subjects = [f.subject for f in findings]
+    assert not [s for s in subjects if s.startswith(("info.watch-events", "info.watch-check"))]
+
+
+async def test_watch_events_written_before_archivers_group_is_not_a_finding(fake_redis) -> None:
+    """Watcher's outbox ships ahead of Archiver's consumer (watcher#369's
+    stated order): facts with no group yet are the expected interval, and the
+    group arms on its first sighting."""
+    await fake_redis.xadd(INFO_WATCH_EVENTS, {"k": "v"})
+    findings, state = await collect_broker_findings(fake_redis, previous_state={})
+    assert not [f for f in findings if f.subject.startswith(INFO_WATCH_EVENTS)]
+    assert f"{INFO_WATCH_EVENTS}/archiver.watch-events" not in state
+
+    await fake_redis.xgroup_create(INFO_WATCH_EVENTS, "archiver.watch-events", id="0")
+    _, state = await collect_broker_findings(fake_redis, previous_state=state)
+    assert f"{INFO_WATCH_EVENTS}/archiver.watch-events" in state
+
+
+async def test_a_check_issued_before_watchers_group_is_group_missing(fake_redis) -> None:
+    """The inverted go-live order on the command stream: Archiver's first
+    `WatchCheckCommand` lands where no `watcher.watch-check` exists, and a
+    consumer that then creates at `$` skips it."""
+    await fake_redis.xadd(INFO_WATCH_CHECK, {"k": "v"})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    (finding,) = [f for f in findings if f.check == "group-missing"]
+    assert finding.subject == INFO_WATCH_CHECK
+    assert "'watcher.watch-check' does not exist" in finding.message
 
 
 # --- content.revisions' second group: provisioner (CannObserv/broker#78) ---

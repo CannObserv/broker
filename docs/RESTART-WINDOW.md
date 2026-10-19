@@ -296,9 +296,11 @@ rcli acladmin SELECT 0                           # -> OK
 
 # The data, against the snapshot taken before the window. Lengths alone are not
 # enough - entries-added is the counter that tells a trim from a wipe.
-# Every grouped stream: nine groups on eight (docs/STREAMS.md); a test pins it.
+# Every grouped stream: eleven groups on ten (docs/STREAMS.md); a test pins it.
+# The two info.watch-* streams are absent until watcher and archiver ship (#93).
 GROUPED="content.fetch content.blobs content.revisions content.artifacts
-         content.replicate content.persist content.process content.derived"
+         content.replicate content.persist content.process content.derived
+         info.watch-events info.watch-check"
 for s in info.changes info.registry info.watch-status content.fetch-policy \
          content.fetch.dlq $GROUPED; do
     printf '%-22s XLEN=%s entries-added=%s\n' "$s" \
@@ -338,11 +340,15 @@ what arrived between. On replicator's groups (the issuers' claims, broker#67;
 unchanged by CannObserv/replicator#133), watcher re-issues a `replicator.fetch`
 skip after ~30 min, archiver's reaper a `replicator.persist` one after 6 h, at most 3
 times. A `replicator.replicate` one is closed after 6 h and **never
-re-issued**: that is an operator act. Read all nine in the `XINFO GROUPS`
+re-issued**: that is an operator act. Read all eleven in the `XINFO GROUPS`
 output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 `provisioner.revisions`, `archiver.artifacts`, `replicator.replicate`,
-`replicator.persist`, `processor.process`, `watcher.derived` - present, pending
-0, at the tip once an entry arrives. The exception is `provisioner.revisions`,
+`replicator.persist`, `processor.process`, `watcher.derived`,
+`archiver.watch-events`, `watcher.watch-check` - present, pending
+0, at the tip once an entry arrives. The last two are absent, with their
+streams, until watcher and archiver ship (CannObserv/broker#93); `archiver.watch-events`
+can also be absent from a stream that exists, until archiver's consumer first
+runs. The exception is `provisioner.revisions`,
 whose consumer holds entries on purpose: judge it by pending age, not pending
 count ([BUS-HEALTH.md](BUS-HEALTH.md), *Pending age*).
 

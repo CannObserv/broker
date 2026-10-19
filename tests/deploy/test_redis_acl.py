@@ -38,6 +38,8 @@ from co_core.pure.adapters.bus.streams import (
     CONTENT_REVISIONS,
     INFO_CHANGES,
     INFO_REGISTRY,
+    INFO_WATCH_CHECK,
+    INFO_WATCH_EVENTS,
     INFO_WATCH_STATUS,
     dlq_name,
     group_name,
@@ -465,22 +467,29 @@ def inventory_rows() -> dict[str, list[str]]:
     return rows
 
 
-def documented_producers() -> dict[str, str]:
-    """``stream -> the service that produces it``, read off ../docs/STREAMS.md.
+def documented_producers() -> dict[str, frozenset[str]]:
+    """``stream -> the services that produce it``, read off ../docs/STREAMS.md.
 
     Parsed rather than mirrored, for the reason
     ``test_every_connected_participant_is_where_the_docs_say`` parses the
     participants table: the inventory is what an operator reads, and a constant
     beside it in this repo would be a second copy with nothing comparing them.
-    The producer is the left half of the ``Producer → consumer`` cell, with
-    markdown emphasis stripped - ``**Archiver** → Watcher *(consumer live)*``
-    names Archiver.
+    The producers are the left half of the ``Producer → consumer`` cell, comma
+    separated, with markdown emphasis stripped - ``**Archiver** → Watcher
+    *(consumer live)*`` names Archiver.
+
+    A set since CannObserv/broker#93: `content.fetch-policy` is granted to
+    Watcher and Archiver both from Archiver's dark build until Watcher's grant
+    is withdrawn at the jump (CannObserv/broker#95). Every other stream names
+    one.
     """
-    found: dict[str, str] = {}
+    found: dict[str, frozenset[str]] = {}
     for topic, cells in inventory_rows().items():
-        producer = cells[PRODUCER_CELL].split("→")[0].strip(" *").lower()
-        assert producer in SERVICE_USERS, f"{topic}'s producer cell names {producer!r}"
-        found[topic] = producer
+        named = cells[PRODUCER_CELL].split("→")[0]
+        producers = frozenset(p.strip(" *").lower() for p in named.split(","))
+        unknown = sorted(producers - set(SERVICE_USERS))
+        assert not unknown, f"{topic}'s producer cell names {unknown}"
+        found[topic] = producers
     return found
 
 
@@ -609,11 +618,11 @@ def test_a_service_can_publish_exactly_the_streams_it_produces(users, user) -> N
     producers = documented_producers()
     publishable = selector_patterns(users[user], "+xadd")
     for topic, producer in sorted(producers.items()):
-        if producer == user:
+        if user in producer:
             assert admits(publishable, topic), f"{user} produces {topic} and cannot publish it"
         else:
             assert not admits(publishable, topic), (
-                f"{user} can publish {topic}, which {producer} produces - "
+                f"{user} can publish {topic}, which {sorted(producer)} produces - "
                 f"{user} only consumes it, so this is a consumer that can forge its own work"
             )
 
@@ -774,7 +783,7 @@ def test_no_root_names_a_stream_the_service_produces(users, user) -> None:
     stream on it hands the producer whatever the root holds - the group
     commands until broker#43, and any read added there later. Processor and
     the processing pair started this way (broker#62); the rest followed."""
-    produced = {topic for topic, producer in documented_producers().items() if producer == user}
+    produced = {topic for topic, producers in documented_producers().items() if user in producers}
     named = sorted(t for t in produced if admits(root_key_patterns(users[user]), t))
     assert not named, f"{user}'s root names {named}, which it produces"
 
@@ -790,17 +799,35 @@ ANSWERED_READS: dict[str, dict[str, frozenset[str]]] = {
     "archiver": {
         "+xread": frozenset({INFO_WATCH_STATUS}),
         "+xpending": frozenset({CONTENT_REVISIONS, CONTENT_ARTIFACTS}),
-        "+xlen": frozenset({dlq_name(CONTENT_REVISIONS), dlq_name(CONTENT_ARTIFACTS)}),
-        "+xrange": frozenset({dlq_name(CONTENT_REVISIONS), dlq_name(CONTENT_ARTIFACTS)}),
+        # info.watch-events.dlq's pair is the drainer's audit, derived from the
+        # role (CannObserv/broker#93) rather than answered: archiver#369 has
+        # no call site yet, and watcher's two queues were derived the same way.
+        "+xlen": frozenset(
+            {dlq_name(CONTENT_REVISIONS), dlq_name(CONTENT_ARTIFACTS), dlq_name(INFO_WATCH_EVENTS)}
+        ),
+        "+xrange": frozenset(
+            {dlq_name(CONTENT_REVISIONS), dlq_name(CONTENT_ARTIFACTS), dlq_name(INFO_WATCH_EVENTS)}
+        ),
     },
     "watcher": {
         "+xread": frozenset({INFO_REGISTRY}),
         "+xinfo|stream": frozenset({INFO_WATCH_STATUS}),
         "+xrange": frozenset(
-            {INFO_WATCH_STATUS, dlq_name(CONTENT_BLOBS), dlq_name(CONTENT_DERIVED)}
+            {
+                INFO_WATCH_STATUS,
+                dlq_name(CONTENT_BLOBS),
+                dlq_name(CONTENT_DERIVED),
+                dlq_name(INFO_WATCH_CHECK),
+            }
         ),
         "+xlen": frozenset(
-            {CONTENT_FETCH, CONTENT_REVISIONS, dlq_name(CONTENT_BLOBS), dlq_name(CONTENT_DERIVED)}
+            {
+                CONTENT_FETCH,
+                CONTENT_REVISIONS,
+                dlq_name(CONTENT_BLOBS),
+                dlq_name(CONTENT_DERIVED),
+                dlq_name(INFO_WATCH_CHECK),
+            }
         ),
     },
     "replicator": {
@@ -1003,7 +1030,7 @@ def test_a_service_publishes_through_one_selector(users, user) -> None:
     """
     _root, selectors = split_rules(users[user])
     publishing = [selector for selector in selectors if "+xadd" in selector]
-    if user not in documented_producers().values():
+    if not any(user in producers for producers in documented_producers().values()):
         # provisioner publishes nothing on the bus (CannObserv/broker#78).
         assert not publishing, f"{user} produces nothing and holds {publishing}"
         return
@@ -1294,6 +1321,89 @@ def test_replicator_stanza_names_the_source_its_persist_grant_was_read_off() -> 
     prose = stanza("replicator")
     for needle in ("CannObserv/broker#64", "CannObserv/replicator#114"):
         assert needle in prose, f"replicator's stanza does not name {needle}"
+
+
+# --- the headless-Watcher pair (CannObserv/broker#93) ---
+#
+# `info.watch-events` (watcher -> archiver, a fact) and `info.watch-check`
+# (archiver -> watcher, a command), cannobserv#563 and #564, co-core 0.37.0.
+# Read off the contract and co-core-aio's driver, not captured: neither end
+# has run against this node. The group commands, the queues' writes and
+# disposals, and the publish halves are asserted by the parametrised tests
+# above from the two inventory rows; what is here is what they do not say.
+
+
+def test_watcher_publishes_info_watch_events_and_cannot_cap_it(users) -> None:
+    """The fact stream's producer: `+xadd` in its one publish selector, in no
+    `+xtrim` selector - a trim before Archiver's group exists would delete
+    facts the group, created at `0`, was going to be delivered - and no key
+    on the queue, which is the consumer's to write and drain."""
+    rules = users["watcher"]
+    assert admits(selector_patterns(rules, "+xadd"), INFO_WATCH_EVENTS)
+    assert not admits(selector_patterns(rules, "+xtrim"), INFO_WATCH_EVENTS)
+    assert not admits(key_patterns(rules), dlq_name(INFO_WATCH_EVENTS)), (
+        "the queue is archiver's to write and drain, not the producer's"
+    )
+
+
+def test_archiver_issues_info_watch_check_and_can_neither_read_nor_cap_it(users) -> None:
+    """The command stream's issuer, `content.persist`'s shape: `+xadd` in a
+    selector and nothing else - no group command, so archiver cannot take
+    delivery in watcher's group (broker#43's hole), and no trim, so the stream
+    is Never XTRIMmed from its first day."""
+    rules = users["archiver"]
+    assert admits(selector_patterns(rules, "+xadd"), INFO_WATCH_CHECK)
+    assert not admits(root_key_patterns(rules), INFO_WATCH_CHECK)
+    for command in GROUP_CONSUMER_COMMANDS:
+        assert not reaches(rules, command, INFO_WATCH_CHECK), (
+            f"archiver holds {command} on the command stream it issues"
+        )
+    assert not admits(selector_patterns(rules, "+xtrim"), INFO_WATCH_CHECK)
+    assert not admits(key_patterns(rules), dlq_name(INFO_WATCH_CHECK))
+
+
+def test_archivers_xpending_stays_on_the_two_streams_its_dashboard_reads(users) -> None:
+    """`info.watch-events` joins archiver's consume selector and `+xpending`
+    does not follow it: the dashboard's lag read names `content.revisions` and
+    `content.artifacts` (CannObserv/archiver#321), so the read moved into a
+    selector of its own rather than riding the group commands onto a third
+    stream nobody asked it on."""
+    rules = users["archiver"]
+    assert reaches(rules, "+xreadgroup", INFO_WATCH_EVENTS)
+    assert not reaches(rules, "+xpending", INFO_WATCH_EVENTS)
+
+
+def test_content_fetch_policy_has_two_producers_until_watchers_grant_is_withdrawn(
+    users,
+) -> None:
+    """The second producer arrives before the first leaves (CannObserv/broker#93):
+    Archiver's producer builds dark and starts at F1 with a full-set republish,
+    Watcher's stops first, and its grant is withdrawn at the jump
+    (CannObserv/broker#95). Two writers at once is the design's named failure
+    (D8, "two fetch-policy producers fight LWW"), which no ACL can refuse -
+    both must hold `+xadd` across the flip - so this pins the window's shape and
+    names the issue that closes it. Neither can trim it: the cap rides each
+    publish's MAXLEN."""
+    assert documented_producers()[CONTENT_FETCH_POLICY] == {"watcher", "archiver"}
+    for user in ("watcher", "archiver"):
+        assert admits(selector_patterns(users[user], "+xadd"), CONTENT_FETCH_POLICY)
+        assert not admits(selector_patterns(users[user], "+xtrim"), CONTENT_FETCH_POLICY)
+    assert "CannObserv/broker#95" in stanza("watcher")
+
+
+def test_the_headless_watcher_stanzas_name_their_contract_and_design() -> None:
+    """Read off the contract, not the wire: each stanza says which, so the next
+    reader can tell these grants from the captured ones."""
+    for user, needles in (
+        ("watcher", ("CannObserv/broker#93", "CannObserv/watcher#369", "CannObserv/watcher#371")),
+        (
+            "archiver",
+            ("CannObserv/broker#93", "CannObserv/archiver#369", "CannObserv/archiver#366"),
+        ),
+    ):
+        prose = stanza(user)
+        for needle in needles:
+            assert needle in prose, f"{user}'s stanza does not name {needle}"
 
 
 def test_default_is_declared_disabled_and_still_carries_a_password(users) -> None:
@@ -1940,7 +2050,7 @@ def test_a_service_is_served_the_streams_it_produces_and_refused_the_rest(
     client = tracked_acl_broker(user)
     producers = documented_producers()
     for topic, producer in sorted(producers.items()):
-        if producer == user:
+        if user in producer:
             assert client.xadd(topic, {"k": "v"}), f"{user} produces {topic} and was refused"
         else:
             with pytest.raises(redis_pkg.exceptions.NoPermissionError):
@@ -2439,6 +2549,55 @@ def test_replicator_drains_content_persist_dlq_without_trimming_it(tracked_acl_b
             refused()
 
 
+def test_watcher_publishes_info_watch_events_and_is_refused_the_rest(tracked_acl_broker) -> None:
+    """Watcher's half of the pair on redis's own matcher (CannObserv/broker#93):
+    it publishes the facts, cannot cap them, cannot write archiver's queue, and
+    drains its own command queue per entry, never by trim."""
+    client = tracked_acl_broker("watcher")
+    assert client.xadd(INFO_WATCH_EVENTS, {"k": "v"}), "watcher cannot publish a watch fact"
+    queue = dlq_name(INFO_WATCH_CHECK)
+    parked = client.xadd(queue, {"k": "poison"})
+    assert client.xrange(queue, min=parked, max=parked)
+    assert client.xdel(queue, parked) == 1, "watcher can fill its queue and not empty it"
+    for refused in (
+        lambda: client.xtrim(INFO_WATCH_EVENTS, maxlen=0),
+        lambda: client.xadd(dlq_name(INFO_WATCH_EVENTS), {"k": "v"}),
+        lambda: client.xadd(INFO_WATCH_CHECK, {"k": "forged"}),
+        lambda: client.xtrim(INFO_WATCH_CHECK, maxlen=0),
+        lambda: client.xtrim(queue, maxlen=0),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
+
+
+def test_archiver_issues_info_watch_check_and_is_refused_the_rest(tracked_acl_broker) -> None:
+    """Archiver's half: it issues a check and publishes the LWW policy, cannot
+    cap, read or acknowledge the command stream, and drains its own fact queue
+    per entry, never by trim."""
+    client = tracked_acl_broker("archiver")
+    assert client.xadd(INFO_WATCH_CHECK, {"k": "v"}), "archiver cannot issue a check"
+    assert client.xadd(CONTENT_FETCH_POLICY, {"k": "v"}), "archiver cannot publish fetch policy"
+    queue = dlq_name(INFO_WATCH_EVENTS)
+    parked = client.xadd(queue, {"k": "poison"})
+    assert client.xrange(queue, min=parked, max=parked)
+    assert client.xdel(queue, parked) == 1, "archiver can fill its queue and not empty it"
+    group = group_name(INFO_WATCH_CHECK, "watcher")
+    for refused in (
+        lambda: client.xtrim(INFO_WATCH_CHECK, maxlen=0),
+        lambda: client.xrange(INFO_WATCH_CHECK),
+        lambda: client.xreadgroup(group, "worker", {INFO_WATCH_CHECK: ">"}),
+        lambda: client.xack(INFO_WATCH_CHECK, group, "0-1"),
+        lambda: client.xadd(dlq_name(INFO_WATCH_CHECK), {"k": "v"}),
+        lambda: client.xadd(INFO_WATCH_EVENTS, {"k": "forged"}),
+        lambda: client.xtrim(INFO_WATCH_EVENTS, maxlen=0),
+        lambda: client.xpending(INFO_WATCH_EVENTS, "archiver.watch-events"),
+        lambda: client.xtrim(CONTENT_FETCH_POLICY, maxlen=0),
+        lambda: client.xtrim(queue, maxlen=0),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
+
+
 @pytest.mark.parametrize(
     ("topic", "consumer"),
     sorted((t, c) for t, cs in documented_group_consumers().items() for c in cs),
@@ -2458,7 +2617,8 @@ def test_only_the_consumer_can_create_and_take_delivery_in_its_group(
     the intruder could not take. Once per consuming service, so each of
     `content.revisions`' two groups is asked (CannObserv/broker#78).
     """
-    producer = documented_producers()[topic]
+    # A grouped stream has one producer; only the groupless LWW has two.
+    (producer,) = documented_producers()[topic]
     group = group_name(topic, consumer)
     admin = fresh_acl_broker("acladmin")
     intruder = fresh_acl_broker(producer)
