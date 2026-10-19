@@ -114,3 +114,33 @@ The *before* gap row is worse than #45 recorded: `stream-age` clears once the
 producer is back, and the length finding then stood alone until the gap trimmed
 out, whatever its length. A period *lengthened* at home and not here reads the
 set low permanently, the same mirror failure as any other.
+
+## Two producers across F1
+
+`content.fetch-policy` has two producers from CannObserv/broker#93 until
+Watcher's grant is withdrawn (CannObserv/broker#95): Watcher's, and Archiver's
+(CannObserv/archiver#366), which builds dark and takes over at F1 with a
+full-set republish and the same cap and floor. **Neither check changes while
+one publishes at a time**, which is the flip's rule (the design's D8, one hard
+flip, no dual-run). The set read off the stream follows whichever producer is
+writing, and the flip itself (a gap, then a full set) is the gap and the step
+the readings above already survive, with `stream-age` if the gap passes 15 min.
+The mirrored 500 and the 10-set floor move from Watcher's environment to
+Archiver's at F1 (CannObserv/broker#94).
+
+**Both at once is invisible while the sets are small.** Replayed with the
+harness above, each producer on its own `*/5`, offset a minute
+[measured 2026-10-19]:
+
+| Sets (Watcher + Archiver) | `stream-length` after dual-run starts |
+|---|---|
+| 3 + 4, 4 + 4, 30 + 30 | never |
+| 60 + 60, 100 + 100 | standing from 8.5 periods, naming the faster republish |
+
+Below the floor each producer's own `MAXLEN ~500` holds the length under the
+550 threshold, and the summed set read off the stream times ten stays under the
+500 default. The probe only sees dual-run once the floor governs, as the
+`R > 1` case. At today's sizes it shows in Replicator's journal instead: one
+`ignoring a fetch policy without a generation` line per Watcher frame once a
+host holds an Archiver frame (CannObserv/replicator#135, stated on
+CannObserv/archiver#366).
