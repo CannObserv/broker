@@ -16,7 +16,13 @@ from pathlib import Path
 import pytest
 
 from src.broker import checkin, drift
-from tests.deploy.conftest import LIVE, outcome_of, pretend_node, read_installed
+from tests.deploy.conftest import (
+    LIVE,
+    outcome_of,
+    pretend_node,
+    read_installed,
+    require_broker_node,
+)
 
 _REPO = Path(__file__).resolve().parents[2]
 REPO_SERVICE = _REPO / "deploy" / "broker-drift.service"
@@ -84,16 +90,29 @@ def test_service_holds_no_redis_credential_and_no_env_file() -> None:
     assert "BROKER_REDIS_URL" not in text
 
 
-def test_service_sees_nothing_under_etc_broker_or_home() -> None:
-    """Belt and braces under DynamicUser: the credential is read by PID 1 before the
-    namespace exists, so the process needs nothing in /etc/broker, and the dev
-    tree's .env holds the cohort's GitHub tokens."""
+def test_service_sees_no_home_and_hides_nothing_its_credential_needs() -> None:
+    """The dev tree's .env, under /home, holds the cohort's GitHub tokens. Nothing
+    may hide /etc/broker (CR 2): the credential's source is there, and whether
+    systemd reads it before the mount namespace is not documented. A dynamic user
+    reads nothing there anyway (test_etc_broker_holds_nothing_a_dynamic_user_reads)."""
     text = REPO_SERVICE.read_text()
-    assert _directive(text, "TemporaryFileSystem") == ["/etc/broker:ro"]
+    key_dir = str(Path(KEY_FILE).parent)
+    for key in ("TemporaryFileSystem", "InaccessiblePaths", "BindPaths", "BindReadOnlyPaths"):
+        assert not [v for v in _directive(text, key) if key_dir in v], key
     assert _directive(text, "ProtectHome") == ["yes"]
     assert _directive(text, "ProtectSystem") == ["strict"]
     assert _directive(text, "PrivateTmp") == ["yes"]
     assert _directive(text, "NoNewPrivileges") == ["yes"]
+
+
+def test_etc_broker_holds_nothing_a_dynamic_user_reads() -> None:
+    """What stands in for a hidden /etc/broker: every file there is root's, and none
+    is readable by a user outside root's and exedev's groups. On the node only."""
+    require_broker_node()
+    readable = sorted(
+        p.name for p in Path("/etc/broker").iterdir() if p.is_file() and p.stat().st_mode & 0o004
+    )
+    assert readable == [], f"world-readable under /etc/broker: {readable}"
 
 
 def test_service_bounds_its_own_runtime_and_never_restarts() -> None:
