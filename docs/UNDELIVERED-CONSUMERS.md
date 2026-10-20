@@ -122,7 +122,7 @@ sleep, the 120 s whole-fetch deadline and a 30 s store, 160 s
 two of those - the handler in flight, then one reclaim (replicator's
 `PollCadence`, CannObserv/replicator#98) - so the threshold is 320 s,
 `CAPTURE_WARN_UNDELIVERED_AGE_SECONDS`, derived. `replicator.fetch` shares the
-sum and keeps five minutes, a gap of its own.
+sum and keeps five minutes: CannObserv/broker#117.
 `test_every_probed_group_carries_an_undelivered_threshold` fails if a
 thirteenth group arrives without one, and `StreamCheck` refuses the other direction - a
 threshold on a row with no group - at import.

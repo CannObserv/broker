@@ -274,7 +274,7 @@ durations, which is the figure an undelivered-age threshold has to clear"
 ceiling are over the shared 300 s, so a slow capture beside a reclaimed one
 would warn with nothing wrong. Derived, so it moves with the ceiling's movers
 (CannObserv/broker#114, CR 2). The fetch row shares the handler sum and still
-takes the shared value; that gap is its own issue."""
+takes the shared value: CannObserv/broker#117."""
 
 # Every length threshold is its stream's retention cap plus this margin, so a
 # warning means the retention mechanism itself broke rather than that traffic
