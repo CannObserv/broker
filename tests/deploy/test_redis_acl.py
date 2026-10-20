@@ -22,6 +22,7 @@ than as a property of the pattern list.
 import contextlib
 import fnmatch
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -1470,6 +1471,39 @@ def test_the_headless_watcher_stanzas_name_their_contract_and_design() -> None:
         prose = stanza(user)
         for needle in needles:
             assert needle in prose, f"{user}'s stanza does not name {needle}"
+
+
+_ACL_USER_LINE = re.compile(r"^user \S+ (?:on|off) ", re.MULTILINE)
+_PLACEHOLDER = re.compile(r"^>__[A-Z]+_PW__$")
+
+
+def test_the_tracked_acl_file_is_the_only_tracked_acl() -> None:
+    """No other tracked file carries a `user` line (CannObserv/broker#114, CR 1).
+
+    A rehearsal renders the file with a password per user and loads it into a
+    throwaway server. #114's rehearsal wrote those rendered copies under the
+    checkout, and `git add -A` committed fourteen of them to main, one deploy
+    away from the release. The password was a throwaway. A real one would take
+    the same path and nothing would have said so, so the tracked file is the one
+    place an ACL line may live, and its every password is a placeholder.
+    """
+    repo = ACL_FILE.parents[1]
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.split("\0")
+    carrying = []
+    for path in filter(None, tracked):
+        try:
+            text = (repo / path).read_text()
+        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+            continue
+        if _ACL_USER_LINE.search(text):
+            carrying.append(path)
+    assert carrying == [str(ACL_FILE.relative_to(repo))], carrying
+    for line in _ACL_USER_LINE.finditer(ACL_FILE.read_text()):
+        rest = ACL_FILE.read_text()[line.start() :].split("\n", 1)[0].split()
+        secrets = [t for t in rest if t.startswith(">")]
+        assert all(_PLACEHOLDER.match(t) for t in secrets), f"{rest[1]}: {secrets}"
 
 
 def test_default_is_declared_disabled_and_still_carries_a_password(users) -> None:
