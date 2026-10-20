@@ -144,8 +144,8 @@ def test_timer_is_hourly_and_starts_after_boot() -> None:
 def test_the_readme_runbook_names_the_units_monitor() -> None:
     """The transient --test-alert copies the unit's Environment=, and the README
     quotes the id beside it for reading co-status back: one id, everywhere."""
-    text = README.read_text()
-    ids = set(re.findall(r"\b01[0-9A-HJKMNP-TV-Z]{24}\b", text.split("## The drift check")[1]))
+    section = README.read_text().split("\n## The drift check", 1)[1].split("\n## ", 1)[0]
+    ids = set(re.findall(r"\b01[0-9A-HJKMNP-TV-Z]{24}\b", section))
     assert ids == {MONITOR}
 
 
