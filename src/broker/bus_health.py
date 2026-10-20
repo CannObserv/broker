@@ -214,7 +214,10 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 #
 # A consumer that ever moves to a schedule rather than a blocking read needs its
 # own value on its row: that schedule's period plus margin, with the source
-# named the way a mirrored constant names its owner. The two groups declared
+# named the way a mirrored constant names its owner. So does one whose two
+# slowest handlers outlast five minutes: `replicator.capture` takes
+# CAPTURE_WARN_UNDELIVERED_AGE_SECONDS for that reason (CannObserv/broker#114),
+# and `replicator.fetch`, on the same handler, is CannObserv/broker#117. The two groups declared
 # ahead of their consumers by CannObserv/broker#62 - `processor.process` (the
 # worker pool #62 gave observo, re-homed by CannObserv/broker#75) and
 # `watcher.derived` - take this value on the same assumption, a blocking read
