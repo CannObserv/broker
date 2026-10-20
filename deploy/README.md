@@ -1,7 +1,8 @@
 # deploy/
 
 Everything the broker node runs, tracked. Four of these are Redis's, two are
-the health probe's, two are the backup's, and five protect the node's memory.
+the health probe's, two are the backup's, two are the drift check's, and five
+protect the node's memory.
 
 | File | Installs as | Purpose |
 |---|---|---|
@@ -13,6 +14,8 @@ the health probe's, two are the backup's, and five protect the node's memory.
 | `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day, and `default` made a tombstone on 2026-09-29 (broker#52). Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
 | `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). Ships the service users' ACL digests beside each snapshot, refusing any plaintext line (broker#72). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
+| `broker-drift.service` | `/etc/systemd/system/` | Does live lag `origin/main` in code that runs? Asks GitHub, checks in to co-status's `co-broker-drift` once a run (#110). `DynamicUser=`, the co-status key as a `LoadCredential=`, **no Redis credential** and no `.env`. Runs `/srv/broker/live`; see *The drift check* below |
+| `broker-drift.timer` | `/etc/systemd/system/` | Hourly, 5 min after boot. Enabled by the deploy that first installs it, once it verifies |
 | `sysctl.d/60-broker-memory.conf` | `/etc/sysctl.d/` | `vm.min_free_kbytes` 64 MiB: the reserve atomic allocations draw on (broker#21) |
 | `system.slice.d/broker-memory.conf` | `/etc/systemd/system/system.slice.d/` | `MemoryLow=` for the slice - without it the two below protect nothing, because this node has no `memory_recursiveprot` |
 | `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`: out of earlyoom's reach, and the kernel's last resort after dev tooling and the small daemons. `broker.conf` beside it stays ordering-only |
@@ -337,6 +340,10 @@ printf 'BROKER_BACKUP_BUCKET=co-gcs-broker-backup\nGOOGLE_APPLICATION_CREDENTIAL
 sudo systemctl daemon-reload
 sudo systemctl enable --now broker-backup.timer      # after the key exists
 
+# The drift check (#110): its key BEFORE the deploy that installs its units,
+# which enables the timer once it verifies, and whose first run checks in at
+# once. The copy: The drift check, below.
+
 # Memory protection (broker#21). All live - nothing on the bus restarts:
 # daemon-reload applies MemoryLow= to running units (checked on a scratch unit).
 sudo install -m 0644 -D deploy/sysctl.d/60-broker-memory.conf /etc/sysctl.d/60-broker-memory.conf
@@ -420,7 +427,7 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
 3. **Switch** `live` with a `sudo` rename.
 4. **Install** each `deploy/broker-*.{service,timer}` that differs from its
    installed copy, with one `daemon-reload`. A new unit is installed, never
-   enabled.
+   enabled, with one exception: `broker-drift.timer` (step 6).
 5. **Verify** each unit the deploy changed: one whose unit file it installed,
    or one that runs `live` when `live` moved.
    - The probe is verified by its **next natural tick**, never a forced one,
@@ -428,13 +435,21 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
      sha12.
    - The backup is verified by one forced run, after any running one finishes.
      The run must report `uploaded` or `unchanged`, with that sha12.
+   - The drift check is not verified, on purpose: its hourly run and
+     `co-broker-drift` are its check (#110). The deploy does import
+     `src.broker.drift` from the release before it switches.
    - On failure, `live` and the units switch back, and the old build is proved
      the same way.
    - A quiet deploy can take up to 15 minutes waiting for the probe's tick,
      and twice that when it switches back.
    - The deploy reads the tick's summary line from the system journal. `exedev`
      can read that journal because it is in `adm`.
-6. **Compare** the host configs, then **prune** to 5 releases plus `live`.
+6. **Enable `broker-drift.timer`** if this deploy installed it new, after it
+   verified. `--now` starts it, and its first run fires at once
+   (`journalctl -u broker-drift -n 5`). A switched-back deploy never enables
+   it, and one installed before is never enabled again, so an operator's
+   `systemctl disable --now` sticks. A failed enable is a note.
+7. **Compare** the host configs, then **prune** to 5 releases plus `live`.
 
 **Run it detached when an agent runs it.** A deploy can outlast a 10-minute
 tool call: up to 600 s waiting for CI, then up to 900 s for a probe tick, and
@@ -665,6 +680,9 @@ the live file, so a variable added there on the node fails it.
 `/etc/broker/status.env` (`0400 root:root`, **optional**) carries the check-in
 credential - see *The co-status check-in* below.
 
+`/etc/broker/status-checkin.key` (`0400 root:root`) carries the same key alone,
+for the drift check's `LoadCredential=` - see *The drift check* below.
+
 `/etc/broker/backup.env` (`0400 root:root`, **required by the backup unit**,
 which loads nothing else) carries `BROKER_BACKUP_BUCKET` and the
 `GOOGLE_APPLICATION_CREDENTIALS` path of the **writer** key. Not in
@@ -758,7 +776,7 @@ of check-ins, a wrong destination would not degrade it but **invert** it:
 reports land where nothing alarms, the production monitor receives nothing, and
 it declares a healthy broker dead. The retired `notifier:9000` is the same trap
 one host over. So the operator supplies a monitor id and the base URL is a
-constant in `src/broker/bus_health.py`. Same move as `databases 1` against the
+constant in `src/broker/checkin.py`, which the drift check posts from too. Same move as `databases 1` against the
 db15 vector - make the wrong destination unnameable rather than merely
 discouraged.
 
@@ -806,6 +824,122 @@ silence does not.
 Silence is the half this probe exists for. The cutover relies on the same
 asymmetry: the monitor is imported disabled, the first check-in lands on it,
 and only then is it enabled.
+
+## The drift check (broker#110)
+
+Since #107 a merge reaches nothing the probe runs until `scripts/deploy.sh`.
+`broker-drift.timer` asks, hourly, whether that has been left undone:
+`python -m src.broker.drift`, from `/srv/broker/live`, asks GitHub how far the
+release's `REVISION` is behind `main`, and checks in once to co-status's
+`co-broker-drift` monitor (id `01M5CVMEFPKRGP2Y48F7QTPP7D`, tenant `co-broker`,
+CannObserv/status#51). A unit of its own, not a probe finding, so a lag you mean
+to keep is silenced without silencing the bus (#22 D6). The rules are
+`src/broker/drift.py`, ported from CannObserv/processor's.
+
+**What runs** is `src/`, `deploy/broker-*`, `scripts/deploy.sh`,
+`pyproject.toml` and `uv.lock`, defined once in `drift.py`. The rest of
+`deploy/` is installed by hand and never runs from `live`, and docs, tests, CI
+and the skills never run at all. The commit the skills hook pushes every day,
+and the weekly context measurement (a workflow's push, which gets no CI run),
+are therefore `ok` at any age.
+
+Each run logs one `drift check` record (`journalctl -u broker-drift -n 5 -o cat`)
+with `build`, `main`, `kind`, `body` and `checkin`, and sends `kind`, `live`,
+`main` and `body` on every check-in. Every `alert` carries `metadata.fault`, its
+`kind`, so a change of fault reports at once; an `ok` carries no metadata.
+
+| `kind` | Means | Do |
+|---|---|---|
+| `ok` | live is `main`, behind only in what never runs, or behind in code for 8 h or less since the push | nothing |
+| `lag` | behind in code for more than 8 h since the push (timed from that push's CI run); the body names `main`'s CI | deploy `main`'s tip, `~/broker/scripts/deploy.sh`; or, to keep the lag, silence it (below) |
+| `off_main` | GitHub says live is not on `main`, or does not know it | deploy `origin/main`: a deploy never builds off `main`, so a hand-made link or a rewritten `main` is the likeliest cause |
+| `unstamped` | live has no `REVISION` (`dev`), an unreadable or empty one (`unknown`), or one that is not a commit id; sent as `live: unknown`, the body says which | deploy again: the release is a broken one |
+| `test` | `--test-alert`, by hand | the next run sends *has cleared* |
+
+**GitHub silent** (a rate limit, a 5xx, a timeout) sends **no check-in** and
+exits 1, so a long outage ends in `missing`, never a false `ok`. The record
+says `checkin: null` and the body quotes GitHub. A 422 from co-status (a
+template preview that failed, nothing recorded) or any answer but 202 is a
+failed run too: exit 1, `checkin: failed: ...`, no retry; the next hour is it.
+
+**`missing`** on `co-broker-drift` (2.5 h with no check-in) means the drift
+check is not reporting: the timer is stopped, the node is down, the tailnet path
+is gone, the key is wrong (`checkin: failed: 401 ...`), or GitHub was silent two
+runs running. It says nothing about the Redis broker, which `co-broker` watches.
+
+**Silencing a lag you mean to keep:** `sudo systemctl stop broker-drift.timer`,
+and `start` it when the lag ends. `co-broker-drift` reads `missing` after
+2.5 h, as intended: a silenced check should look silenced.
+
+**Rolling back past #110** leaves the timer running a release with no
+`src/broker/drift.py`: every run fails and the monitor goes `missing`. The
+deploy never removes a unit; it says the drift units are not in the release.
+Stop it with `sudo systemctl disable --now broker-drift.timer`, and enable it
+again by hand after deploying forward, since the deploy enables it only the
+first time it installs it.
+
+**Budget:** GitHub is asked unauthenticated, as the deploy gate asks it: 60
+requests an hour per address, shared with `scripts/deploy.sh`. A run costs 1 in
+sync or behind in docs, 2 behind in code, and at most 10 past the grace.
+
+**No Redis.** The unit holds no Redis credential, loads no `EnvironmentFile=`,
+and the module imports no Redis client, so `ACL LOG` cannot gain an entry from
+it. `tests/deploy/test_drift_units.py` and `tests/test_drift.py` pin both.
+
+### The key
+
+The drift check presents `co-broker`'s production key, `co-broker-checkin`, the
+one the probe sends from `/etc/broker/status.env`. `LoadCredential=` needs it
+in a file of its own, `/etc/broker/status-checkin.key`, `0400 root:root`,
+holding the key alone. Copy it inside the root shell, so the key is only ever a
+shell variable and `printf`'s output, never an `argv`:
+
+```bash
+sudo sh -c 'set -eu; umask 077
+  set -a; . /etc/broker/status.env; set +a
+  install -m 0400 -o root -g root /dev/null /etc/broker/status-checkin.key
+  printf "%s\n" "$STATUS_API_KEY" > /etc/broker/status-checkin.key
+  a=$(printf %s "$STATUS_API_KEY" | sha256sum); b=$(tr -d "\n" < /etc/broker/status-checkin.key | sha256sum)
+  if [ "$a" = "$b" ]; then echo "status-checkin.key: matches status.env"; else echo "status-checkin.key: DIFFERS"; exit 1; fi'
+sudo stat -c '%U:%G %a' /etc/broker/status-checkin.key      # root:root 400
+```
+
+The unit reads it at each start: nothing to reload. Absent, the unit's
+`SetCredential=` fallback runs the check, logs `not sent: missing the
+status-checkin-key credential`, and exits 1. The backup's `/etc/broker`
+allowlist hides it from the backup, and the probe's `exedev` cannot read it.
+
+**Rotating `co-broker-checkin`** is now two files: put the new key in
+`/etc/broker/status.env` (*The co-status check-in*, above), then run the copy
+above again, which replaces `/etc/broker/status-checkin.key` from it. Until
+both are done, the probe or the drift check presents the old key and gets a 401.
+
+### Reading it, and the test alert
+
+```bash
+sudo systemctl start broker-drift.service             # one run now: drift check, kind, checkin: 202
+journalctl -u broker-drift -n 5 -o cat --no-pager
+systemctl list-timers broker-drift.timer              # the next run
+
+# co-status's view: last_checkin_at, last_status, last_variables, fault_key.
+# The key reaches curl on stdin, never its argv.
+sudo sh -c 'printf "X-API-Key: %s\n" "$(cat /etc/broker/status-checkin.key)" |
+  curl -s -H @- http://status:9000/api/v1/monitors/01M5CVMEFPKRGP2Y48F7QTPP7D' | python3 -m json.tool
+
+# One deliberate alert (kind: test, metadata.fault: test), asking GitHub nothing.
+# A transient unit holding the same credential and the unit's own Environment=,
+# since the key is root's alone. It reports at once, enabled or not; the next
+# `systemctl start broker-drift.service` sends "has cleared".
+sudo systemd-run --quiet --pipe --wait --collect -p DynamicUser=yes \
+  -p LoadCredential=status-checkin-key:/etc/broker/status-checkin.key \
+  -p "$(systemctl show -p Environment broker-drift.service)" -p WorkingDirectory=/srv/broker/live \
+  /srv/broker/live/.venv/bin/python -m src.broker.drift --test-alert
+```
+
+No dev or test run may use the production key or this monitor id: co-status's
+check-in route has no dry run, so a test `ok` resets the monitor's timer and a
+test `alert` pages. The suite stubs both calls, and `tests/conftest.py` points
+both destinations at nowhere for every test.
 
 ## The backup (broker#4)
 

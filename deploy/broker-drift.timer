@@ -1,0 +1,16 @@
+[Unit]
+Description=Periodic broker drift check - does live lag origin/main? (CannObserv/broker#110)
+
+[Timer]
+Unit=broker-drift.service
+# Hourly: co-broker-drift expects a check-in every 3600 s, with a grace of 5400 s,
+# so one missed run is absorbed and two alarm (CannObserv/status#51). Enabled by
+# scripts/deploy.sh once the deploy that first installs it verifies; never again
+# after that, so `systemctl disable --now` sticks. Stopping it is how a lag you
+# mean to keep is silenced, and co-broker-drift then reads missing after 2.5 h.
+OnBootSec=5min
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

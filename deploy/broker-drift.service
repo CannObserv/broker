@@ -1,0 +1,49 @@
+[Unit]
+Description=Broker drift check - does live lag origin/main in code that runs? Checks in to co-status (CannObserv/broker#110)
+Documentation=https://github.com/CannObserv/broker/blob/main/deploy/README.md
+# After tailscaled: co-status is reached by its MagicDNS name. Deliberately NOT
+# bound to redis-server.service or the probe: a deploy concern stays out of the
+# bus (#22 D6), and the drift check touches no Redis at all.
+Wants=network-online.target
+After=network-online.target tailscaled.service
+
+[Service]
+Type=oneshot
+# No account of its own and none of exedev's (D6): /srv/broker/live is
+# world-readable and REVISION is 444, which is all it reads.
+DynamicUser=yes
+# The release scripts/deploy.sh last switched to (#22, #107). Its REVISION is
+# what this checks, read beside the src/ that `-m src.broker.drift` imports from
+# here (#105 CR 2): ExecStart= keeps that shape.
+WorkingDirectory=/srv/broker/live
+# Compiled at build, and the release is 555: no run writes bytecode.
+Environment=PYTHONDONTWRITEBYTECODE=1
+# co-broker-drift, tenant co-broker (CannObserv/status#51). Not a secret. The
+# host is src/broker/checkin.py's constant, never configuration.
+Environment=BROKER_DRIFT_MONITOR_ID=01M5CVMEFPKRGP2Y48F7QTPP7D
+
+# The hard stop. No GitHub call starts past 60 s, but each is bounded per read, not
+# in total, then one check-in (10 s per read). Killed here, the run sends nothing:
+# silence, never a false ok. No Restart=: the next hour is the retry, and the
+# monitor's grace absorbs one missed run.
+TimeoutStartSec=90
+
+# No EnvironmentFile=: /etc/broker/.env names the probe's Redis user and carries
+# the operator's wheelhouse key, and status.env is the probe's copy of the
+# co-status key. Only that key, root 0400 in a file of its own, handed over at
+# start. SetCredential= is the fallback when the file is missing: the check then
+# runs, logs that it has no key, and exits 1. No Redis credential of any kind.
+LoadCredential=status-checkin-key:/etc/broker/status-checkin.key
+SetCredential=status-checkin-key:\n
+
+# DynamicUser= already implies most of this; said here so the tests pin it.
+# /etc/broker is an empty tmpfs inside the unit: the credential is read by PID 1
+# before the namespace exists, and nothing else there is this unit's. The dev
+# tree's .env, under /home, holds the cohort's GitHub tokens.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+TemporaryFileSystem=/etc/broker:ro
+
+ExecStart=/srv/broker/live/.venv/bin/python -m src.broker.drift

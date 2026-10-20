@@ -25,11 +25,14 @@
 #      from the release that differs from its installed copy
 #   3. verify each unit this deploy changed: one whose unit it installed, or one
 #      that runs live when live moved. The probe by its next natural tick, never
-#      forced (the two-tick pending rule); the backup by one forced run
+#      forced (the two-tick pending rule); the backup by one forced run; the
+#      drift check by nothing, on purpose (#110)
 #   4. on failure, switch back, units too, and prove the old build the same way
-#   5. compare the host configs (never installed), prune to KEEP releases plus live
+#   5. verified: enable the drift timer if this deploy added it (#110)
+#   6. compare the host configs (never installed), prune to KEEP releases plus live
 #
-# It restarts nothing, and never redis-server. Runs as exedev; sudo -n for every
+# It restarts nothing, and never redis-server. The one thing it starts is the
+# drift timer, the first time it installs it. Runs as exedev; sudo -n for every
 # write under the deploy root, for the unit files and for systemctl: a password
 # prompt would hang the deploy holding its lock, so it is a refusal instead. exedev can
 # sudo anything, so this is no boundary against it: what root ownership buys is
@@ -64,6 +67,11 @@ GITHUB_API="https://api.github.com/repos/CannObserv/broker"
 UNIT_DIR="$HOST/etc/systemd/system"
 PROBE_UNIT=broker-bus-health.service
 BACKUP_UNIT=broker-backup.service
+DRIFT_UNIT=broker-drift.service
+# The timers a deploy enables, once, when it adds one and verifies (#110): a
+# decision made per timer, never "any new timer". The backup's waits for its key
+# (deploy/README.md, Install), so a rebuilt node's deploy must not enable it.
+ENABLE_NEW=(broker-drift.timer)
 # deploy/<file>=<where Install in deploy/README.md puts it>: installed verbatim,
 # so compared byte for byte after a deploy, and never installed by one (D9).
 # tests/deploy/test_deploy.py accounts for every file under deploy/.
@@ -83,11 +91,11 @@ HOST_CONFIGS=(
 # which exedev cannot read. Compared with the release live ran instead; the
 # parity tests in tests/deploy compare them with the node.
 DERIVED_CONFIGS=(redis.conf.broker redis-acl.conf)
-# What a release must import - the probe's, the backup's and restore's entry
-# points (docs/RECOVERY.md runs restore as root from live) and co-core - and the
+# What a release must import - the probe's, the backup's, restore's and the drift
+# check's entry points (docs/RECOVERY.md runs restore as root from live) and co-core - and the
 # build id it reports (src/broker/revision.py, which reads REVISION beside
 # pyproject.toml: the editable install keeps src/ the release's own, #105 CR 2).
-IMPORT_PROBE='import src.broker.bus_health, src.broker.backup, src.broker.restore, co_core; from src.broker.revision import read_revision; print(read_revision())'
+IMPORT_PROBE='import src.broker.bus_health, src.broker.backup, src.broker.restore, src.broker.drift, co_core; from src.broker.revision import read_revision; print(read_revision())'
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 note() { echo "deploy: $*" >&2; }
@@ -516,7 +524,8 @@ units_of() { # the release's units, by name: deploy/broker-*.{service,timer} onl
 # Installs the release's units that differ from their installed copies, after
 # keeping each copy aside for restore_units. One daemon-reload, and a changed
 # timer is try-restarted so it re-arms on its new schedule. A new unit is
-# installed, never enabled: enabling is a decision. Units the release lacks stay.
+# installed, never enabled: enabling is a decision, made in ENABLE_NEW for the
+# timers named there (enable_new_timers). Units the release lacks stay.
 # Called as `install_units || ...`, so set -e is off in here: every step that
 # can fail says so itself.
 install_units() {
@@ -567,8 +576,39 @@ install_units() {
   note "units installed from $build: ${list# }"
   logger -t broker-deploy "units from $build: ${list# }" || true
   for name in "${added[@]}"; do
-    note "$name is new here and not enabled. If it should run: sudo systemctl enable --now $name"
+    if enabled_when_verified "$name"; then
+      note "$name is new here: enabled once this deploy verifies"
+    elif ! enabled_when_verified "${name%.service}.timer"; then
+      note "$name is new here and not enabled. If it should run: sudo systemctl enable --now $name"
+    fi
   done
+}
+
+enabled_when_verified() { # <unit>: one of ENABLE_NEW
+  local name
+  for name in "${ENABLE_NEW[@]}"; do [[ "$name" == "$1" ]] && return 0; done
+  return 1
+}
+
+# Each ENABLE_NEW timer this deploy added is enabled once the deploy verifies, so
+# a deploy switched back never ran it. One installed before is never enabled
+# again: an operator's `systemctl disable --now` sticks. Processor's
+# enable_new_timers (processor#35), for named timers only. A failure is a note:
+# the drift timer watches the deploy, it never decides one.
+enable_new_timers() {
+  local name
+  [[ -f "$backup/units.added" ]] || return 0
+  while read -r name; do
+    enabled_when_verified "$name" || continue
+    if sudo -n systemctl enable --now "$name"; then
+      # --now starts it, and a timer whose OnBootSec has passed fires at once:
+      # that first run is the one to read.
+      note "$name enabled; its first run: journalctl -u ${name%.timer} -n 5"
+      logger -t broker-deploy "$name enabled" || true
+    else
+      note "systemctl enable --now $name failed; enable it by hand (deploy/README.md, The drift check)"
+    fi
+  done <"$backup/units.added"
 }
 
 # The unit files install_units replaced or added, or tried to.
@@ -724,6 +764,10 @@ verify_all() { # each service in $verify, against what its own unit runs
     case "$svc" in
       "$BACKUP_UNIT") verify_backup "$(expected_of "$svc")" || return 1 ;;
       "$PROBE_UNIT") verify_probe "$(expected_of "$svc")" || return 1 ;;
+      # On purpose (#110): its hourly run and co-broker-drift are its check. A
+      # forced run would spend GitHub's unauthenticated budget, and on a switch
+      # back the honest verdict may be a lag, which pages.
+      "$DRIFT_UNIT") note "$svc: not verified by a deploy; its hourly run and co-broker-drift are its check" ;;
       *) note "$svc changed but is not verified: this deploy has no check for it" ;;
     esac
   done
@@ -795,6 +839,7 @@ done < <(changed_services)
 if ((units_ok)) && verify_all; then
   keep_units=0
   note "live is on $build"
+  enable_new_timers
 else
   stage="while switching back"
   if [[ -z "$previous_link" ]]; then

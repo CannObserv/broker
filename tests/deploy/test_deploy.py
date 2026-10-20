@@ -256,6 +256,7 @@ case "$1" in
     printf '{"outcome": "%s", "revision": "%s"}\n' "${FAKE_BACKUP_OUTCOME:-uploaded}" \
       "${FAKE_BACKUP_SAYS:-$build}" > "$FAKE_BACKUP_STATE" ;;
   try-restart) [[ "$2" == "${FAKE_TRY_RESTART_FAIL:-none}" ]] && exit 1 ;;
+  enable) [[ "${@: -1}" == "${FAKE_ENABLE_FAIL:-none}" ]] && exit 1 ;;
   daemon-reload) [[ -z "${FAKE_SLOW_RELOAD:-}" ]] || sleep "$FAKE_SLOW_RELOAD" ;;
 esac
 exit 0
@@ -1221,7 +1222,8 @@ class TestReleases:
         (probe,) = [c for c in world.calls() if " -c " in c]
         assert probe.startswith(f"python {world.release(world.main[0])} ")
         assert (
-            "import src.broker.bus_health, src.broker.backup, src.broker.restore, co_core" in probe
+            "import src.broker.bus_health, src.broker.backup, src.broker.restore, "
+            "src.broker.drift, co_core" in probe
         )
 
     def test_an_unlinked_release_whose_venv_no_longer_runs_is_rebuilt(self, world):
@@ -1825,24 +1827,127 @@ class TestUnits:
             world.installed("broker-bus-health.timer") == world.dev_units["broker-bus-health.timer"]
         )
 
-    def test_a_new_unit_is_installed_not_enabled_and_named_with_how(self, world):
-        world.push({"broker-drift.timer": "[Timer]\n"})
+    @pytest.mark.parametrize("name", ["broker-backup.timer", "broker-other.timer"])
+    def test_a_new_unit_is_installed_not_enabled_and_named_with_how(self, world, name):
+        """Enabling is a decision, made for the drift timer alone (#110). A backup
+        timer a deploy adds on a rebuilt node would run before its key is there
+        (deploy/README.md, Install)."""
+        (world.units / "broker-backup.timer").unlink()
+        world.push({name: "[Timer]\n"})
         world.reset_log()
         result = world.run()
         assert_ok(result)
-        assert world.installed("broker-drift.timer") == "[Timer]\n"
-        assert "sudo systemctl enable --now broker-drift.timer" in result.stderr
+        assert world.installed(name) == "[Timer]\n"
+        assert f"sudo systemctl enable --now {name}" in result.stderr
         assert not [c for c in world.calls() if " enable " in c]
         logged = [c for c in world.calls() if c.startswith("logger ") and " units from " in c]
-        assert any("broker-drift.timer (new)" in c for c in logged)
+        assert any(f"{name} (new)" in c for c in logged)
 
     def test_a_changed_unit_with_no_verifier_is_named(self, world):
-        """C6's drift unit has none yet: say so, never call it verified."""
-        world.push({"broker-drift.service": unit("broker-drift.service", world.root / "live")})
+        """A unit with no check: say so, never call it verified."""
+        world.push({"broker-other.service": unit("broker-other.service", world.root / "live")})
         result = world.run()
         assert_ok(result)
-        assert "broker-drift.service" in result.stderr
-        assert "not verified" in result.stderr
+        assert "broker-other.service changed but is not verified" in result.stderr
+
+    def test_the_drift_check_is_left_unverified_on_purpose(self, world):
+        """Option (a) of #110's brief: its hourly run and co-broker-drift are its check.
+        A forced run would spend GitHub's budget, and on a switch back the honest
+        verdict may be a lag that pages."""
+        world.go_live()
+        world.install(world.live_units)
+        world.push({DRIFT: unit(DRIFT, world.root / "live"), DRIFT_TIMER: "[Timer]\n"})
+        assert_ok(world.run())
+        world.push()
+        world.reset_log()
+        result = world.run()
+        assert_ok(result)
+        assert f"{DRIFT}: not verified by a deploy" in result.stderr
+        assert "changed but is not verified" not in result.stderr
+        assert not [c for c in world.calls() if "start" in c and DRIFT in c]
+        assert len(forced_backups(world)) == 1 and len(journal_reads(world)) == 1
+
+    def test_the_import_probe_reaches_the_drift_check(self):
+        """The one deploy-time check the drift unit gets: a release whose drift
+        module does not import is never switched to."""
+        (probe,) = re.findall(r"^IMPORT_PROBE='([^']*)'", DEPLOY.read_text(), re.M)
+        assert "src.broker.drift" in probe
+
+
+DRIFT = "broker-drift.service"
+DRIFT_TIMER = "broker-drift.timer"
+
+
+def enables(world: World) -> list[str]:
+    return [c for c in world.calls() if c.startswith("sudo systemctl enable")]
+
+
+class TestTheDriftTimer:
+    """#110: the drift timer is enabled once the deploy that first installed it
+    verifies - processor's rule (its enable_new_timers), for this one timer by
+    name."""
+
+    @staticmethod
+    def add_drift(world: World) -> None:
+        world.push({DRIFT: unit(DRIFT, world.root / "live"), DRIFT_TIMER: "[Timer]\n"})
+        world.reset_log()
+
+    def test_it_is_enabled_after_the_verify_of_the_deploy_that_added_it(self, world):
+        assert_ok(world.run(world.go_live()))
+        self.add_drift(world)
+        result = world.run()
+        assert_ok(result)
+        assert enables(world) == [f"sudo systemctl enable --now {DRIFT_TIMER}"]
+        calls = world.calls()
+        assert calls.index(f"sudo systemctl start {BACKUP}") < calls.index(enables(world)[0])
+        assert max(i for i, c in enumerate(calls) if c.startswith("journalctl ")) < calls.index(
+            enables(world)[0]
+        )
+        assert "journalctl -u broker-drift -n 5" in result.stderr
+        assert f"logger -t broker-deploy {DRIFT_TIMER} enabled" in calls
+        assert f"{DRIFT_TIMER} is new here: enabled once this deploy verifies" in result.stderr
+        assert "If it should run" not in result.stderr, "no hand step to name: it was taken"
+
+    def test_its_service_gets_no_hand_enable_note(self, world):
+        """Static, started by its timer: `enable --now` on it would be wrong advice."""
+        self.add_drift(world)
+        result = world.run()
+        assert_ok(result)
+        assert f"enable --now {DRIFT}" not in result.stderr
+
+    def test_a_switched_back_deploy_never_enables_it(self, world):
+        assert_ok(world.run(world.go_live()))
+        self.add_drift(world)
+        result = world.run(FAKE_BACKUP_FAIL_BUILD=world.build(world.main[-1]))
+        assert result.returncode == 1, result.stderr
+        assert enables(world) == []
+        assert world.installed(DRIFT_TIMER) is None, "restore_units removes what it added"
+
+    def test_one_installed_before_is_never_enabled_again(self, world):
+        """An operator's `systemctl disable --now` sticks."""
+        world.install({DRIFT_TIMER: "[Timer]\n# by hand\n"})
+        self.add_drift(world)
+        assert_ok(world.run())
+        assert world.installed(DRIFT_TIMER) == "[Timer]\n"
+        assert enables(world) == []
+
+    def test_a_later_deploy_does_not_enable_it(self, world):
+        self.add_drift(world)
+        assert_ok(world.run())
+        world.push()
+        world.reset_log()
+        assert_ok(world.run())
+        assert enables(world) == []
+
+    def test_a_failed_enable_is_a_note_never_a_failure(self, world):
+        """The timer watches deploys; it never decides one."""
+        self.add_drift(world)
+        before = world.target()
+        result = world.run(FAKE_ENABLE_FAIL=DRIFT_TIMER)
+        assert_ok(result)
+        assert world.target() != before
+        assert f"systemctl enable --now {DRIFT_TIMER} failed" in result.stderr
+        assert "deploy/README.md, The drift check" in result.stderr
 
     def test_a_hand_edited_unit_is_replaced_and_named(self, world):
         (world.units / BACKUP).write_text("edited by hand\n")

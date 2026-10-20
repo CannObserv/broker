@@ -130,6 +130,7 @@ from co_core.pure.adapters.bus.streams import (
 from redis.asyncio import Redis
 from redis.exceptions import RedisError, ResponseError
 
+from src.broker.checkin import STATUS_CHECKIN_BASE
 from src.broker.logging import configure_logging, get_logger
 from src.broker.revision import read_revision
 
@@ -545,16 +546,9 @@ def _dlq_owner(topic: str) -> str:
 # timers to co-status, which kept the wire contract - path, body, 202, monitor
 # id - so #66 changed the host and the key and nothing else.
 #
-# THE BASE URL IS A CONSTANT, NOT CONFIGURATION, and that is deliberate.
-# `status:9001` is status_dev against its own database. Since this monitor
-# alarms on the *absence* of check-ins, a wrong destination would not degrade it
-# but invert it: check-ins land somewhere nothing alarms, the production monitor
-# receives nothing, and it reports a perfectly healthy broker as dead. The
-# retired `notifier:9000` is the same trap one host over. The operator
-# therefore supplies a monitor id and never a host or a port. Same move as
-# `databases 1` against the db15 vector - make the wrong destination unnameable
-# rather than merely discouraged.
-STATUS_CHECKIN_BASE = "http://status:9000/api/v1/monitors"
+# The base URL is a constant, not configuration, and that is deliberate: the
+# reasoning sits with it in src/broker/checkin.py, which the drift check posts
+# from too (#110). The probe imports it; it never names a host of its own.
 STATUS_TIMEOUT_SECONDS = 10.0
 
 
