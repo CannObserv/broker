@@ -250,8 +250,8 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 GROUP_WARN_UNDELIVERED_AGE_SECONDS = 300.0
 
 CAPTURE_HANDLER_CEILING_SECONDS = 5.0 + 5.0 + 120.0 + 30.0
-"""The longest one capture can hold replicator's serial ``count=1`` loop, so
-the longest the entry queued behind it waits undelivered (CannObserv/broker#114).
+"""The longest one capture can hold replicator's serial ``count=1`` loop
+(CannObserv/broker#114).
 
 A render runs "within the existing fetch-timeout ceiling"
 (CannObserv/replicator#138), so a capture handler is a fetch handler's shape,
@@ -259,13 +259,22 @@ and this is replicator's own sum for one, from ``tests/test_deploy.py``'s stop
 budget at 9fcd33b: a poll in flight (``REPLICATOR_READ_BLOCK_MS``, 5 s), the
 pacing sleep bounded by it (5 s), the whole-fetch deadline
 (``REPLICATOR_MAX_FETCH_SECONDS``, 120 s) and the store
-(``REPLICATOR_BLOB_TIMEOUT_SECONDS``, 30 s). Under the shared 300 s, so
-``replicator.capture`` keeps it on a measurement, as ``replicator.fetch`` does
-with the same ceiling.
+(``REPLICATOR_BLOB_TIMEOUT_SECONDS``, 30 s).
 
 **Movers, which no commit records:** those three in ``/etc/replicator/.env``,
-and a capture ceiling of its own if replicator#138 gives renders one. A render
-ceiling past 260 s puts this over 300 s, and the row then needs its own value."""
+and a capture ceiling of its own if replicator#138 gives renders one."""
+
+CAPTURE_WARN_UNDELIVERED_AGE_SECONDS = 2 * CAPTURE_HANDLER_CEILING_SECONDS
+"""``replicator.capture``'s undelivered threshold: two handlers, 320 s today.
+
+The head of the stream can wait the handler in flight when an entry arrives,
+then at most one reclaim before the stream gets its turn - "two handler
+durations, which is the figure an undelivered-age threshold has to clear"
+(replicator's ``PollCadence``, CannObserv/replicator#98). Two renders at the
+ceiling are over the shared 300 s, so a slow capture beside a reclaimed one
+would warn with nothing wrong. Derived, so it moves with the ceiling's movers
+(CannObserv/broker#114, CR 2). The fetch row shares the handler sum and still
+takes the shared value; that gap is its own issue."""
 
 # Every length threshold is its stream's retention cap plus this margin, so a
 # warning means the retention mechanism itself broke rather than that traffic
@@ -1028,14 +1037,14 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # the first command. A stream archiver has written without it is the go-live
     # order inverted, and a later create at `$` would skip captures.
     #
-    # The undelivered threshold is the shared one, on a measurement: one capture
-    # at replicator's ceiling holds the loop CAPTURE_HANDLER_CEILING_SECONDS.
+    # The undelivered threshold is the group's own, on a measurement: two
+    # captures at replicator's ceiling, CAPTURE_WARN_UNDELIVERED_AGE_SECONDS.
     StreamCheck(
         CONTENT_CAPTURE,
         never_trimmed=True,
         groups=(
             GroupCheck(
-                CAPTURE_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+                CAPTURE_GROUP, warn_undelivered_age_seconds=CAPTURE_WARN_UNDELIVERED_AGE_SECONDS
             ),
         ),
     ),

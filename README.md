@@ -126,8 +126,8 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   worker pool `replicator.capture` (not dormant: replicator's consumer,
   replicator#138, runs before archiver#380 issues), never trimmed, outcomes on
   `content.artifacts` under grants both already held. The undelivered
-  threshold stays the shared 300 s against one render at replicator's 160 s
-  handler ceiling. Retention rule: `content.blobs` first (#20), four when they
+  threshold is its own, 320 s: two renders at replicator's 160 s handler
+  ceiling (CR 2; the shared 300 s cleared only one). Retention rule: `content.blobs` first (#20), four when they
   lost `info.changes`' borrowed 110k (#60), the processing pair (#62),
   `content.persist` (#64) and `content.capture` (#114) with no cap by
   contract. Grants live 2026-10-20T15:06:05Z.

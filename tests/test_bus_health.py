@@ -831,16 +831,13 @@ def test_content_capture_is_a_never_trimmed_command_stream_with_one_pool() -> No
     the group exists before the first command. A stream Archiver has written
     without it is the go-live order inverted.
 
-    The shared undelivered threshold, sized against replicator's own stop
-    budget: one capture holds its serial `count=1` loop at most a poll, a
-    pacing sleep, the 120 s whole-fetch ceiling a render runs within and a 30 s
-    store - 160 s by `tests/test_deploy.py`'s sum there - so the entry queued
-    behind it is delivered inside 300 s.
+    Its own undelivered threshold, two handlers at replicator's ceiling (CR 2):
+    see the test below.
     """
     check = _check_for(CONTENT_CAPTURE)
     assert _only_group(check) == GroupCheck(
         "replicator.capture",
-        warn_undelivered_age_seconds=bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+        warn_undelivered_age_seconds=bus_health.CAPTURE_WARN_UNDELIVERED_AGE_SECONDS,
     )
     assert check.never_trimmed is True
     assert check.warn_length is None
@@ -848,14 +845,23 @@ def test_content_capture_is_a_never_trimmed_command_stream_with_one_pool() -> No
     assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_CAPTURE)] == "replicator"
 
 
-def test_the_capture_threshold_covers_one_render_at_replicators_ceiling() -> None:
-    """The measured reason the shared value holds, as arithmetic: the 300 s
-    must exceed one whole capture handler at replicator's ceiling, or the entry
-    queued behind a slow render warns with nothing wrong."""
+def test_the_capture_threshold_clears_two_renders_at_replicators_ceiling() -> None:
+    """The measured bound, as arithmetic (CannObserv/broker#114, CR 2).
+
+    One capture handler at replicator's ceiling is 160 s, its own stop-budget
+    sum. The stream's head can wait two: the handler in flight when an entry
+    arrives, then at most one reclaim before the stream gets its turn -
+    "two handler durations, which is the figure an undelivered-age threshold has
+    to clear" (replicator's `PollCadence`, CannObserv/replicator#98). 320 s is
+    over the shared 300, so the row carries its own value, derived, never
+    spelled: a mover on either side of the sum moves it.
+    """
     assert bus_health.CAPTURE_HANDLER_CEILING_SECONDS == 160.0
-    assert (
-        bus_health.CAPTURE_HANDLER_CEILING_SECONDS
-        < _only_group(_check_for(CONTENT_CAPTURE)).warn_undelivered_age_seconds
+    assert bus_health.CAPTURE_WARN_UNDELIVERED_AGE_SECONDS == (
+        2 * bus_health.CAPTURE_HANDLER_CEILING_SECONDS
+    )
+    assert bus_health.CAPTURE_WARN_UNDELIVERED_AGE_SECONDS > (
+        bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
     )
 
 

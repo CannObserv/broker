@@ -165,7 +165,8 @@ Per tick it probes:
   this finding while it has never existed; once seen, its pending count rides
   the state file and its absence is this finding every tick;
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
-  minutes on each of the twelve groups. The check a pending count cannot make,
+  minutes on each of the twelve groups (`replicator.capture`'s 320 s is two
+  renders at Replicator's ceiling, CannObserv/broker#114). The check a pending count cannot make,
   and the one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
