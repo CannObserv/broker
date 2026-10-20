@@ -14,6 +14,7 @@ their own coverage because the timer is stateless without them.
 from __future__ import annotations
 
 import ast
+import http.client
 import io
 import itertools
 import json
@@ -3375,6 +3376,27 @@ async def test_a_checkin_that_raises_does_not_take_the_tick_with_it(
     )
 
     assert [f.check for f in findings] == ["dlq"]
+
+
+async def test_a_checkin_answered_with_something_not_http_does_not_take_the_tick(
+    fake_redis, tmp_path, monkeypatch, checkin_env
+) -> None:
+    """#110 CR 9: ``BadStatusLine`` and ``IncompleteRead`` are ``HTTPException``s,
+    not ``OSError``s. Uncaught, one garbled answer from co-status would end the
+    tick in a traceback: the never-fails contract broken by its own transport."""
+    monkeypatch.setattr(
+        bus_health, "_http_post", MagicMock(side_effect=http.client.BadStatusLine("NOT HTTP"))
+    )
+    warning_spy = MagicMock()
+    monkeypatch.setattr(bus_health.logger, "warning", warning_spy)
+    await fake_redis.xadd("content.fetch.dlq", {"k": "v"})
+
+    findings = await bus_health.run_once(
+        fake_redis, state_path=tmp_path / "state.json", disk_usage=_healthy_disk
+    )
+
+    assert [f.check for f in findings] == ["dlq"]
+    assert any("check-in failed" in str(c) for c in warning_spy.call_args_list)
 
 
 async def test_half_configured_is_reported_not_ignored(fake_redis, tmp_path, monkeypatch) -> None:

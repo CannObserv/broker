@@ -93,6 +93,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import http.client
 import json
 import os
 import shutil
@@ -2700,7 +2701,8 @@ async def post_checkin(findings: list[Finding], *, revision: str) -> None:
             {"X-API-Key": api_key, "Content-Type": "application/json"},
             STATUS_TIMEOUT_SECONDS,
         )
-    except (OSError, ValueError) as e:
+    # HTTPException too (#110 CR 9): a garbled answer is not an OSError.
+    except (OSError, http.client.HTTPException, ValueError) as e:
         logger.warning(f"Bus health: co-status check-in failed: {e!r}", extra={"check": "checkin"})
         return
     if not 200 <= status < 300:
