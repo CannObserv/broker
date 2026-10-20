@@ -1500,10 +1500,11 @@ def test_the_tracked_acl_file_is_the_only_tracked_acl() -> None:
         if _ACL_USER_LINE.search(text):
             carrying.append(path)
     assert carrying == [str(ACL_FILE.relative_to(repo))], carrying
-    for line in _ACL_USER_LINE.finditer(ACL_FILE.read_text()):
-        rest = ACL_FILE.read_text()[line.start() :].split("\n", 1)[0].split()
-        secrets = [t for t in rest if t.startswith(">")]
-        assert all(_PLACEHOLDER.match(t) for t in secrets), f"{rest[1]}: {secrets}"
+    for line in ACL_FILE.read_text().splitlines():
+        if not _ACL_USER_LINE.match(line):
+            continue
+        secrets = [t for t in line.split() if t.startswith(">")]
+        assert all(_PLACEHOLDER.match(t) for t in secrets), f"{line.split()[1]}: {secrets}"
 
 
 def test_default_is_declared_disabled_and_still_carries_a_password(users) -> None:
