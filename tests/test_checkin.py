@@ -95,6 +95,15 @@ class TestPostCheckin:
         assert str(caught.value).startswith("URLError")
         assert KEY not in str(caught.value)
 
+    def test_an_answer_that_is_not_http_fails_naming_no_key(self, garbled_http, monkeypatch):
+        """CR 1: ``BadStatusLine`` is an ``HTTPException``, not an ``OSError``; left
+        uncaught, the run ends in a traceback and no ``drift check`` record."""
+        monkeypatch.setattr(checkin, "STATUS_CHECKIN_BASE", f"{garbled_http}/api/v1/monitors")
+        with pytest.raises(CheckinFailed) as caught:
+            post_checkin(MONITOR, KEY, "ok", {"kind": "ok"})
+        assert str(caught.value).startswith("BadStatusLine")
+        assert KEY not in str(caught.value)
+
     @pytest.mark.parametrize("bad", ["", f"{KEY}\n{KEY}", "sk test", "clé"])
     def test_a_key_that_is_not_one_printable_token_is_refused_unsent(self, status, bad):
         """http.client's refusal of a bad header quotes the value; this never sends one."""

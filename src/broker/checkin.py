@@ -20,6 +20,7 @@ variables and its never-fails contract; it shares only the base, from here.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import urllib.error
@@ -95,8 +96,9 @@ def post_checkin(
             code, raw = int(response.status), response.read()
     except urllib.error.HTTPError as exc:
         code, raw = int(exc.code), exc.read()
-    except (OSError, ValueError) as exc:
+    except (OSError, http.client.HTTPException, ValueError) as exc:
         # By type and urllib's own text, which names the reason, never a header.
+        # HTTPException too: a garbled answer (BadStatusLine) is not an OSError.
         raise CheckinFailed(f"{type(exc).__name__}: {exc}") from None
     if code != 202:
         raise CheckinFailed(f"{code} {_detail(raw)}".strip())

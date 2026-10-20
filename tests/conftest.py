@@ -7,6 +7,9 @@ whatever shell started pytest. The drift check's guard is the same rule for a
 second destination (#110), and the local HTTP stubs its tests answer from.
 """
 
+import socket
+import threading
+
 import pytest
 
 from src.broker import checkin, drift
@@ -67,3 +70,26 @@ def http_stub_2():
     stub = HttpStub()
     yield stub
     stub.close()
+
+
+@pytest.fixture
+def garbled_http():
+    """A server that answers anything but HTTP: ``http.client`` raises
+    ``BadStatusLine``, an ``HTTPException`` and not an ``OSError`` (#110 CR 1)."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+
+    def answer() -> None:
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            with conn:
+                conn.recv(65536)
+                conn.sendall(b"NOT HTTP\r\n\r\n")
+
+    threading.Thread(target=answer, daemon=True).start()
+    yield f"http://127.0.0.1:{server.getsockname()[1]}"
+    server.close()

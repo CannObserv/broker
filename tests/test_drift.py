@@ -586,6 +586,10 @@ class TestTheGetter:
         with pytest.raises(GitHubSilent, match="^URLError"):
             drift.github("http://127.0.0.1:9")("x")
 
+    def test_an_answer_that_is_not_http_is_silent(self, garbled_http):
+        with pytest.raises(GitHubSilent, match="^BadStatusLine"):
+            drift.github(garbled_http)("x")
+
     def test_every_call_shares_one_deadline(self, http_stub, monkeypatch):
         """Bounded inside the unit's TimeoutStartSec, however many calls the walk makes."""
         now = [0.0]
