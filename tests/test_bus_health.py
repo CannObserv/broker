@@ -31,6 +31,7 @@ import pytest
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
     CONTENT_BLOBS,
+    CONTENT_CAPTURE,
     CONTENT_DERIVED,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
@@ -622,9 +623,10 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
     """Widened from Archiver's two to all five (CannObserv/broker#1 Phase 5),
     then to seven with the processing pair (CannObserv/broker#62), then to
     eight with `replicator.persist` (CannObserv/broker#64), nine with
-    `provisioner.revisions` (CannObserv/broker#78), and eleven with the
+    `provisioner.revisions` (CannObserv/broker#78), eleven with the
     headless-Watcher pair, `archiver.watch-events` and `watcher.watch-check`
-    (CannObserv/broker#93).
+    (CannObserv/broker#93), and twelve with `replicator.capture`
+    (CannObserv/broker#114).
 
     The exclusion was inherited from a probe that ran on Archiver's own host,
     where a downstream service's group lag was plausibly its own alerting
@@ -656,6 +658,7 @@ def test_inventory_covers_every_consumer_group_on_the_node() -> None:
         "processor.process",
         "archiver.watch-events",
         "watcher.watch-check",
+        "replicator.capture",
     }
 
 
@@ -811,6 +814,67 @@ async def test_a_check_issued_before_watchers_group_is_group_missing(fake_redis)
     (finding,) = [f for f in findings if f.check == "group-missing"]
     assert finding.subject == INFO_WATCH_CHECK
     assert "'watcher.watch-check' does not exist" in finding.message
+
+
+# --- the capture command (CannObserv/broker#114) ---
+
+
+def test_content_capture_is_a_never_trimmed_command_stream_with_one_pool() -> None:
+    """Archiver's viewport capture (cannobserv#571), Replicator's fourth worker
+    pool, `replicator.capture`: `content.persist`'s posture - never trimmed, so
+    any decrease in its length is a fault, and no cap for a length threshold to
+    mirror.
+
+    **Not dormant.** Replicator's consumer (CannObserv/replicator#138) deploys
+    before Archiver issues anything (CannObserv/archiver#380, after #397), so
+    the group exists before the first command. A stream Archiver has written
+    without it is the go-live order inverted.
+
+    The shared undelivered threshold, sized against replicator's own stop
+    budget: one capture holds its serial `count=1` loop at most a poll, a
+    pacing sleep, the 120 s whole-fetch ceiling a render runs within and a 30 s
+    store - 160 s by `tests/test_deploy.py`'s sum there - so the entry queued
+    behind it is delivered inside 300 s.
+    """
+    check = _check_for(CONTENT_CAPTURE)
+    assert _only_group(check) == GroupCheck(
+        "replicator.capture",
+        warn_undelivered_age_seconds=bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS,
+    )
+    assert check.never_trimmed is True
+    assert check.warn_length is None
+    assert check.warn_last_entry_age_seconds is None
+    assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_CAPTURE)] == "replicator"
+
+
+def test_the_capture_threshold_covers_one_render_at_replicators_ceiling() -> None:
+    """The measured reason the shared value holds, as arithmetic: the 300 s
+    must exceed one whole capture handler at replicator's ceiling, or the entry
+    queued behind a slow render warns with nothing wrong."""
+    assert bus_health.CAPTURE_HANDLER_CEILING_SECONDS == 160.0
+    assert (
+        bus_health.CAPTURE_HANDLER_CEILING_SECONDS
+        < _only_group(_check_for(CONTENT_CAPTURE)).warn_undelivered_age_seconds
+    )
+
+
+async def test_content_capture_is_silent_before_archiver_issues(fake_redis) -> None:
+    """The stream does not exist at registration (CannObserv/broker#114), and
+    a stream nothing has written is dormant: the row may not warn until
+    archiver issues its first capture."""
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    assert not [f for f in findings if f.subject.startswith(CONTENT_CAPTURE)]
+
+
+async def test_a_capture_issued_before_replicators_group_is_group_missing(fake_redis) -> None:
+    """The inverted go-live order: Archiver's first `ContentCaptureCommand`
+    lands where no `replicator.capture` exists, and a consumer that then creates
+    at `$` skips it."""
+    await fake_redis.xadd(CONTENT_CAPTURE, {"k": "v"})
+    findings, _ = await collect_broker_findings(fake_redis, previous_state={})
+    (finding,) = [f for f in findings if f.check == "group-missing"]
+    assert finding.subject == CONTENT_CAPTURE
+    assert "'replicator.capture' does not exist" in finding.message
 
 
 # --- content.revisions' second group: provisioner (CannObserv/broker#78) ---
@@ -986,7 +1050,8 @@ def test_info_changes_threshold_tracks_the_operator_xtrim_cap() -> None:
 # The streams nothing trims: no producer passes a maxlen, and archiver's
 # `trim_topics` allowlist names `info.changes` alone (CannObserv/broker#60).
 # The processing pair joined with no cap of its own (CannObserv/broker#62), and
-# the persist command with none by contract (CannObserv/broker#64).
+# the persist command with none by contract (CannObserv/broker#64), as did the
+# capture command (CannObserv/broker#114).
 UNCAPPED_STREAMS = (
     CONTENT_FETCH,
     CONTENT_REVISIONS,
@@ -996,6 +1061,7 @@ UNCAPPED_STREAMS = (
     CONTENT_PROCESS,
     CONTENT_DERIVED,
     CONTENT_PERSIST,
+    CONTENT_CAPTURE,
 )
 
 

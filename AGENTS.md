@@ -44,16 +44,14 @@ nothing. The ACL declares no CI identity (#53).
 
 ## Rules
 
-- **No retention opinion on the eight `content.*` streams, nor the two
+- **No retention opinion on the nine `content.*` streams, nor the two
   `info.watch-*` ones (broker#93).** No *retention* length or age row for any
   of them: nothing trims them, this repo owns no cap, and a threshold with no
   owner cries wolf - `maxmemory` is their only bound.
   They are `content.fetch`, `content.revisions`, `content.artifacts`,
-  `content.replicate`, `content.blobs`, `content.process`, `content.derived`
-  and `content.persist` (`content.fetch-policy` is LWW and capped).
-  `content.blobs` had the rule first (broker#20); four joined it when they lost
-  `info.changes`'s borrowed 110k (broker#60); the processing pair arrived with
-  no cap by contract (broker#62), as did `content.persist` (broker#64). All
+  `content.replicate`, `content.blobs`, `content.process`, `content.derived`,
+  `content.persist` and `content.capture` (`content.fetch-policy` is LWW and
+  capped). How each joined: [README.md](README.md), *Provenance*. All
   but `content.derived` are also **Never XTRIMmed**, as are both watch
   streams: no `+xtrim` selector names them since broker#41, and a trim grant
   returns only as a producer's named request. `docs/STREAMS.md`'s **No

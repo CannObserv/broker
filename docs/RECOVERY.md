@@ -252,7 +252,7 @@ rcli acladmin INFO keyspace                         # db0:keys=N,expires=M - the
 
 GROUPED="content.fetch content.revisions content.artifacts content.replicate content.blobs
          content.persist content.process content.derived
-         info.watch-events info.watch-check"   # test-pinned; the last two absent until they ship
+         info.watch-events info.watch-check content.capture"   # test-pinned; the last three absent until they ship
 for s in info.changes info.registry info.watch-status content.fetch-policy $GROUPED; do
     printf '%-22s %s\n' "$s" "$(rcli acladmin XLEN "$s")"
 done

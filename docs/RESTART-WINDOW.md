@@ -296,11 +296,11 @@ rcli acladmin SELECT 0                           # -> OK
 
 # The data, against the snapshot taken before the window. Lengths alone are not
 # enough - entries-added is the counter that tells a trim from a wipe.
-# Every grouped stream: eleven groups on ten (docs/STREAMS.md); a test pins it.
-# The two info.watch-* streams are absent until watcher and archiver ship (#93).
+# Every grouped stream: twelve groups on eleven (docs/STREAMS.md); a test pins it.
+# The info.watch-* pair (#93) and content.capture (#114) are absent until they ship.
 GROUPED="content.fetch content.blobs content.revisions content.artifacts
          content.replicate content.persist content.process content.derived
-         info.watch-events info.watch-check"
+         info.watch-events info.watch-check content.capture"
 for s in info.changes info.registry info.watch-status content.fetch-policy \
          content.fetch.dlq $GROUPED; do
     printf '%-22s XLEN=%s entries-added=%s\n' "$s" \
@@ -340,12 +340,13 @@ what arrived between. On replicator's groups (the issuers' claims, broker#67;
 unchanged by CannObserv/replicator#133), watcher re-issues a `replicator.fetch`
 skip after ~30 min, archiver's reaper a `replicator.persist` one after 6 h, at most 3
 times. A `replicator.replicate` one is closed after 6 h and **never
-re-issued**: that is an operator act. Read all eleven in the `XINFO GROUPS`
+re-issued**: that is an operator act. Read all twelve in the `XINFO GROUPS`
 output - `replicator.fetch`, `watcher.blobs`, `archiver.revisions`,
 `provisioner.revisions`, `archiver.artifacts`, `replicator.replicate`,
 `replicator.persist`, `processor.process`, `watcher.derived`,
-`archiver.watch-events`, `watcher.watch-check` - present, pending 0, at the
-tip once an entry arrives (the last two once they ship, #93). The exception is
+`archiver.watch-events`, `watcher.watch-check`, `replicator.capture` - present,
+pending 0, at the tip once an entry arrives (the last three once they ship, #93,
+#114). The exception is
 `provisioner.revisions`, whose consumer holds entries on purpose: judge it by pending age, not pending
 count ([BUS-HEALTH.md](BUS-HEALTH.md), *Pending age*).
 

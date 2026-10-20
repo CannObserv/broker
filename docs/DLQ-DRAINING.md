@@ -15,7 +15,8 @@ Three roles, and no two of them are reliably the same service:
   on that topic; the `DLQ` column of [STREAMS.md](STREAMS.md) names it per stream. Archiver writes
   `content.revisions.dlq` and `content.artifacts.dlq`, Replicator writes
   `content.fetch.dlq` and `content.replicate.dlq`, and `content.persist.dlq`
-  since its persist loop went live (CannObserv/broker#64), Processor will write
+  since its persist loop went live (CannObserv/broker#64) - `content.capture.dlq`
+  too once its capture loop ships (CannObserv/broker#114) - Processor will write
   `content.process.dlq` and Watcher `content.derived.dlq` once the processing
   pair's consumers ship (CannObserv/broker#62, #75), Archiver will write
   `info.watch-events.dlq` and Watcher `info.watch-check.dlq` once the

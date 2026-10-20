@@ -98,8 +98,15 @@ ceiling. The headless-Watcher pair (CannObserv/broker#93), `archiver.watch-event
 and `watcher.watch-check`, take it on the shared assumption too, before either
 consumer exists (CannObserv/archiver#369, CannObserv/watcher#371); a
 watch-check's handler is a pre-flight and a deferred job, not the fetch it
-asks for. `test_every_probed_group_carries_an_undelivered_threshold` fails if a
-twelfth group arrives without one, and `StreamCheck` refuses the other direction - a
+asks for. `replicator.capture` (CannObserv/broker#114) keeps it on a
+measurement taken before its consumer exists: a render runs within Replicator's
+fetch ceiling (CannObserv/replicator#138), so one capture holds the serial loop
+at most Replicator's own stop-budget sum for a fetch handler - a 5 s poll, a 5 s
+pacing sleep, the 120 s whole-fetch deadline and a 30 s store, 160 s
+(`CAPTURE_HANDLER_CEILING_SECONDS`, with its movers). The entry queued behind it
+is delivered inside five minutes, `replicator.fetch`'s margin on the same
+ceiling. `test_every_probed_group_carries_an_undelivered_threshold` fails if a
+thirteenth group arrives without one, and `StreamCheck` refuses the other direction - a
 threshold on a row with no group - at import.
 
 **What no duration sizes: a consumer alive and not reading**, since a reader

@@ -117,8 +117,19 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   until seen, created by archiver at `0`) and `info.watch-check` (archiver ->
   watcher, `watcher.watch-check`, never trimmed). Archiver is
   `content.fetch-policy`'s second producer until #95 withdraws watcher's
-  grant. Grants live 2026-10-19T17:46:17Z. co-core is held `<0.37.1`, because
-  0.37.1's `content.capture` has no requester yet.
+  grant. Grants live 2026-10-19T17:46:17Z. co-core was held `<0.37.1` until
+  #114 registered 0.37.1's `content.capture`.
+- CannObserv/broker#114 - `content.capture` (archiver -> replicator,
+  cannobserv#571, co-core `>=0.37.1,<0.38`), registered 2026-10-20 before
+  either end ships: archiver's `+xadd` in a selector only, replicator's fourth
+  worker pool `replicator.capture` (not dormant: replicator's consumer,
+  replicator#138, runs before archiver#380 issues), never trimmed, outcomes on
+  `content.artifacts` under grants both already held. The undelivered
+  threshold stays the shared 300 s against one render at replicator's 160 s
+  handler ceiling. Retention rule: `content.blobs` first (#20), four when they
+  lost `info.changes`' borrowed 110k (#60), the processing pair (#62),
+  `content.persist` (#64) and `content.capture` (#114) with no cap by
+  contract.
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,

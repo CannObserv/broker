@@ -29,6 +29,7 @@ import redis as redis_pkg
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
     CONTENT_BLOBS,
+    CONTENT_CAPTURE,
     CONTENT_DERIVED,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
@@ -788,6 +789,10 @@ def test_no_root_names_a_stream_the_service_produces(users, user) -> None:
     assert not named, f"{user}'s root names {named}, which it produces"
 
 
+#: The four command streams replicator's consume selector names, spelled here
+#: rather than read off the probe so the reads below stay a mirror.
+REPLICATOR_CONSUMES = (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST, CONTENT_CAPTURE)
+
 #: The reads each owner named at its call sites, per command and key
 #: (CannObserv/broker#43): CannObserv/archiver#321 at 9490b19,
 #: CannObserv/watcher#344 at d7b4914, CannObserv/replicator#129 at 9a168e0 -
@@ -830,27 +835,29 @@ ANSWERED_READS: dict[str, dict[str, frozenset[str]]] = {
             }
         ),
     },
+    # content.capture's reads are derived from the role (CannObserv/broker#114)
+    # rather than answered: CannObserv/replicator#138 has no call site yet, and
+    # its loop is the same spec-driven one, so the stream takes the consume
+    # selector's three reads and its queue the drainer's audit pair.
     "replicator": {
         "+xread": frozenset({CONTENT_FETCH_POLICY}),
-        "+xpending": frozenset({CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST}),
-        "+xinfo|stream": frozenset({CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST}),
+        "+xpending": frozenset(REPLICATOR_CONSUMES),
+        "+xinfo|stream": frozenset(REPLICATOR_CONSUMES),
         "+xlen": frozenset(
             {
                 CONTENT_FETCH_POLICY,
                 CONTENT_BLOBS,
                 CONTENT_ARTIFACTS,
-                *(dlq_name(t) for t in (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST)),
+                *(dlq_name(t) for t in REPLICATOR_CONSUMES),
             }
         ),
         "+xrange": frozenset(
             {
-                CONTENT_FETCH,
-                CONTENT_REPLICATE,
-                CONTENT_PERSIST,
+                *REPLICATOR_CONSUMES,
                 CONTENT_FETCH_POLICY,
                 CONTENT_BLOBS,
                 CONTENT_ARTIFACTS,
-                *(dlq_name(t) for t in (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST)),
+                *(dlq_name(t) for t in REPLICATOR_CONSUMES),
             }
         ),
     },
@@ -1321,6 +1328,65 @@ def test_replicator_stanza_names_the_source_its_persist_grant_was_read_off() -> 
     prose = stanza("replicator")
     for needle in ("CannObserv/broker#64", "CannObserv/replicator#114"):
         assert needle in prose, f"replicator's stanza does not name {needle}"
+
+
+# --- the capture command (CannObserv/broker#114) ---
+#
+# `content.capture` (archiver -> replicator, one worker pool), the contract of
+# cannobserv#571, co-core 0.37.1. Read off the contract and replicator's
+# spec-driven loop, not captured: CannObserv/replicator#138 has no consumer yet
+# and CannObserv/archiver#380 issues after archiver#397. The group, the
+# ceiling's XPENDING and the `capture` dedupe namespace are asserted over
+# REPLICATOR_COMMAND_STREAMS above, which the probe row puts it in. The outcomes
+# ride content.artifacts on grants both already hold.
+
+
+def test_archiver_issues_content_capture_and_can_neither_read_nor_cap_it(users) -> None:
+    """`content.persist`'s issuer shape: `+xadd` in a selector and nothing
+    else - no group command, so archiver cannot take delivery in
+    `replicator.capture` (broker#43's hole), no trim, so the stream is Never
+    XTRIMmed from its first day, and no key on the queue, which is the
+    consumer's to write and drain."""
+    rules = users["archiver"]
+    assert admits(selector_patterns(rules, "+xadd"), CONTENT_CAPTURE)
+    assert not admits(root_key_patterns(rules), CONTENT_CAPTURE)
+    for command in GROUP_CONSUMER_COMMANDS:
+        assert not reaches(rules, command, CONTENT_CAPTURE), (
+            f"archiver can {command} the captures it issues (broker#43)"
+        )
+    assert not admits(selector_patterns(rules, "+xtrim"), CONTENT_CAPTURE)
+    assert not admits(key_patterns(rules), dlq_name(CONTENT_CAPTURE))
+
+
+def test_replicator_serves_content_capture_and_cannot_cap_its_queue(users) -> None:
+    """Replicator's half, `content.persist`'s again: the group read, the
+    outcome facts on `content.artifacts` it already publishes, and the queue
+    written and emptied by `XDEL`, never `XTRIM` (CannObserv/broker#59). The
+    command stream is in no write selector, so replicator can neither forge a
+    capture nor cap one."""
+    rules = users["replicator"]
+    queue = dlq_name(CONTENT_CAPTURE)
+    assert reaches(rules, "+xreadgroup", CONTENT_CAPTURE)
+    assert admits(selector_patterns(rules, "+xadd"), CONTENT_ARTIFACTS), "the outcome facts"
+    assert admits(selector_patterns(rules, "+xadd"), queue)
+    assert admits(selector_patterns(rules, "+xdel"), queue)
+    assert not admits(selector_patterns(rules, "+xtrim"), queue)
+    for command in ("+xadd", "+xtrim", "+xdel"):
+        assert not admits(selector_patterns(rules, command), CONTENT_CAPTURE), (
+            f"replicator holds {command} on the command stream it consumes"
+        )
+
+
+def test_the_capture_stanzas_name_their_contract_and_requests() -> None:
+    """Read off the contract, not the wire: each stanza says which, so the next
+    reader can tell these grants from the captured ones."""
+    for user, needles in (
+        ("replicator", ("CannObserv/broker#114", "CannObserv/replicator#138")),
+        ("archiver", ("CannObserv/broker#114", "CannObserv/archiver#380")),
+    ):
+        prose = stanza(user)
+        for needle in needles:
+            assert needle in prose, f"{user}'s stanza does not name {needle}"
 
 
 # --- the headless-Watcher pair (CannObserv/broker#93) ---
@@ -2544,6 +2610,42 @@ def test_replicator_drains_content_persist_dlq_without_trimming_it(tracked_acl_b
         lambda: client.xtrim(queue, maxlen=0),
         lambda: client.xadd(CONTENT_PERSIST, {"k": "forged"}),
         lambda: client.xtrim(CONTENT_PERSIST, maxlen=0),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
+
+
+def test_archiver_issues_content_capture_and_is_refused_the_rest(tracked_acl_broker) -> None:
+    """Archiver's capture grant on redis's own matcher (CannObserv/broker#114):
+    it can issue a capture, and cannot cap the stream, read it, acknowledge a
+    command in replicator's group, or write replicator's queue."""
+    client = tracked_acl_broker("archiver")
+    assert client.xadd(CONTENT_CAPTURE, {"k": "v"}), "archiver cannot issue a capture"
+    group = group_name(CONTENT_CAPTURE, "replicator")
+    for refused in (
+        lambda: client.xtrim(CONTENT_CAPTURE, maxlen=0),
+        lambda: client.xrange(CONTENT_CAPTURE),
+        lambda: client.xreadgroup(group, "worker", {CONTENT_CAPTURE: ">"}),
+        lambda: client.xack(CONTENT_CAPTURE, group, "0-1"),
+        lambda: client.xadd(dlq_name(CONTENT_CAPTURE), {"k": "v"}),
+    ):
+        with pytest.raises(redis_pkg.exceptions.NoPermissionError):
+            refused()
+
+
+def test_replicator_drains_content_capture_dlq_without_trimming_it(tracked_acl_broker) -> None:
+    """The queue written, audited and emptied per entry, never capped; the
+    command stream neither forged nor capped."""
+    client = tracked_acl_broker("replicator")
+    queue = dlq_name(CONTENT_CAPTURE)
+    parked = client.xadd(queue, {"k": "poison"})
+    assert client.xlen(queue) >= 1
+    assert client.xrange(queue, min=parked, max=parked)
+    assert client.xdel(queue, parked) == 1, "replicator can fill its queue and not empty it"
+    for refused in (
+        lambda: client.xtrim(queue, maxlen=0),
+        lambda: client.xadd(CONTENT_CAPTURE, {"k": "forged"}),
+        lambda: client.xtrim(CONTENT_CAPTURE, maxlen=0),
     ):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             refused()

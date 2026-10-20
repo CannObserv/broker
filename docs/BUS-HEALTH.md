@@ -96,7 +96,7 @@ Per tick it probes:
   `max(500, 10 x the set Watcher republishes)` + 10% - the 550 while the sets are small,
   which is the state the node is in today, and the floor past ~50 entries per
   set. See [LWW-CAP.md](LWW-CAP.md) and *Mirrored constants*
-  below. **The eight `content.*` streams and the headless-Watcher pair get no
+  below. **The nine `content.*` streams and the headless-Watcher pair get no
   length threshold**: nothing trims
   them, so there is no cap to mirror and a breach could only mean traffic grew.
   `maxmemory` is their only bound and the memory check above is the finding for
@@ -109,14 +109,15 @@ Per tick it probes:
 - last-entry age for the groupless streams (15 min for the two `*/5` LWW
   streams; 2h for `info.registry`'s hourly snapshot, skipped while the stream
   is empty - the corpus-size guard);
-- the `pending` count of **all eleven** consumer groups on the node -
+- the `pending` count of **all twelve** consumer groups on the node -
   `archiver.revisions`, `archiver.artifacts`, `watcher.blobs`,
   `replicator.fetch`, `replicator.replicate`, the processing pair's
   `processor.process` and `watcher.derived` (CannObserv/broker#62, #75),
   `replicator.persist` (CannObserv/broker#64), `provisioner.revisions`
   (CannObserv/broker#78), `content.revisions`' second group, and the
   headless-Watcher pair's `archiver.watch-events` and `watcher.watch-check`
-  (CannObserv/broker#93), declared before either end ships - WARN on non-zero
+  (CannObserv/broker#93), and `replicator.capture` (CannObserv/broker#114), each
+  declared before its ends ship - WARN on non-zero
   across two consecutive ticks, with the count carried in
   `StateDirectory=broker-bus-health`. `provisioner.revisions` alone takes an
   entry age instead (*Pending age* below). Widened from
@@ -164,7 +165,7 @@ Per tick it probes:
   this finding while it has never existed; once seen, its pending count rides
   the state file and its absence is this finding every tick;
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
-  minutes on each of the eleven groups. The check a pending count cannot make,
+  minutes on each of the twelve groups. The check a pending count cannot make,
   and the one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer

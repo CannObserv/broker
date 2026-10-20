@@ -110,6 +110,7 @@ from typing import Literal
 from co_core.pure.adapters.bus.streams import (
     CONTENT_ARTIFACTS,
     CONTENT_BLOBS,
+    CONTENT_CAPTURE,
     CONTENT_DERIVED,
     CONTENT_FETCH,
     CONTENT_FETCH_POLICY,
@@ -246,6 +247,24 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # from the same reply as its position - instead of naming a stopped reader.
 GROUP_WARN_UNDELIVERED_AGE_SECONDS = 300.0
 
+CAPTURE_HANDLER_CEILING_SECONDS = 5.0 + 5.0 + 120.0 + 30.0
+"""The longest one capture can hold replicator's serial ``count=1`` loop, so
+the longest the entry queued behind it waits undelivered (CannObserv/broker#114).
+
+A render runs "within the existing fetch-timeout ceiling"
+(CannObserv/replicator#138), so a capture handler is a fetch handler's shape,
+and this is replicator's own sum for one, from ``tests/test_deploy.py``'s stop
+budget at 9fcd33b: a poll in flight (``REPLICATOR_READ_BLOCK_MS``, 5 s), the
+pacing sleep bounded by it (5 s), the whole-fetch deadline
+(``REPLICATOR_MAX_FETCH_SECONDS``, 120 s) and the store
+(``REPLICATOR_BLOB_TIMEOUT_SECONDS``, 30 s). Under the shared 300 s, so
+``replicator.capture`` keeps it on a measurement, as ``replicator.fetch`` does
+with the same ceiling.
+
+**Movers, which no commit records:** those three in ``/etc/replicator/.env``,
+and a capture ceiling of its own if replicator#138 gives renders one. A render
+ceiling past 260 s puts this over 300 s, and the row then needs its own value."""
+
 # Every length threshold is its stream's retention cap plus this margin, so a
 # warning means the retention mechanism itself broke rather than that traffic
 # grew.
@@ -374,6 +393,10 @@ PROVISIONER_GROUP = group_name(CONTENT_REVISIONS, "provisioner")
 # stream, Watcher's on Archiver's command stream.
 WATCH_EVENTS_GROUP = group_name(INFO_WATCH_EVENTS, "archiver")
 WATCH_CHECK_GROUP = group_name(INFO_WATCH_CHECK, "watcher")
+# The capture command (CannObserv/broker#114; cannobserv#571, co-core 0.37.1,
+# where it is marked *pending* until broker registers it): Replicator's fourth
+# worker pool, created by its consumer (CannObserv/replicator#138).
+CAPTURE_GROUP = group_name(CONTENT_CAPTURE, "replicator")
 
 
 # --- the one group whose pending rule is an entry age (CannObserv/broker#78) ---
@@ -469,6 +492,9 @@ DLQ_DRAINERS: dict[str, str] = {
     # The persist command (CannObserv/broker#64): replicator's loop dead-letters
     # an undecodable persist here, as it does for its other two streams.
     dlq_name(CONTENT_PERSIST): "replicator",
+    # The capture command (CannObserv/broker#114): the same loop, its fourth
+    # stream, dead-letters an undecodable capture here.
+    dlq_name(CONTENT_CAPTURE): "replicator",
     # The headless-Watcher pair (CannObserv/broker#93): co-core permits both a
     # DLQ, and each consumer's driver dead-letters an undecodable frame into it
     # - Archiver's for a watch fact, Watcher's for a malformed WatchCheckCommand.
@@ -993,6 +1019,28 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         groups=(
             GroupCheck(
                 WATCH_CHECK_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+            ),
+        ),
+    ),
+    # content.capture (CannObserv/broker#114): archiver asks for a viewport
+    # render, replicator stores the image, and the outcomes ride
+    # content.artifacts. content.persist's posture - one worker pool, in no trim
+    # path, no maxlen by contract - so any decrease in its length is a fault.
+    #
+    # Not dormant, info.watch-check's shape: replicator's consumer
+    # (CannObserv/replicator#138) deploys before archiver issues anything
+    # (CannObserv/archiver#380, after archiver#397), so the group exists before
+    # the first command. A stream archiver has written without it is the go-live
+    # order inverted, and a later create at `$` would skip captures.
+    #
+    # The undelivered threshold is the shared one, on a measurement: one capture
+    # at replicator's ceiling holds the loop CAPTURE_HANDLER_CEILING_SECONDS.
+    StreamCheck(
+        CONTENT_CAPTURE,
+        never_trimmed=True,
+        groups=(
+            GroupCheck(
+                CAPTURE_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
             ),
         ),
     ),

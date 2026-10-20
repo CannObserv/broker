@@ -5,13 +5,11 @@ description = "Operational code for the Cannabis Observer change-bus broker: Red
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    # Held below 0.37.1 (CannObserv/broker#93): 0.37.1 adds content.capture
-    # (cannobserv#571), and tests/canonical.py reads every topic constant, so
-    # the inventory and ACL tests go red until it has a row, a group and a
-    # grant. No participant has asked broker for that stream yet, and a grant
-    # arrives as a producer's named request, so its registration lifts this
-    # pin rather than riding along here.
-    "co-core>=0.37.0,<0.37.1",
+    # Floor 0.37.1 is content.capture (cannobserv#571), registered here by
+    # CannObserv/broker#114. tests/canonical.py reads every topic constant, so a
+    # release adding a stream turns the inventory and ACL tests red until it has
+    # a row, a group and a grant: such a bump is a registration, never a ride-along.
+    "co-core>=0.37.1,<0.38",
     "google-cloud-storage>=2,<4",
     "python-json-logger>=4.0.0,<5",
     "redis[hiredis]>=5",

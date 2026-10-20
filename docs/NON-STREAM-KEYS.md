@@ -17,7 +17,7 @@ came to find these by scanning the keyspace rather than by reading.
 
 | Pattern | Owner | Kind | Lifetime | Commands used | What it is |
 |---|---|---|---|---|---|
-| `replicator:cmd:<stream suffix>:<command_id>` | Replicator | string, **volatile** | `REPLICATOR_DEDUPE_TTL_SECONDS`, default 86400 | `SET .. NX EX`, `EXISTS` | De-duplication of `content.fetch` / `content.replicate` / `content.persist` commands. Written **after** the handler completes; read by an `EXISTS` **before** the next one runs. Reasoning: [`CannObserv/replicator:docs/CONVENTIONS.md#the-replicatorcmd-keys`](https://github.com/CannObserv/replicator/blob/main/docs/CONVENTIONS.md#the-replicatorcmd-keys) |
+| `replicator:cmd:<stream suffix>:<command_id>` | Replicator | string, **volatile** | `REPLICATOR_DEDUPE_TTL_SECONDS`, default 86400 | `SET .. NX EX`, `EXISTS` | De-duplication of `content.fetch` / `content.replicate` / `content.persist` / `content.capture` commands. Written **after** the handler completes; read by an `EXISTS` **before** the next one runs. Reasoning: [`CannObserv/replicator:docs/CONVENTIONS.md#the-replicatorcmd-keys`](https://github.com/CannObserv/replicator/blob/main/docs/CONVENTIONS.md#the-replicatorcmd-keys) |
 
 **This is the only non-stream key pattern any service writes here.** A new one
 belongs in this table before it belongs on the broker. Processor adds none
@@ -30,7 +30,8 @@ Processor's source.
 **One namespace per command stream**, and the suffix is the same one co-core's
 `group_name` puts after the service - so `content.fetch` gives both the group
 `replicator.fetch` and the keys `replicator:cmd:fetch:<id>`. Today that means
-three namespaces, `fetch`, `replicate` and `persist`.
+four namespaces, `fetch`, `replicate`, `persist` and, once its loop ships, `capture`
+(CannObserv/broker#114) - inside the same `~replicator:cmd:*` grant.
 
 *Losing them costs re-work, never correctness.* Set-after-success means a key
 can only short-circuit work already known to have finished, so an empty
