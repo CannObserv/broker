@@ -1832,7 +1832,7 @@ class TestUnits:
         """Enabling is a decision, made for the drift timer alone (#110). A backup
         timer a deploy adds on a rebuilt node would run before its key is there
         (deploy/README.md, Install)."""
-        (world.units / "broker-backup.timer").unlink()
+        (world.units / name).unlink(missing_ok=True)
         world.push({name: "[Timer]\n"})
         world.reset_log()
         result = world.run()
@@ -1855,7 +1855,6 @@ class TestUnits:
         A forced run would spend GitHub's budget, and on a switch back the honest
         verdict may be a lag that pages."""
         world.go_live()
-        world.install(world.live_units)
         world.push({DRIFT: unit(DRIFT, world.root / "live"), DRIFT_TIMER: "[Timer]\n"})
         assert_ok(world.run())
         world.push()
