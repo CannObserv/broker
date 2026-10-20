@@ -129,7 +129,7 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   handler ceiling. Retention rule: `content.blobs` first (#20), four when they
   lost `info.changes`' borrowed 110k (#60), the processing pair (#62),
   `content.persist` (#64) and `content.capture` (#114) with no cap by
-  contract.
+  contract. Grants live 2026-10-20T15:06:05Z.
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
