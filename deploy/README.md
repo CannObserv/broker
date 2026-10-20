@@ -892,15 +892,22 @@ The drift check presents `co-broker`'s production key, `co-broker-checkin`, the
 one the probe sends from `/etc/broker/status.env`. `LoadCredential=` needs it
 in a file of its own, `/etc/broker/status-checkin.key`, `0400 root:root`,
 holding the key alone. Copy it inside the root shell, so the key is only ever a
-shell variable and `printf`'s output, never an `argv`:
+shell variable and `printf`'s output, never an `argv` (`printf` and `[` are
+builtins). The copy refuses unless the sourced value is the line's raw text: an
+empty, quoted, `$`-expanded or repeated `STATUS_API_KEY=` could parse
+differently here than under systemd's `EnvironmentFile=`, which is what the
+probe sends:
 
 ```bash
 sudo sh -c 'set -eu; umask 077
   set -a; . /etc/broker/status.env; set +a
+  raw=$(sed -n "s/^STATUS_API_KEY=//p" /etc/broker/status.env)
+  if [ -z "$raw" ] || [ "$raw" != "$STATUS_API_KEY" ]; then
+    echo "status.env: STATUS_API_KEY is empty, quoted, expanded or repeated; nothing copied"; exit 1; fi
   install -m 0400 -o root -g root /dev/null /etc/broker/status-checkin.key
-  printf "%s\n" "$STATUS_API_KEY" > /etc/broker/status-checkin.key
-  a=$(printf %s "$STATUS_API_KEY" | sha256sum); b=$(tr -d "\n" < /etc/broker/status-checkin.key | sha256sum)
-  if [ "$a" = "$b" ]; then echo "status-checkin.key: matches status.env"; else echo "status-checkin.key: DIFFERS"; exit 1; fi'
+  printf "%s\n" "$raw" > /etc/broker/status-checkin.key
+  if [ "$(tr -d "\n" < /etc/broker/status-checkin.key)" = "$raw" ]; then
+    echo "status-checkin.key: matches status.env"; else echo "status-checkin.key: DIFFERS"; exit 1; fi'
 sudo stat -c '%U:%G %a' /etc/broker/status-checkin.key      # root:root 400
 ```
 
