@@ -219,3 +219,13 @@ docs/RESTART-WINDOW.md :: retarget :: A planned window is minutes and sits insid
 # CR 9 - "there" now followed the NODE-CREDENTIALS link this curation put above it
 docs/RESTART-WINDOW.md :: retarget :: The rewrite destroys the AOF history, which is what recovered the incident
 docs/RESTART-WINDOW.md :: retarget :: recorded there. That is acceptable now that broker#4 ships an hourly snapshot to
+# 2026-10-20 STREAMS.md back under budget (broker#114): the Health primitive
+# legend -> UNDELIVERED-CONSUMERS, the No retention cap paragraph and
+# content.derived's OOM cell -> MEMORY-PROTECTION, the test-traffic warning ->
+# NETWORK-PATHS, the one-process-per-group note -> CONSUMER-REGISTRATIONS.
+# Each line below lost a referent that stayed behind, and now names it.
+docs/STREAMS.md :: retarget :: the same file, pins the phrase to exactly the rows the probe leaves
+docs/STREAMS.md :: retarget :: | `content.derived` | Processor → Watcher *(live in shadow since 2026-10-03
+docs/STREAMS.md :: retarget :: Every other topic here carries a fact or a piece of state - the worst a stray
+docs/STREAMS.md :: retarget :: **`content.revisions` is Archiver's first consumer role** - every other row is a
+docs/STREAMS.md :: retarget :: stream it operates for someone else. Two operational consequences: the

@@ -1,7 +1,7 @@
 # Consumer registrations: the one-time orphan reap
 
 A procedure that ran once and cannot recur, kept because the reasoning in it
-is what makes that true. Which streams carry which groups is
+is what makes that true, and the rule that keeps a group to one process. Which streams carry which groups is
 [STREAMS.md](STREAMS.md); what the probe watches on them is
 [BUS-HEALTH.md](BUS-HEALTH.md). Moved out of STREAMS.md when it ran past the
 per-doc context budget (CannObserv/broker#14 review, finding 8).
@@ -62,3 +62,20 @@ traffic next arrives. Verify from the journal instead:
 ```bash
 sudo journalctl -u archiver -n 200 | grep 'Bus consumer starting'
 ```
+
+## One process per group
+
+Moved out of [STREAMS.md](STREAMS.md) when it passed its context budget
+again (CannObserv/broker#114).
+
+**`content.revisions` is Archiver's first consumer role** - every other
+[STREAMS.md](STREAMS.md) row is a stream it operates for someone else. Two operational consequences: the
+`archiver.revisions` group is the first thing on this broker whose *lag* is
+Archiver's own problem (a stalled consumer means revisions stop being recorded,
+silently, while the stream keeps growing), and `content.revisions.dlq` is the
+first DLQ this service writes rather than merely provisions. Group membership is
+gated on `ARCHIVER_BUS_CONSUMER=1`, set only in `deploy/archiver.service` - a
+second process in the group silently takes half the revisions. Provisioner, the
+second consuming service (CannObserv/broker#78), reads in a group of its own -
+and no ACL can keep it there: a key pattern names a stream, never a group, so
+each side's co-core `group_name()` is what keeps it out of the other's.

@@ -182,3 +182,25 @@ On 2026-09-16 replicator's unit failed *inside* its bound, because a start guard
 refused the restarts. **A `user=` missing after the broker is back means check
 that unit now, whatever the outage length** - waiting is how that one took an
 hour to find.
+
+## No test traffic on this broker
+
+Moved out of [STREAMS.md](STREAMS.md) when it passed its context budget
+again (CannObserv/broker#114).
+
+⚠️ **`content.replicate` is the one stream where a test message is not free.**
+Every other topic on this broker carries a fact or a piece of state - the worst a stray
+one costs is a confusing dashboard. A replicate command asks another service to
+write bytes into a **permanent** store, and one of the providers (archive.org)
+cannot be deleted at all. Two rules follow, and neither is enforceable by the
+broker:
+
+- **Never point a dev or test process at the production broker.**
+  `ARCHIVER_DEV_REDIS_URL` is unset by default and prod's `ARCHIVER_REDIS_URL`
+  is never inherited (the Redis analogue of the DB `_test` guard); CannObserv/archiver#157 is what
+  the DB half of that lesson cost, and CannObserv/archiver#162 is what a DLQ full of test residue
+  costs to clean up.
+- **The "Replicate now" button (CannObserv/archiver#171) writes for real.** It is an
+  operator action on the live dashboard - port 8000 - and it enqueues a genuine
+  command against the item's latest revision. It is `hx-confirm`-guarded for
+  that reason. There is no dry-run.

@@ -45,6 +45,41 @@ the cap, and a naive fill-then-probe sees `XADD` succeed two commands after it
 was refused. Anyone reproducing this should fill to the first refusal, then
 lower `maxmemory` below the current `used_memory` so the state holds still.
 
+### `content.derived`: retries by reclaim
+
+The `Producer durability under OOM` cell for `content.derived` in
+[STREAMS.md](STREAMS.md), moved here when that file passed its context budget
+again (CannObserv/broker#114). **Retries by reclaim - NOPERM shown here, OOM
+stated** (CannObserv/broker#75, the way CannObserv/watcher#245 and
+CannObserv/replicator#19 stated theirs).
+
+A planned rehearsal on 2026-10-04 withheld Processor's grant on this stream for 112 s: the refused publish left the command pending, and the reclaim published `processing_complete` 659 s after delivery, at attempt 1, with no strike and no dead letter (`deploy/redis-acl.conf`, the processor stanza). The same path covers `OOM`: Processor classifies `OOM command not allowed` on this `XADD` as transient, publishes nothing and leaves the `content.process` entry pending, and the reclaim **re-runs** the extraction - deterministic, into a write-if-absent store - rather than re-publishing a cached result, so no dedupe key. A re-run after an `XADD` that landed and an `XACK` that did not publishes the fact twice; Watcher's consumer keeps the first terminal fact per `command_id` and drops later ones (CannObserv/watcher#325, `81e4083`). Not shown on this broker: the first traffic (2026-10-03) met no `OOM`. Processor showed it on a scratch 7.0.15 under these grants with `maxmemory 1` (broker#75), and rehearsing it here would refuse every participant's writes, not only Processor's
+
+## The streams `maxmemory` alone bounds
+
+Moved out of [STREAMS.md](STREAMS.md), whose rows say **No retention cap**, when
+it passed its context budget again (CannObserv/broker#114).
+
+**A row that says No retention cap is a fact about behaviour, not about
+grants** (CannObserv/broker#60). Nothing trims the nine `content.*` streams
+or the headless-Watcher pair, `info.watch-events` and `info.watch-check`:
+no producer passes a `maxlen` (CannObserv/watcher#317, CannObserv/replicator#106;
+the processing pair has none by contract, CannObserv/broker#62, nor have
+`content.persist` and `content.capture`, CannObserv/broker#64, #114, nor a fact Watcher publishes,
+CannObserv/watcher#327) and archiver's
+trim allowlist is `info.changes` alone (CannObserv/archiver#239).
+`maxmemory` is their only bound, so the probe gives them no `XLEN` threshold -
+`test_the_probe_and_the_inventory_agree_on_which_streams_have_no_cap`, in
+`tests/deploy/test_redis_acl.py`, pins the phrase to exactly the rows the probe leaves
+unthresholded. All of them but `content.derived` are
+also **Never XTRIMmed**: CannObserv/broker#41 took Watcher's and Replicator's
+`+xtrim` off, never issued (CannObserv/watcher#327, CannObserv/replicator#119),
+so no selector names any of them. No selector names `content.derived` either;
+its row keeps the phrase off because a cap there would ride its producer's
+publish. Whether each stream gets a cap is its
+producer's call, filed on its producer's repo - `content.replicate`'s is
+CannObserv/archiver#267.
+
 ## `noeviction` is load-bearing beyond refusing writes
 
 **Replicator's `replicator:cmd:*` keys are the only volatile keys on this

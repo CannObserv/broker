@@ -35,6 +35,21 @@ Each existing signal is blind to a consumer that has stopped *reading*:
   wanted. It read 869 s for every consumer on every group at 15:41: the time
   since the AOF load, not since each consumer's last read.
 
+## The `Health primitive` column
+
+The legend for [STREAMS.md](STREAMS.md)'s `Health primitive` column, moved here
+when that file passed its context budget again (CannObserv/broker#114).
+
+**`Health primitive` says `XPENDING` + undelivered age, and no longer group
+lag.** `lag` is `entries-added` minus a group's `entries-read`, and that input
+does not survive a reload - measured on this Redis, three groups reported lags
+of 152, 147 and 153 while two of them stood at their stream's
+`last-generated-id` (CannObserv/broker#20). The broker's primitive is the pair
+of positions instead; `lag` survives as a dashboard number in archiver, where it
+is read rather than alarmed on. `XPENDING` in that column names the **signal** -
+a group's pending count - not the command this repo's probe issues: it reads the
+same number out of `XINFO GROUPS`, beside the position (CannObserv/broker#29).
+
 ## Positions, not counters - and why not `lag`
 
 `XINFO GROUPS` reports a `lag` per group, which looks like the answer and is
