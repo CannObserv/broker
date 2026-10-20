@@ -127,10 +127,11 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   replicator#138, runs before archiver#380 issues), never trimmed, outcomes on
   `content.artifacts` under grants both already held. The undelivered
   threshold is its own, 320 s: two renders at replicator's 160 s handler
-  ceiling (CR 2; the shared 300 s cleared only one). Retention rule: `content.blobs` first (#20), four when they
-  lost `info.changes`' borrowed 110k (#60), the processing pair (#62),
-  `content.persist` (#64) and `content.capture` (#114) with no cap by
-  contract. Grants live 2026-10-20T15:06:05Z.
+  ceiling (CR 2; the shared 300 s cleared only one). Retention rule:
+  `content.blobs` first (#20), four when they lost `info.changes`' borrowed
+  110k (#60), the processing pair (#62), `content.persist` (#64) and
+  `content.capture` (#114) with no cap by contract. Grants live
+  2026-10-20T15:06:05Z.
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
