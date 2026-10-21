@@ -114,13 +114,12 @@ forked, and Click is another stack.
 
 **One step does not transfer.** The ship skill's post-merge table says a code
 change needs `systemctl restart <project>`. There is no `broker` unit; the probe
-and backup are timers. Since #107 the probe runs `/srv/broker/live`, so a change
-it runs (`src/`, `uv.lock`, `pyproject.toml`, its unit or timer) reaches it only
-through `scripts/deploy.sh` after the merge and pull. The deploy installs a
-changed unit and verifies the next natural tick
-([deploy/README.md](../deploy/README.md), *Deploying*). The backup runs this
-checkout until #108, so a `src/` change is live on its next run. Any other
-`deploy/` change is installed by hand. The only long-running service is
+and backup are timers. Both run `/srv/broker/live` (#107, #108), so a change
+either runs (`src/`, `uv.lock`, `pyproject.toml`, its unit or timer) reaches it
+only through `scripts/deploy.sh` after the merge and pull. The deploy installs a
+changed unit and verifies the probe's next natural tick and one forced backup
+run ([deploy/README.md](../deploy/README.md), *Deploying*). Any other `deploy/`
+change is installed by hand. The only long-running service is
 `redis-server`, whose restart is a cohort-wide event -
 [RESTART-WINDOW.md](RESTART-WINDOW.md), never a ship step.
 

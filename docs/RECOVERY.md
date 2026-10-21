@@ -202,8 +202,14 @@ admitted. The file is created 0400 and never overwritten:
 
 ```bash
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /home/exedev/broker/.venv/bin/python -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
+  /home/exedev/broker/.venv/bin/python -I -B -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
 ```
+
+**Steps 2 and 3 run the checkout's venv as root**, the one place this runbook
+does (#108). No release exists until step 6's deploy, and that deploy cannot
+come first: it forces a backup run, which here would ship the default-config
+`dump.rdb` as the newest snapshot, the one step 3's `--latest` takes. `-I -B`:
+no caller's `PYTHONPATH` or user site, and no root-owned bytecode in the tree.
 
 The prefix defaults to the hostname. On a VM not named `co-broker`, pass
 `--prefix co-broker` here and in step 3, and set `BROKER_BACKUP_PREFIX` in
@@ -223,9 +229,9 @@ started empty it would create the fresh base the trap above describes.
 
 ```bash
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /home/exedev/broker/.venv/bin/python -m src.broker.restore --list'          # newest first
+  /home/exedev/broker/.venv/bin/python -I -B -m src.broker.restore --list'          # newest first
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /home/exedev/broker/.venv/bin/python -m src.broker.restore --latest --into /var/lib/redis'
+  /home/exedev/broker/.venv/bin/python -I -B -m src.broker.restore --latest --into /var/lib/redis'
 ```
 
 `--object <name>` for a specific snapshot rather than the newest; `--file
@@ -317,6 +323,10 @@ set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy -rs         # the only skips: test_redis_acl.py's unassigned-DLQ rows
 ```
 
+Both units run `live` (#107, #108), so a run before the deploy fails at
+`chdir`: a failed unit and a probe finding, never a wrong backup. The deploy
+that makes `live` forces the first good backup run, after step 3's data.
+
 The first probe tick after the timer starts should be `finding_count: 0`; the
 `stream-reset` check will not fire, because `entries-added` on a restored
 stream is whatever the snapshot recorded and the probe's own state file was
@@ -349,9 +359,9 @@ sudo mv /var/lib/redis/appendonlydir "/var/lib/redis/appendonlydir.$(date -u +%Y
 
 ```bash
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /home/exedev/broker/.venv/bin/python -m src.broker.restore --list'       # newest first, with keys and sha256
+  /srv/broker/live/.venv/bin/python -I -B -m src.broker.restore --list'       # newest first, with keys and sha256
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /home/exedev/broker/.venv/bin/python -m src.broker.restore --latest --into /tmp/rehearsal'
+  /srv/broker/live/.venv/bin/python -I -B -m src.broker.restore --latest --into /tmp/rehearsal'
 sudo chown -R "$(id -u)" /tmp/rehearsal       # staged as root; the throwaway server runs as you
 redis-check-rdb /tmp/rehearsal/appendonlydir/appendonly.aof.1.base.rdb   # \o/ RDB looks OK! \o/  N keys read, M expires
 sha256sum /tmp/rehearsal/appendonlydir/appendonly.aof.1.base.rdb         # == the sha256 `--list` printed for it

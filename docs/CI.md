@@ -62,7 +62,7 @@ git push origin main                            # GitHub marks the PR merged
 
 Fast-forward only: the commit CI tested is the one that lands, and its subject
 already takes AGENTS.md's form (`chore: bump ...`). One PR at a time; after each
-push the next may need `@dependabot rebase`. `~/broker` is the backup unit's
-`WorkingDirectory` (the probe's is `/srv/broker/live` since #107): merge on
-`main`, never switch branches there. Nothing restarts and nothing deploys: an
-action bump touches `.github/` alone.
+push the next may need `@dependabot rebase`. No unit runs `~/broker` since
+#108 (both run `/srv/broker/live`), but `scripts/deploy.sh` runs from it: merge
+on `main`, never switch branches there. Nothing restarts and nothing deploys:
+an action bump touches `.github/` alone.

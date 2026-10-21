@@ -12,7 +12,7 @@ protect the node's memory.
 | `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory and eviction policy, per-stream length, last-entry age, per-group pending count and undelivered age, DLQ depth + evidence capture + `entries-added` continuity, disk, persistence status, backup freshness. Never blocks anything. Runs `/srv/broker/live`, a release; a deploy installs a changed copy (#107) |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
 | `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day, and `default` made a tombstone on 2026-09-29 (broker#52). Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
-| `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). Ships the service users' ACL digests beside each snapshot, refusing any plaintext line (broker#72). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
+| `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). Ships the service users' ACL digests beside each snapshot, refusing any plaintext line (broker#72). Runs `/srv/broker/live`, a release, still as root, with `/home` hidden; a deploy installs a changed copy (#108). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
 | `broker-drift.service` | `/etc/systemd/system/` | Does live lag `origin/main` in code that runs? Asks GitHub, checks in to co-status's `co-broker-drift` once a run (#110). `DynamicUser=`, the co-status key as a `LoadCredential=`, **no Redis credential** and no `.env`. Runs `/srv/broker/live`; see *The drift check* below |
 | `broker-drift.timer` | `/etc/systemd/system/` | Hourly, 5 min after boot. Enabled by the deploy that first installs it, once it verifies |
@@ -332,7 +332,9 @@ sudo systemctl enable --now broker-bus-health.timer
 
 # The backup (broker#4): its env names the bucket and the writer key's path.
 # The timer is enabled only once the key is at that path - see docs/RECOVERY.md,
-# "Provisioning the bucket and the writer".
+# "Provisioning the bucket and the writer". The unit runs /srv/broker/live
+# (#108): a run before the first deploy fails at chdir, and that deploy forces
+# one run once live exists.
 sudo install -m 0644 deploy/broker-backup.service deploy/broker-backup.timer /etc/systemd/system/
 sudo install -m 0400 -o root -g root /dev/null /etc/broker/backup.env
 printf 'BROKER_BACKUP_BUCKET=co-gcs-broker-backup\nGOOGLE_APPLICATION_CREDENTIALS=/etc/broker/co-broker-backup.json\n' \
@@ -393,11 +395,10 @@ once its `WorkingDirectory=` is `/srv/broker/live`.
 - **The probe has run `live` since #107.** A merge alone no longer reaches it:
   a change to `src/`, `uv.lock`, `pyproject.toml` or its unit is live only once
   deployed.
-- **The backup still runs `~/broker` until #108**, so a deploy changes nothing
-  it runs. Nothing syncs that checkout's venv any more: the probe's `uv run`
-  did, and it is gone. Until #108, a pull that moves `uv.lock` or
-  `pyproject.toml` needs `uv sync --frozen` in `~/broker`, after the wheelhouse
-  sync in AGENTS.md.
+- **The backup has run `live` since #108**, still as root (#109 drops it). A
+  deploy that moves `live` forces one backup run, so each ships one more
+  digests object; the bucket's lifecycle rule ages it out. No unit reads
+  `~/broker` now, and its venv is the dev tree's alone.
 
 ```bash
 # Once, on a new or rebuilt node: root's, and writable by root alone. The
@@ -669,8 +670,7 @@ rewrite time, which `maxmemory` also caps.
 syncs before each build and copies into the release only the wheels `uv.lock`
 names. In the checkout the sync is manual, and it is due before any `uv sync`
 or `uv run` there that follows a `co-core` pin change. Miss it and that command
-fails with a resolution error. Until #108 that includes the `uv sync` the
-backup's venv needs.
+fails with a resolution error.
 
 The probe holds **no** database credential, joins **no** consumer group, and
 inherits no variable from `/etc/broker/.env` that it does not read. All three

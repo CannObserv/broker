@@ -19,6 +19,7 @@ _DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
 REPO_SERVICE = _DEPLOY / "broker-backup.service"
 REPO_TIMER = _DEPLOY / "broker-backup.timer"
 REPO_PROBE_SERVICE = _DEPLOY / "broker-bus-health.service"
+RECOVERY = _DEPLOY.parent / "docs" / "RECOVERY.md"
 INSTALLED_SERVICE = Path("/etc/systemd/system/broker-backup.service")
 INSTALLED_TIMER = Path("/etc/systemd/system/broker-backup.timer")
 
@@ -146,6 +147,32 @@ def test_the_backup_runs_the_release_venv_never_uv() -> None:
 def test_the_backup_writes_no_bytecode() -> None:
     """The release is ``555`` and compiled at build (#22 Q6)."""
     assert "PYTHONDONTWRITEBYTECODE=1" in _directive(REPO_SERVICE.read_text(), "Environment")
+
+
+def _restore_runs(text: str) -> list[str]:
+    return [ln.strip() for ln in text.splitlines() if "-m src.broker.restore" in ln]
+
+
+def test_recovery_runs_restore_as_root_isolated() -> None:
+    """Every ``restore`` in the runbook runs as root, so as the release's import
+    probe does (#106 CR 9): ``-I`` drops the caller's PYTHONPATH and user site,
+    ``-B`` keeps root's bytecode out of whatever tree it imports from."""
+    runs = _restore_runs(RECOVERY.read_text())
+    assert len(runs) == 5, runs
+    assert all(" -I -B -m src.broker.restore" in run for run in runs), runs
+
+
+def test_recovery_verifies_a_backup_with_the_release() -> None:
+    """On a running node, by hand, root runs the release, as the unit does
+    (#108). Only a rebuild's steps 2-3 run the checkout: no release exists until
+    step 6's deploy, and that deploy's forced backup must follow the data."""
+    text = RECOVERY.read_text()
+    by_hand = text.split("## Verifying a backup by hand", 1)[1]
+    runs = _restore_runs(by_hand)
+    assert len(runs) == 2, runs
+    assert all(run.startswith(f"{LIVE}/.venv/bin/python ") for run in runs), runs
+    rebuild = _restore_runs(text.split("## Verifying a backup by hand", 1)[0])
+    assert all(run.startswith("/home/exedev/broker/.venv/bin/python ") for run in rebuild), rebuild
 
 
 def test_service_bounds_its_own_runtime() -> None:
