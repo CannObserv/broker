@@ -3,7 +3,9 @@
 
 Same shape as ``test_bus_health_units.py``: content asserted on the repo copy
 everywhere, byte-parity against ``/etc/systemd/system/`` on the node, where a
-missing unit fails rather than skips (CannObserv/broker#81).
+missing unit fails rather than skips (CannObserv/broker#81). Also the
+interpreter docs/RECOVERY.md runs ``restore`` with as root, the unit's twin by
+hand (#108).
 """
 
 from __future__ import annotations
@@ -166,12 +168,14 @@ def test_recovery_verifies_a_backup_with_the_release() -> None:
     """On a running node, by hand, root runs the release, as the unit does
     (#108). Only a rebuild's steps 2-3 run the checkout: no release exists until
     step 6's deploy, and that deploy's forced backup must follow the data."""
+    heading = "## Verifying a backup by hand"
     text = RECOVERY.read_text()
-    by_hand = text.split("## Verifying a backup by hand", 1)[1]
+    assert heading in text, f"{RECOVERY.name} has no {heading!r} section"
+    rebuild_text, by_hand = text.split(heading, 1)
     runs = _restore_runs(by_hand)
     assert len(runs) == 2, runs
     assert all(run.startswith(f"{LIVE}/.venv/bin/python ") for run in runs), runs
-    rebuild = _restore_runs(text.split("## Verifying a backup by hand", 1)[0])
+    rebuild = _restore_runs(rebuild_text)
     assert all(run.startswith("/home/exedev/broker/.venv/bin/python ") for run in rebuild), rebuild
 
 
