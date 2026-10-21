@@ -328,13 +328,12 @@ sudo install -m 0644 deploy/broker-bus-health.service \
     deploy/broker-bus-health.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now broker-bus-health.timer
-# then ~/broker/scripts/deploy.sh, detached (Deploying, below)
 
 # The backup (broker#4): its env names the bucket and the writer key's path.
 # The timer is enabled only once the key is at that path - see docs/RECOVERY.md,
 # "Provisioning the bucket and the writer". The unit runs /srv/broker/live
-# (#108): a run before the first deploy fails at chdir, and that deploy forces
-# one run once live exists.
+# (#108): a run before the first deploy fails at chdir. Env and key come BEFORE
+# that deploy, which forces one backup run and switches back if it fails.
 sudo install -m 0644 deploy/broker-backup.service deploy/broker-backup.timer /etc/systemd/system/
 sudo install -m 0400 -o root -g root /dev/null /etc/broker/backup.env
 printf 'BROKER_BACKUP_BUCKET=co-gcs-broker-backup\nGOOGLE_APPLICATION_CREDENTIALS=/etc/broker/co-broker-backup.json\n' \
@@ -345,6 +344,8 @@ sudo systemctl enable --now broker-backup.timer      # after the key exists
 # The drift check (#110): its key BEFORE the deploy that installs its units,
 # which enables the timer once it verifies, and whose first run checks in at
 # once. The copy: The drift check, below.
+
+# then ~/broker/scripts/deploy.sh, detached (Deploying, below)
 
 # Memory protection (broker#21). All live - nothing on the bus restarts:
 # daemon-reload applies MemoryLow= to running units (checked on a scratch unit).
