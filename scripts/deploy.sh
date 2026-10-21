@@ -47,7 +47,7 @@ HOST="${BROKER_DEPLOY_HOST:-}"
 ENV_FILE="${BROKER_DEPLOY_ENV_FILE:-/etc/broker/.env}"
 BACKUP_STATE="${BROKER_DEPLOY_BACKUP_STATE:-/var/lib/broker-backup/state.json}"
 KEEP="${BROKER_DEPLOY_KEEP:-5}"
-# The system interpreter: C5's backup user has no home and cannot read /home,
+# The system interpreter: the backup cannot see /home (ProtectHome=yes, #108),
 # so a uv-managed Python under ~/.local/share/uv would not start for it.
 PYTHON="${BROKER_DEPLOY_PYTHON:-/usr/bin/python3.12}"
 # CI takes about 2 minutes; a run still going after this is wedged or queued behind one.

@@ -1276,7 +1276,7 @@ class TestReleases:
         assert world.target() is None
 
     def test_an_interpreter_under_home_is_refused(self, world):
-        """The probe's user can read /home/exedev; the backup's (C5) cannot."""
+        """The probe's user can read /home/exedev; the backup cannot (#108)."""
         result = world.run(FAKE_PYTHON_HOME="/home/exedev/.local/share/uv/python/bin")
         assert result.returncode == 1
         assert "/home/exedev/.local/share/uv/python/bin" in result.stderr

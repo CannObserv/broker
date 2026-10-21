@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.deploy.conftest import outcome_of, pretend_node, read_installed
+from tests.deploy.conftest import LIVE, outcome_of, pretend_node, read_installed
 
 _DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
 REPO_SERVICE = _DEPLOY / "broker-backup.service"
@@ -102,11 +102,50 @@ def test_service_can_read_redis_and_write_nothing_of_redis() -> None:
     assert _directive(text, "StateDirectory") == ["broker-backup"]
 
 
-def test_service_runs_the_venv_interpreter_not_uv() -> None:
+def test_no_line_of_the_unit_names_the_dev_tree() -> None:
+    """Root runs only root-owned code (#22 goal 5, #108): a release, never the
+    checkout any ``exedev`` session can edit.
+
+    Comments included: one that still says the dev tree is a runbook pointing
+    the next reader back at it."""
+    assert "/home/exedev" not in REPO_SERVICE.read_text()
+
+
+def test_service_cannot_see_home() -> None:
+    """Nothing under /home is read once the unit runs a release, so none of it
+    is visible: the checkout's ``.env`` and its GitHub tokens included. ``yes``
+    hides /root too, which the backup never needed: it authenticates through
+    ``GOOGLE_APPLICATION_CREDENTIALS``."""
+    assert _directive(REPO_SERVICE.read_text(), "ProtectHome") == ["yes"]
+
+
+def test_the_backup_runs_from_live() -> None:
+    """``live`` is resolved at each start, and ``scripts/deploy.sh``'s
+    ``expected_of`` reads this line for the build the forced run must report."""
+    assert _directive(REPO_SERVICE.read_text(), "WorkingDirectory") == [str(LIVE)]
+
+
+def test_the_backup_runs_the_release_venv_never_uv() -> None:
     """``uv run`` wants a writable cache and may sync the environment, both of
-    which the sandbox refuses. Dependency sync is a deploy step."""
+    which the sandbox refuses. The release's venv is frozen at build, and the
+    arguments are the ones the backup took before the switch. ``-m`` from
+    ``WorkingDirectory=`` is what reads the release's ``REVISION`` (#105 CR 2)."""
     (exec_start,) = _directive(REPO_SERVICE.read_text(), "ExecStart")
-    assert exec_start.startswith("/home/exedev/broker/.venv/bin/python ")
+    argv = exec_start.split()
+    assert argv[:3] == [f"{LIVE}/.venv/bin/python", "-m", "src.broker.backup"], argv
+    assert argv[3:] == [
+        "--rdb",
+        "/var/lib/redis/dump.rdb",
+        "--acl-passwords",
+        "/etc/redis/broker-acl-passwords",
+        "--state-file",
+        "${STATE_DIRECTORY}/state.json",
+    ], argv
+
+
+def test_the_backup_writes_no_bytecode() -> None:
+    """The release is ``555`` and compiled at build (#22 Q6)."""
+    assert "PYTHONDONTWRITEBYTECODE=1" in _directive(REPO_SERVICE.read_text(), "Environment")
 
 
 def test_service_bounds_its_own_runtime() -> None:

@@ -13,7 +13,12 @@ Type=oneshot
 # group holds WRITE on the live snapshot. Root confined by the sandbox below is
 # the safer of the two: it can read Redis's files and cannot write them.
 User=root
-WorkingDirectory=/home/exedev/broker
+# The release scripts/deploy.sh last switched to (#22, #108): root's, read-only,
+# one commit on origin/main with its own frozen venv, so root runs only code no
+# exedev session can edit. Resolved at each start; the build the run reports is
+# that release's REVISION, read beside the src/ that `-m src.broker.*` imports
+# from here (#105 CR 2): ExecStart= keeps that shape.
+WorkingDirectory=/srv/broker/live
 
 # BROKER_BACKUP_BUCKET and GOOGLE_APPLICATION_CREDENTIALS (the writer key, 0400
 # root:root). NOT /etc/broker/.env: that file is 0640 root:exedev and carries
@@ -30,9 +35,10 @@ StateDirectory=broker-backup
 # The sandbox. Read-only filesystem except the state directory (systemd adds it
 # to the writable set) and a private /tmp for the copy and its gzip; no new
 # privileges; and one capability, the one that reads past DAC, which is what
-# lets root traverse /var/lib/redis and the venv under /home/exedev.
+# lets root traverse /var/lib/redis. /home is not visible at all: the release
+# reaches nothing under it, and the checkout's .env holds the cohort's tokens.
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
@@ -51,7 +57,7 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-# The tree is read-only to this unit anyway; say so rather than let Python try.
+# Compiled at build, and the release is 555: no run writes bytecode.
 Environment=PYTHONDONTWRITEBYTECODE=1
 
 # A snapshot is under a megabyte today and the maxmemory cap bounds it at a few
@@ -59,10 +65,10 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 # wedged upload is a failed unit the probe reports, not a silent hang.
 TimeoutStartSec=600
 
-# The venv's interpreter directly rather than `uv run`: uv wants a writable
-# cache and may sync the environment, both refused by the sandbox. Dependency
-# sync is a deploy step, not a service-start side effect.
+# The release venv's interpreter, never `uv run`: uv wants a writable cache and
+# may sync the environment, both refused by the sandbox. The venv was resolved
+# when the release was built; nothing resolves at start.
 # --acl-passwords: the service users' digests ship beside each snapshot, as a
 # projection that refuses any plaintext line (CannObserv/broker#72). A digest is
 # not a credential; see src/broker/backup.py.
-ExecStart=/home/exedev/broker/.venv/bin/python -m src.broker.backup --rdb /var/lib/redis/dump.rdb --acl-passwords /etc/redis/broker-acl-passwords --state-file ${STATE_DIRECTORY}/state.json
+ExecStart=/srv/broker/live/.venv/bin/python -m src.broker.backup --rdb /var/lib/redis/dump.rdb --acl-passwords /etc/redis/broker-acl-passwords --state-file ${STATE_DIRECTORY}/state.json
