@@ -205,11 +205,10 @@ sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
   /home/exedev/broker/.venv/bin/python -I -B -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
 ```
 
-**Steps 2 and 3 run the checkout's venv as root**, the one place this runbook
-does (#108). No release exists until step 6's deploy, and that deploy cannot
-come first: it forces a backup run, which here would ship the default-config
-`dump.rdb` as the newest snapshot, the one step 3's `--latest` takes. `-I -B`:
-no caller's `PYTHONPATH` or user site, and no root-owned bytecode in the tree.
+**Steps 2 and 3 run the checkout as root** (#108): no release exists before
+step 6's deploy, whose forced backup run would ship this default-config
+`dump.rdb` as the newest snapshot, the one `--latest` takes. `-I -B`: no
+caller's `PYTHONPATH` or user site, no root-owned bytecode in the tree.
 
 The prefix defaults to the hostname. On a VM not named `co-broker`, pass
 `--prefix co-broker` here and in step 3, and set `BROKER_BACKUP_PREFIX` in
@@ -323,9 +322,8 @@ set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy -rs         # the only skips: test_redis_acl.py's unassigned-DLQ rows
 ```
 
-Both units run `live` (#107, #108), so a run before the deploy fails at
-`chdir`: a failed unit and a probe finding, never a wrong backup. The deploy
-that makes `live` forces the first good backup run, after step 3's data.
+Both units run `live` (#107, #108): a run before the deploy fails at `chdir`,
+never a wrong backup. The deploy's forced run is the first good one.
 
 The first probe tick after the timer starts should be `finding_count: 0`; the
 `stream-reset` check will not fire, because `entries-added` on a restored
