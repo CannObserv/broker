@@ -5,25 +5,45 @@ Same shape as ``test_bus_health_units.py``: content asserted on the repo copy
 everywhere, byte-parity against ``/etc/systemd/system/`` on the node, where a
 missing unit fails rather than skips (CannObserv/broker#81). Also the
 interpreter docs/RECOVERY.md runs ``restore`` with as root, the unit's twin by
-hand (#108).
+hand (#108). And, on the node, the static user the unit runs as (#109).
 """
 
 from __future__ import annotations
 
+import grp
+import pwd
+import re
+import shlex
 import sys
 from pathlib import Path
 
 import pytest
 
-from tests.deploy.conftest import LIVE, outcome_of, pretend_node, read_installed
+from src.broker.backup import DEFAULT_ACL_PASSWORDS, DEFAULT_RDB
+from tests.deploy.conftest import (
+    LIVE,
+    outcome_of,
+    pretend_node,
+    read_installed,
+    require_broker_node,
+)
 
 _DEPLOY = Path(__file__).resolve().parents[2] / "deploy"
 REPO_SERVICE = _DEPLOY / "broker-backup.service"
 REPO_TIMER = _DEPLOY / "broker-backup.timer"
 REPO_PROBE_SERVICE = _DEPLOY / "broker-bus-health.service"
+README = _DEPLOY / "README.md"
 RECOVERY = _DEPLOY.parent / "docs" / "RECOVERY.md"
 INSTALLED_SERVICE = Path("/etc/systemd/system/broker-backup.service")
 INSTALLED_TIMER = Path("/etc/systemd/system/broker-backup.timer")
+#: The static system user (#109): no home, no login, in no supplementary group.
+USER = "broker-backup"
+WRITER_KEY = "/etc/broker/co-broker-backup.json"
+#: The one line root runs: coreutils, never Python. ``-p`` keeps the mtime
+#: ``snapshot_time`` falls back to.
+COPY = (
+    f"/usr/bin/install -p -m 0400 -o {USER} -g {USER} {DEFAULT_RDB} ${{RUNTIME_DIRECTORY}}/dump.rdb"
+)
 
 
 def _directive(text: str, key: str) -> list[str]:
@@ -49,29 +69,45 @@ def test_service_holds_no_redis_credential() -> None:
     plaintext line (``project_digests``), and the node users' lines never ship.
     """
     text = REPO_SERVICE.read_text()
-    assert "EnvironmentFile=/etc/broker/.env" not in text
-    assert "EnvironmentFile=-/etc/broker/.env" not in text
-    assert "Environment=BROKER_REDIS_URL" not in text
+    assert _directive(text, "EnvironmentFile") == []
+    assert _directive(text, "LoadCredentialEncrypted") == []
+    assert "brokeradmin" not in text and "acladmin" not in text
+    assert "BROKER_REDIS_URL" not in text
 
 
-def test_service_ships_the_acl_digests_from_the_passwords_file() -> None:
+def test_service_loads_both_files_as_credentials_with_empty_fallbacks() -> None:
+    """The user reads neither source: the manager hands each over at start
+    (#109). ``SetCredential=`` makes a missing source no start failure, so the
+    run starts, fails in Python and is recorded - the probe's next tick says so,
+    not the three-hour staleness rule. An empty passwords file still ships the
+    snapshot first (#72); an empty key fails before the snapshot is taken."""
+    text = REPO_SERVICE.read_text()
+    assert sorted(_directive(text, "LoadCredential")) == [
+        f"acl-passwords:{DEFAULT_ACL_PASSWORDS}",
+        f"gcs-writer:{WRITER_KEY}",
+    ]
+    assert sorted(_directive(text, "SetCredential")) == ["acl-passwords:\\n", "gcs-writer:\\n"]
+
+
+def test_service_ships_the_acl_digests_from_the_passwords_credential() -> None:
     """Named on the command line rather than left to the default, so the path
-    the unit reads is the one this test and docs/RECOVERY.md say it reads."""
+    the unit reads is the one this test and docs/RECOVERY.md say it reads.
+    ``%d``, not ``${CREDENTIALS_DIRECTORY}``: the manager resolves it, and
+    ``systemctl show`` prints the value."""
     (exec_start,) = _directive(REPO_SERVICE.read_text(), "ExecStart")
-    assert "--acl-passwords /etc/redis/broker-acl-passwords" in exec_start
+    assert "--acl-passwords %d/acl-passwords" in exec_start
 
 
-def test_service_sees_only_its_own_key_under_etc_broker() -> None:
-    """Root with ``CAP_DAC_READ_SEARCH`` reads anything, and since broker#72 it
-    reads /etc/redis on purpose. /etc/broker holds other identities' keys - the
-    probe's env, the wheelhouse reader, the co-status check-in - so it is an
-    allowlist, not a blocklist: an empty read-only tmpfs over the directory with
-    the writer key bound back in, and any file added later is hidden by default.
-    backup.env is read by systemd before the namespace exists, so it needs no bind.
-    """
+def test_service_sees_nothing_under_etc_broker() -> None:
+    """/etc/broker holds other identities' keys - the probe's env, the wheelhouse
+    reader, the co-status check-in - so it is hidden whole: an empty read-only
+    tmpfs, nothing bound back in. The writer key arrives as a credential, read
+    by the manager before the namespace exists. Defence in depth for a user no
+    file there is readable by (test_drift_units' world-readable check)."""
     text = REPO_SERVICE.read_text()
     assert _directive(text, "TemporaryFileSystem") == ["/etc/broker:ro"]
-    assert _directive(text, "BindReadOnlyPaths") == ["/etc/broker/co-broker-backup.json"]
+    assert _directive(text, "BindReadOnlyPaths") == []
+    assert _directive(text, "BindPaths") == []
 
 
 def test_service_cannot_read_the_node_credentials() -> None:
@@ -82,27 +118,56 @@ def test_service_cannot_read_the_node_credentials() -> None:
     ]
 
 
-def test_service_config_is_required_not_optional() -> None:
-    """No leading ``-``: a backup unit without its bucket and writer key must
-    fail loudly. The probe's check-in file is optional because absent is its
-    supported state; a backup with nowhere to write has no such state."""
-    assert "EnvironmentFile=/etc/broker/backup.env" in REPO_SERVICE.read_text()
-
-
-def test_service_can_read_redis_and_write_nothing_of_redis() -> None:
-    """root, confined. ``/var/lib/redis`` is 0750 redis:redis, so the reader is
-    root or in the redis group - and the group holds WRITE on dump.rdb. The
-    sandbox is what makes root the safer choice: the filesystem is read-only
-    except the state directory and a private /tmp, and the only capability
-    left is the one that reads."""
+def test_service_names_its_bucket_and_key_and_reads_no_backup_env() -> None:
+    """Not /etc/broker/backup.env (#109): whichever backup unit is installed
+    reads that file, so pointing it at this unit's credential would break the
+    #108 unit a switch back restores, and every ``restore`` in docs/RECOVERY.md,
+    which reads it as root. And an ``EnvironmentFile=`` overrides
+    ``Environment=``. The bucket is not a secret; it is the one Install writes."""
     text = REPO_SERVICE.read_text()
-    assert _directive(text, "User") == ["root"]
+    (bucket,) = re.findall(r"printf 'BROKER_BACKUP_BUCKET=([a-z0-9-]+)\\n", README.read_text())
+    environment = _directive(text, "Environment")
+    assert f"BROKER_BACKUP_BUCKET={bucket}" in environment
+    assert "GOOGLE_APPLICATION_CREDENTIALS=%d/gcs-writer" in environment
+    assert not [e for e in environment if e.startswith("BROKER_BACKUP_PREFIX=")], (
+        "the hostname is the default: a pinned prefix would put a second node in prod's history"
+    )
+
+
+def test_service_runs_as_its_own_user_with_no_capability() -> None:
+    """Not root, not the ``redis`` group - it holds WRITE on dump.rdb and on
+    /etc/redis - and not ``DynamicUser=``, which moves ``StateDirectory=`` under
+    0700 /var/lib/private where the probe cannot read state.json (#22 B1)."""
+    text = REPO_SERVICE.read_text()
+    assert _directive(text, "User") == [USER]
+    assert _directive(text, "Group") == [USER]
+    assert _directive(text, "SupplementaryGroups") == []
+    assert _directive(text, "DynamicUser") == []
+    assert _directive(text, "CapabilityBoundingSet") == [""]
+    assert _directive(text, "AmbientCapabilities") == []
     assert _directive(text, "ProtectSystem") == ["strict"]
     assert _directive(text, "PrivateTmp") == ["yes"]
     assert _directive(text, "NoNewPrivileges") == ["yes"]
-    assert _directive(text, "CapabilityBoundingSet") == ["CAP_DAC_READ_SEARCH"]
     assert _directive(text, "ReadWritePaths") == []  # StateDirectory is the only writable path
     assert _directive(text, "StateDirectory") == ["broker-backup"]
+
+
+def test_the_copy_is_the_only_privileged_line() -> None:
+    """``+`` runs one command as root outside the sandbox: ``install``, from the
+    one file the user cannot read into a directory only it can. ``-``: a failed
+    copy is no start failure, so Python finds no file and records it."""
+    text = REPO_SERVICE.read_text()
+    execs = [
+        (key, value)
+        for ln in text.splitlines()
+        if ln.startswith("Exec")
+        for key, value in [ln.split("=", 1)]
+    ]
+    privileged = [(key, value) for key, value in execs if "+" in value.split("/", 1)[0]]
+    assert privileged == [("ExecStartPre", f"+-{COPY}")], privileged
+    assert _directive(text, "RuntimeDirectory") == ["broker-backup"]
+    assert _directive(text, "RuntimeDirectoryMode") == ["0700"]
+    assert _directive(text, "RuntimeDirectoryPreserve") == []  # gone at stop, RAM freed
 
 
 def test_no_line_of_the_unit_names_the_dev_tree() -> None:
@@ -138,12 +203,13 @@ def test_the_backup_runs_the_release_venv_never_uv() -> None:
     assert argv[:3] == [f"{LIVE}/.venv/bin/python", "-m", "src.broker.backup"], argv
     assert argv[3:] == [
         "--rdb",
-        "/var/lib/redis/dump.rdb",
+        "${RUNTIME_DIRECTORY}/dump.rdb",
         "--acl-passwords",
-        "/etc/redis/broker-acl-passwords",
+        "%d/acl-passwords",
         "--state-file",
         "${STATE_DIRECTORY}/state.json",
     ], argv
+    assert shlex.split(COPY)[-1] == argv[4], "the copy is what the run reads"
 
 
 def test_the_backup_writes_no_bytecode() -> None:
@@ -203,6 +269,24 @@ def test_the_probe_is_told_where_the_backup_state_lives() -> None:
     Read-only by construction: it is under the backup unit's StateDirectory,
     which the probe's ``User=`` cannot write."""
     assert "--backup-state-file /var/lib/broker-backup/state.json" in REPO_PROBE_SERVICE.read_text()
+
+
+def test_the_user_is_static_and_in_no_supplementary_group() -> None:
+    """``id broker-backup`` lists no ``redis``, so the user cannot read
+    /var/lib/redis (0750 redis:redis) except through the unit's copy. On the
+    node only; ``useradd`` comes before the deploy that installs the unit."""
+    require_broker_node()
+    try:
+        user = pwd.getpwnam(USER)
+    except KeyError:
+        pytest.fail(
+            f"no {USER} user: sudo useradd --system --no-create-home "
+            f"--shell /usr/sbin/nologin {USER}"
+        )
+    assert grp.getgrgid(user.pw_gid).gr_name == USER
+    assert [g.gr_name for g in grp.getgrall() if USER in g.gr_mem] == []
+    assert user.pw_shell == "/usr/sbin/nologin"
+    assert not Path(user.pw_dir).exists()
 
 
 def test_installed_service_matches_repo() -> None:

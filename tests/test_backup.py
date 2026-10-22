@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from google.cloud.storage.client import Client as RealClient
 
 from src.broker import backup, bus_health, restore
 from src.broker.backup import (
@@ -622,6 +623,29 @@ def test_a_missing_passwords_file_fails_the_run_and_is_recorded(rdb, client, tmp
     assert _state(tmp_path)["outcome"] == "failed"
 
 
+def test_an_empty_passwords_credential_ships_the_snapshot_then_fails(
+    rdb, client, bucket, tmp_path
+) -> None:
+    """The unit's ``SetCredential=acl-passwords:\\n``, standing in for a missing
+    file (#109): the run starts, the snapshot ships, and the failure is recorded."""
+    empty = tmp_path / "acl-passwords"
+    empty.write_text("\n")
+    with pytest.raises(BackupError, match="no service digest"):
+        _run(rdb, client, tmp_path, acl_passwords=empty)
+    assert list(bucket.objects) == ["co-broker/20260910T154308Z.rdb.gz"]
+    shipped = "gs://a-backup-bucket/co-broker/20260910T154308Z.rdb.gz"
+    assert shipped in _state(tmp_path)["last_error"]
+
+
+def test_a_missing_runtime_copy_is_a_recorded_failure(client, bucket, tmp_path) -> None:
+    """The unit's privileged copy is ``-`` (#109): when it fails, the run still
+    starts, finds no file at the path it reads, and records that."""
+    with pytest.raises(BackupError, match="FileNotFoundError"):
+        _run(tmp_path / "run" / "dump.rdb", client, tmp_path)
+    assert _state(tmp_path)["outcome"] == "failed"
+    assert bucket.objects == {}
+
+
 # --- the entrypoint ---
 
 
@@ -640,6 +664,23 @@ def stub_main(monkeypatch, tmp_path, rdb):
         client_factory=client_factory,
         argv=["--rdb", str(rdb), "--state-file", str(tmp_path / "state.json")],
     )
+
+
+def test_an_empty_key_credential_fails_before_the_snapshot_and_is_recorded(
+    stub_main, monkeypatch, tmp_path
+) -> None:
+    """The unit's ``SetCredential=gcs-writer:\\n``, standing in for a missing key
+    (#109): the real client refuses the file, and main() records it."""
+    key = tmp_path / "gcs-writer"
+    key.write_text("\n")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(key))
+    monkeypatch.setattr(backup.storage, "Client", RealClient)
+    monkeypatch.setattr(backup.logger, "error", MagicMock())
+    assert backup.main(stub_main.argv) == 1
+    stub_main.run.assert_not_called()
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["outcome"] == "failed"
+    assert state["last_error"].startswith("DefaultCredentialsError: ")
 
 
 def test_main_needs_a_bucket_and_will_not_guess_one(stub_main, monkeypatch) -> None:

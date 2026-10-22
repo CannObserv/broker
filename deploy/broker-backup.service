@@ -8,48 +8,66 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# root, for one reason: /var/lib/redis is 0750 redis:redis and dump.rdb is 0660
-# redis:redis, so the reader is root or a member of the redis group - and the
-# group holds WRITE on the live snapshot. Root confined by the sandbox below is
-# the safer of the two: it can read Redis's files and cannot write them.
-User=root
+# A static system user (#109), made by hand before the deploy that installs this
+# unit: no home, no login, in no supplementary group. NOT the redis group, which
+# holds WRITE on dump.rdb and on /etc/redis; NOT DynamicUser=, which moves
+# StateDirectory= under /var/lib/private (0700) where the probe cannot read
+# state.json. It reads neither dump.rdb nor the two root-only files itself: the
+# copy below and the credentials hand each over at start.
+User=broker-backup
+Group=broker-backup
 # The release scripts/deploy.sh last switched to (#22, #108): root's, read-only,
-# one commit on origin/main with its own frozen venv, so root runs only code no
-# exedev session can edit. Resolved at each start; the build the run reports is
-# that release's REVISION, read beside the src/ that `-m src.broker.*` imports
-# from here (#105 CR 2): ExecStart= keeps that shape.
+# one commit on origin/main with its own frozen venv. World-readable, REVISION
+# included. Resolved at each start; the build the run reports is that release's
+# REVISION, read beside the src/ that `-m src.broker.*` imports from here
+# (#105 CR 2): ExecStart= keeps that shape.
 WorkingDirectory=/srv/broker/live
 
-# BROKER_BACKUP_BUCKET and GOOGLE_APPLICATION_CREDENTIALS (the writer key, 0400
-# root:root). NOT /etc/broker/.env: that file is 0640 root:exedev and carries
-# the operator's read-only wheelhouse key and the probe's Redis URL, neither of
-# which this unit needs and the second of which it must not have. No leading
-# '-': a backup unit without its configuration must fail loudly, not run
-# quietly with none.
-EnvironmentFile=/etc/broker/backup.env
+# No EnvironmentFile= (#109). /etc/broker/backup.env is read by whichever backup
+# unit is installed - the #108 unit a switch back restores included - and by
+# every restore in docs/RECOVERY.md, so it keeps naming the key's own path, and
+# an EnvironmentFile= would override these lines. The bucket is not a secret.
+# BROKER_BACKUP_PREFIX defaults to the hostname; a node not named co-broker
+# sets it in a drop-in (docs/RECOVERY.md), never here.
+Environment=BROKER_BACKUP_BUCKET=co-gcs-broker-backup
+Environment=GOOGLE_APPLICATION_CREDENTIALS=%d/gcs-writer
+# Compiled at build, and the release is 555: no run writes bytecode.
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Read by the manager at start, both root 0400 at the source. SetCredential= is
+# the fallback for a missing source, so the run still starts and fails in Python,
+# recorded for the probe's next tick rather than its three-hour staleness rule:
+# an empty key fails before the snapshot; an empty passwords file ships the
+# snapshot first and then fails, as a refused one does (#72).
+LoadCredential=gcs-writer:/etc/broker/co-broker-backup.json
+SetCredential=gcs-writer:\n
+LoadCredential=acl-passwords:/etc/redis/broker-acl-passwords
+SetCredential=acl-passwords:\n
 
 # /var/lib/broker-backup/state.json - one record per run, written 0644 because
-# the probe reads it as exedev for the freshness finding.
+# the probe reads it as exedev for the freshness finding. systemd chowns the
+# directory to User= at each start, and to root again under the #108 unit.
 StateDirectory=broker-backup
+# /run/broker-backup, for the copy below: 0700, removed at stop. /run is tmpfs,
+# so the copy is RAM charged to this unit and freed with it, bounded by the RDB
+# and so by maxmemory. Python's own copy and its gzip go to the private /tmp, on /.
+RuntimeDirectory=broker-backup
+RuntimeDirectoryMode=0700
 
-# The sandbox. Read-only filesystem except the state directory (systemd adds it
-# to the writable set) and a private /tmp for the copy and its gzip; no new
-# privileges; and one capability, the one that reads past DAC, which is what
-# lets root traverse /var/lib/redis. /home is not visible at all: the release
-# reaches nothing under it, and the checkout's .env holds the cohort's tokens.
+# The sandbox. Read-only filesystem except the state and runtime directories
+# (systemd adds both to the writable set) and a private /tmp; no new privileges
+# and no capability. /home is not visible at all: the release reaches nothing
+# under it, and the checkout's .env holds the cohort's tokens. /etc/broker holds
+# other identities' keys - the probe's env, the wheelhouse reader, the co-status
+# check-in - and is hidden whole, as are the node users' encrypted credentials
+# ('-': absent is no failure). Defence in depth: no file under either is
+# readable by this user anyway.
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH
-# Reads /etc/redis/broker-acl-passwords on purpose (CannObserv/broker#72), so
-# what it has no use for is taken away. /etc/broker is an allowlist: an empty
-# read-only tmpfs with the writer key bound back in, so the probe's env, the
-# wheelhouse reader, the co-status check-in and any file added later are
-# hidden. backup.env is read by systemd before the namespace exists. The node
-# users' encrypted credentials are hidden too; '-': absent is no failure.
+CapabilityBoundingSet=
 TemporaryFileSystem=/etc/broker:ro
-BindReadOnlyPaths=/etc/broker/co-broker-backup.json
 InaccessiblePaths=-/etc/credstore.encrypted
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
@@ -57,18 +75,21 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-# Compiled at build, and the release is 555: no run writes bytecode.
-Environment=PYTHONDONTWRITEBYTECODE=1
 
-# A snapshot is under a megabyte today and the maxmemory cap bounds it at a few
-# hundred. Ten minutes is generous for the transfer and short enough that a
-# wedged upload is a failed unit the probe reports, not a silent hang.
+# A snapshot is a few megabytes today and the maxmemory cap bounds it at a few
+# hundred. Ten minutes is generous for the copy and the transfer, and short
+# enough that a wedged upload is a failed unit the probe reports, not a silent hang.
 TimeoutStartSec=600
 
+# The only privileged step: root runs coreutils, never Python, outside the
+# sandbox. /var/lib/redis is 0750 redis:redis, so this is the one read the user
+# cannot make. -p keeps the mtime snapshot_time falls back to. '-': a failed
+# copy is no start failure, so the run finds no file and records that.
+ExecStartPre=+-/usr/bin/install -p -m 0400 -o broker-backup -g broker-backup /var/lib/redis/dump.rdb ${RUNTIME_DIRECTORY}/dump.rdb
 # The release venv's interpreter, never `uv run`: uv wants a writable cache and
 # may sync the environment, both refused by the sandbox. The venv was resolved
 # when the release was built; nothing resolves at start.
 # --acl-passwords: the service users' digests ship beside each snapshot, as a
 # projection that refuses any plaintext line (CannObserv/broker#72). A digest is
 # not a credential; see src/broker/backup.py.
-ExecStart=/srv/broker/live/.venv/bin/python -m src.broker.backup --rdb /var/lib/redis/dump.rdb --acl-passwords /etc/redis/broker-acl-passwords --state-file ${STATE_DIRECTORY}/state.json
+ExecStart=/srv/broker/live/.venv/bin/python -m src.broker.backup --rdb ${RUNTIME_DIRECTORY}/dump.rdb --acl-passwords %d/acl-passwords --state-file ${STATE_DIRECTORY}/state.json
