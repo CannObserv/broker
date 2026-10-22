@@ -62,7 +62,8 @@ RuntimeDirectoryMode=0700
 # other identities' keys - the probe's env, the wheelhouse reader, the co-status
 # check-in - and is hidden whole, as are the node users' encrypted credentials
 # ('-': absent is no failure). Defence in depth: no file under either is
-# readable by this user anyway.
+# readable by this user anyway. The writer key still loads: the manager reads a
+# credential's source past the tmpfs (rehearsed on systemd 255, #109).
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

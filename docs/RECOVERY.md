@@ -493,6 +493,17 @@ unit takes the key as a credential, as the `broker-backup` user *Install* makes 
   240 passed, the four DLQ skips. The snapshot was RDB v11, `valkey-ver`
   `7.2.13`, recorded as `redis_version`. Valkey's checker also passed a 7.0.15
   file and reported its `redis-ver`; 7.0's rejected Valkey's (exit 1).
+- **2026-10-22, the unit without root (broker#109), by hand on `co-broker`.**
+  The new unit, renamed and run from `/run/systemd/system/`, with its state
+  and runtime directories renamed and `ExecStart=` swapped for a script that
+  uploads nothing. As uid 997 in its own group alone: `/etc/broker` empty, both
+  credentials their sources' sizes, the live `dump.rdb` unreadable, the copy
+  `0400` in a `0700` runtime directory, the checker passing 48 keys, the
+  digests projected, one listing as the writer. So systemd 255 reads a
+  `LoadCredential=` source past `TemporaryFileSystem=`, #110's open question.
+  The #108 unit's shape then wrote `state.json` as root into the directory the
+  first left `broker-backup`'s: the chown a switch back needs. Both runtime
+  directories were gone after the runs.
 
 ---
 
