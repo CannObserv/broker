@@ -36,6 +36,8 @@ README = _DEPLOY / "README.md"
 RECOVERY = _DEPLOY.parent / "docs" / "RECOVERY.md"
 INSTALLED_SERVICE = Path("/etc/systemd/system/broker-backup.service")
 INSTALLED_TIMER = Path("/etc/systemd/system/broker-backup.timer")
+#: Where ``systemctl edit`` writes, which the parity check above never reads.
+DROPIN_DIR = Path("/etc/systemd/system/broker-backup.service.d")
 #: The static system user (#109): no home, no login, in no supplementary group.
 USER = "broker-backup"
 WRITER_KEY = "/etc/broker/co-broker-backup.json"
@@ -290,6 +292,42 @@ def test_the_user_is_static_and_in_no_supplementary_group() -> None:
     assert [g.gr_name for g in grp.getgrall() if USER in g.gr_mem] == []
     assert user.pw_shell == "/usr/sbin/nologin"
     assert not Path(user.pw_dir).exists()
+
+
+def _dropin_lines_beyond_the_prefix(directory: Path) -> list[str]:
+    """Each drop-in line that is not ``[Service]``, a comment, a blank or the
+    prefix. An absent directory has none."""
+    if not directory.is_dir():
+        return []
+    return [
+        f"{conf.name}: {ln.strip()}"
+        for conf in sorted(directory.glob("*.conf"))
+        for ln in conf.read_text().splitlines()
+        if ln.strip()
+        and not ln.lstrip().startswith(("#", ";"))
+        and ln.strip() != "[Service]"
+        and not re.fullmatch(r"Environment=BROKER_BACKUP_PREFIX=[A-Za-z0-9._-]+", ln.strip())
+    ]
+
+
+def test_a_drop_in_sets_the_prefix_and_nothing_else() -> None:
+    """docs/RECOVERY.md puts ``BROKER_BACKUP_PREFIX`` in a drop-in on a node not
+    named co-broker (#109). The parity check reads only the unit file, so a
+    drop-in could put back ``User=root``, a capability or an ``EnvironmentFile=``
+    that overrides the bucket or key, and every pin above would still pass."""
+    require_broker_node()
+    assert _dropin_lines_beyond_the_prefix(DROPIN_DIR) == []
+
+
+def test_the_drop_in_check_names_anything_but_the_prefix(tmp_path) -> None:
+    assert _dropin_lines_beyond_the_prefix(tmp_path / "absent") == []
+    (tmp_path / "override.conf").write_text(
+        "### Editing /etc/systemd/system/broker-backup.service.d/override.conf\n"
+        "[Service]\nEnvironment=BROKER_BACKUP_PREFIX=co-broker\n\n"
+    )
+    assert _dropin_lines_beyond_the_prefix(tmp_path) == []
+    (tmp_path / "zz.conf").write_text("[Service]\nUser=root\n")
+    assert _dropin_lines_beyond_the_prefix(tmp_path) == ["zz.conf: User=root"]
 
 
 def test_installed_service_matches_repo() -> None:
