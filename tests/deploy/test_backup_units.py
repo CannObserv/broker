@@ -157,7 +157,8 @@ def test_service_runs_as_its_own_user_with_no_capability() -> None:
 def test_the_copy_is_the_only_privileged_line() -> None:
     """``+`` runs one command as root outside the sandbox: ``install``, from the
     one file the user cannot read into a directory only it can. ``-``: a failed
-    copy is no start failure, so Python finds no file and records it."""
+    copy is no start failure, so Python finds no file and records it. ``!`` and
+    ``!!`` lift privilege too (ambient capabilities), so they count."""
     text = REPO_SERVICE.read_text()
     execs = [
         (key, value)
@@ -165,7 +166,7 @@ def test_the_copy_is_the_only_privileged_line() -> None:
         if ln.startswith("Exec")
         for key, value in [ln.split("=", 1)]
     ]
-    privileged = [(key, value) for key, value in execs if "+" in value.split("/", 1)[0]]
+    privileged = [(key, value) for key, value in execs if set("+!") & set(value.split("/", 1)[0])]
     assert privileged == [("ExecStartPre", f"+-{COPY}")], privileged
     assert _directive(text, "RuntimeDirectory") == ["broker-backup"]
     assert _directive(text, "RuntimeDirectoryMode") == ["0700"]
