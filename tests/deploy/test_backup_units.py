@@ -101,9 +101,11 @@ def test_service_ships_the_acl_digests_from_the_passwords_credential() -> None:
 def test_service_sees_nothing_under_etc_broker() -> None:
     """/etc/broker holds other identities' keys - the probe's env, the wheelhouse
     reader, the co-status check-in - so it is hidden whole: an empty read-only
-    tmpfs, nothing bound back in. The writer key arrives as a credential, read
-    by the manager before the namespace exists. Defence in depth for a user no
-    file there is readable by (test_drift_units' world-readable check)."""
+    tmpfs, nothing bound back in. The writer key arrives as a credential, and
+    whether the manager reads it before the namespace hides its source is
+    #110's open question: #109's rehearsal on the node decides whether this
+    stays. Defence in depth for a user no file there is readable by
+    (test_drift_units' world-readable check)."""
     text = REPO_SERVICE.read_text()
     assert _directive(text, "TemporaryFileSystem") == ["/etc/broker:ro"]
     assert _directive(text, "BindReadOnlyPaths") == []
