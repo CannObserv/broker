@@ -12,7 +12,7 @@ protect the node's memory.
 | `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory and eviction policy, per-stream length, last-entry age, per-group pending count and undelivered age, DLQ depth + evidence capture + `entries-added` continuity, disk, persistence status, backup freshness. Never blocks anything. Runs `/srv/broker/live`, a release; a deploy installs a changed copy (#107) |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
 | `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day, and `default` made a tombstone on 2026-09-29 (broker#52). Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
-| `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential**; root confined to read-only everything but its state directory (broker#4). Ships the service users' ACL digests beside each snapshot, refusing any plaintext line (broker#72). Runs `/srv/broker/live`, a release, still as root, with `/home` hidden; a deploy installs a changed copy (#108). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
+| `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential** (broker#4). Ships the service users' ACL digests beside each snapshot, refusing any plaintext line (broker#72). Runs `/srv/broker/live`, a release, with `/home` hidden; a deploy installs a changed copy (#108). Runs as `broker-backup`, a static user with no capability: root only copies `dump.rdb` in, and the key and passwords file arrive as credentials (#109). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
 | `broker-drift.service` | `/etc/systemd/system/` | Does live lag `origin/main` in code that runs? Asks GitHub, checks in to co-status's `co-broker-drift` once a run (#110). `DynamicUser=`, the co-status key as a `LoadCredential=`, **no Redis credential** and no `.env`. Runs `/srv/broker/live`; see *The drift check* below |
 | `broker-drift.timer` | `/etc/systemd/system/` | Hourly, 5 min after boot. Enabled by the deploy that first installs it, once it verifies |
@@ -329,11 +329,15 @@ sudo install -m 0644 deploy/broker-bus-health.service \
 sudo systemctl daemon-reload
 sudo systemctl enable --now broker-bus-health.timer
 
-# The backup (broker#4): its env names the bucket and the writer key's path.
-# The timer is enabled only once the key is at that path - see docs/RECOVERY.md,
-# "Provisioning the bucket and the writer". The unit runs /srv/broker/live
-# (#108): a run before the first deploy fails at chdir. Env and key come BEFORE
-# that deploy, which forces one backup run and switches back if it fails.
+# The backup (broker#4). The timer is enabled only once the key is in place -
+# see docs/RECOVERY.md, "Provisioning the bucket and the writer". The unit runs
+# /srv/broker/live (#108): a run before the first deploy fails at chdir. Its
+# user, env and key come BEFORE that deploy, which forces one backup run and
+# switches back if it fails; a User= that does not exist fails that run (#109).
+# backup.env is the restore's, and the #108 unit's a switch back restores; this
+# unit names its bucket and takes the key as a credential.
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin broker-backup
+id broker-backup                                     # its own group alone: never redis
 sudo install -m 0644 deploy/broker-backup.service deploy/broker-backup.timer /etc/systemd/system/
 sudo install -m 0400 -o root -g root /dev/null /etc/broker/backup.env
 printf 'BROKER_BACKUP_BUCKET=co-gcs-broker-backup\nGOOGLE_APPLICATION_CREDENTIALS=/etc/broker/co-broker-backup.json\n' \
@@ -396,7 +400,7 @@ once its `WorkingDirectory=` is `/srv/broker/live`.
 - **The probe has run `live` since #107.** A merge alone no longer reaches it:
   a change to `src/`, `uv.lock`, `pyproject.toml` or its unit is live only once
   deployed.
-- **The backup has run `live` since #108**, still as root (#109 drops it). A
+- **The backup has run `live` since #108**, as `broker-backup` since #109. A
   deploy that moves `live` forces one backup run, so each ships one more
   digests object; the bucket's lifecycle rule ages it out. No unit reads
   `~/broker` now, and its venv is the dev tree's alone.
@@ -684,13 +688,17 @@ credential - see *The co-status check-in* below.
 `/etc/broker/status-checkin.key` (`0400 root:root`) carries the same key alone,
 for the drift check's `LoadCredential=` - see *The drift check* below.
 
-`/etc/broker/backup.env` (`0400 root:root`, **required by the backup unit**,
-which loads nothing else) carries `BROKER_BACKUP_BUCKET` and the
-`GOOGLE_APPLICATION_CREDENTIALS` path of the **writer** key. Not in
+`/etc/broker/backup.env` (`0400 root:root`) carries `BROKER_BACKUP_BUCKET` and
+the `GOOGLE_APPLICATION_CREDENTIALS` path of the **writer** key. Every
+`restore` in [`../docs/RECOVERY.md`](../docs/RECOVERY.md) reads it as root, and
+so does the #108 backup unit a switch back restores. The current unit reads no
+env file (#109): it names the bucket itself and takes the key as a
+credential, so the file keeps naming the key's own path. Not in
 `/etc/broker/.env`, and the reason cuts both ways: that file is readable by
 `exedev`, which must not hold a credential that can write to the backup
-bucket; and the backup unit must not inherit a Redis URL it has no use for.
-`BROKER_BACKUP_PREFIX` is optional and defaults to the hostname.
+bucket; and the backup must not inherit a Redis URL it has no use for.
+`BROKER_BACKUP_PREFIX` is optional and defaults to the hostname; the unit
+takes it from a drop-in, `sudo systemctl edit broker-backup.service`.
 
 ## The co-status check-in (broker#3, #66)
 
@@ -958,6 +966,17 @@ both destinations at nowhere for every test.
 `delete`, so the bucket's 30-day lifecycle rule is the only thing that removes
 a snapshot. It holds **no Redis credential**: the server rewrites `dump.rdb`
 atomically at its `save` points, so the file is the interface.
+
+It runs as `broker-backup` (#109), a static system user in no supplementary
+group, with no capability. `/var/lib/redis` is `0750 redis:redis`, so the
+user cannot read `dump.rdb`; the unit's one `+` line, `install -p`, copies it
+as root into the unit's `0700` runtime directory, and the user reads the copy.
+The writer key and `/etc/redis/broker-acl-passwords` arrive through
+`LoadCredential=`. The `redis` group is not an option: it holds write on
+`dump.rdb` and on `/etc/redis`. Neither is `DynamicUser=`, under which the probe
+could not read `state.json` (#22 B1). A missing key or passwords file is an
+empty credential, and a failed copy is no start failure: each fails inside the
+run and is recorded, so the probe reports it on its next tick.
 
 Each run also ships the service users' ACL digests, `<run time>.digests`, so a
 rebuilt node re-admits every service without reissuing a password (broker#72).

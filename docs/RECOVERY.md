@@ -51,7 +51,7 @@ was recovered by replaying that history; that was margin, not design.
 | **Described** | object metadata: `snapshot_at`, `sha256`, `size_bytes`, `redis_version`, `rdb_version`, `keys`, `source_host` - readable without downloading. `redis_version` is the file's `valkey-ver` or `redis-ver`, one key for both engines (#102) |
 | **Retained** | 30 days, by the **bucket's lifecycle rule**. The node's identity cannot delete |
 | **RPO** | the backup interval plus the save interval: under two hours worst case, about an hour typically |
-| **Credential** | `/etc/broker/co-broker-backup.json` (0400 root:root), `roles/storage.objectCreator` + `roles/storage.objectViewer` on that one bucket. **No Redis credential** - the job reads files, and a digest is not one (below) |
+| **Credential** | `/etc/broker/co-broker-backup.json` (0400 root:root), handed to the job's `broker-backup` user as a credential at start (#109), `roles/storage.objectCreator` + `roles/storage.objectViewer` on that one bucket. **No Redis credential** - the job reads files, and a digest is not one (below) |
 | **Watched by** | the probe: `backup` findings (never completed, last attempt failed, last success too old) and `persistence` findings (`rdb_last_bgsave_status` and friends, and changes left unsaved for over three hours - the case where every hourly backup is the same stale file, judged from the server because only it can tell idle from broken), both reaching co-status through the check-in |
 
 It holds no opinion on the AOF (never shipped - point in time is the contract),
@@ -159,7 +159,7 @@ anywhere.
 | the wheelhouse reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | the wheelhouse sync needs it; `uv sync` needs the wheelhouse |
 | the co-status check-in | `/etc/broker/status.env` | 0400 root | the monitor id is node-agnostic; the same monitor continues |
 | the drift check's key | `/etc/broker/status-checkin.key` | 0400 root | the same key as `status.env`, copied from it (`deploy/README.md`, *The drift check*); not a second secret to keep |
-| the backup writer | `/etc/broker/backup.env` + `/etc/broker/co-broker-backup.json` | 0400 root | also what the **restore** reads with - `objectViewer` lists and downloads |
+| the backup writer | `/etc/broker/backup.env` + `/etc/broker/co-broker-backup.json` | 0400 root | also what the **restore** reads with - `objectViewer` lists and downloads. The unit reads the key alone, as a credential (#109); `backup.env` is the restore's |
 
 **Not on the list, deliberately** (CannObserv/broker#52): `requirepass`, which the
 install mints and which authenticates nobody; `default`'s password, which is the
@@ -188,7 +188,9 @@ sudo ls -la /var/lib/redis        # a default-config dump.rdb is fine; no append
 ### 2. The repo, the config, the secrets
 
 Everything in `deploy/README.md`'s *Install* section, in order: restore the
-secrets at the paths and modes above, then the repo and its venv:
+secrets at the paths and modes above, then the repo and its venv. Install
+also makes the `broker-backup` user (#109), before step 6's deploy, whose
+forced backup run fails without it:
 
 ```bash
 set -a; . /etc/broker/.env; set +a
@@ -211,8 +213,11 @@ step 6's deploy, whose forced backup run would ship this default-config
 caller's `PYTHONPATH` or user site, no root-owned bytecode in the tree.
 
 The prefix defaults to the hostname. On a VM not named `co-broker`, pass
-`--prefix co-broker` here and in step 3, and set `BROKER_BACKUP_PREFIX` in
-`backup.env` so later backups continue the same history.
+`--prefix co-broker` here and in step 3. Then set `BROKER_BACKUP_PREFIX=co-broker` in
+`backup.env`, for later restores, and in a drop-in for the unit, which reads no
+env file (#109), so later backups continue the same history:
+`sudo systemctl edit broker-backup.service`, with `[Service]` and
+`Environment=BROKER_BACKUP_PREFIX=co-broker`.
 
 It prints what it restored, then the lines a rebuild mints: `default`'s
 tombstone (one printed line), then the node credentials
@@ -430,7 +435,9 @@ sudo systemctl enable --now broker-backup.timer
 sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -o cat --no-pager
 ```
 
-`/etc/broker/backup.env` already names that path and the bucket.
+`/etc/broker/backup.env` already names that path and the bucket, for the
+restore. The unit takes the key from that path as a credential and runs as
+`broker-backup`, which `deploy/README.md`'s *Install* makes first (#109).
 
 ---
 
