@@ -3,21 +3,21 @@
 # The offline estimators prefer a file's own last exact measurement to the
 # repo-wide figure in .skills/context-token-ratio, falling back to it for a
 # file never counted exactly or since drifted far from the size recorded here.
-14463 5997 AGENTS.md
+14431 5992 AGENTS.md
 21846 8670 docs/ACL-CUTOVER.md
-23592 9445 docs/BUS-HEALTH.md
-3796 1602 docs/CI.md
-3147 1217 docs/CONSUMER-REGISTRATIONS.md
-7157 2811 docs/DLQ-DRAINING.md
+24707 9959 docs/BUS-HEALTH.md
+3853 1629 docs/CI.md
+4205 1598 docs/CONSUMER-REGISTRATIONS.md
+7395 2914 docs/DLQ-DRAINING.md
 5044 2033 docs/INCIDENT-2026-09-10.md
-6715 2564 docs/LWW-CAP.md
-5431 1989 docs/MEMORY-PROTECTION.md
-12218 5046 docs/NETWORK-PATHS.md
+8533 3261 docs/LWW-CAP.md
+8402 3158 docs/MEMORY-PROTECTION.md
+13416 5500 docs/NETWORK-PATHS.md
 8161 3569 docs/NODE-CREDENTIALS.md
-4237 1654 docs/NON-STREAM-KEYS.md
-25311 9998 docs/RECOVERY.md
-24797 9873 docs/RESTART-WINDOW.md
-8930 3477 docs/SKILLS.md
+4357 1706 docs/NON-STREAM-KEYS.md
+27351 10882 docs/RECOVERY.md
+25060 9974 docs/RESTART-WINDOW.md
+9174 3582 docs/SKILLS.md
 10930 4071 docs/SOCRATICODE.md
-24746 9545 docs/STREAMS.md
-7900 2971 docs/UNDELIVERED-CONSUMERS.md
+24831 9724 docs/STREAMS.md
+9808 3736 docs/UNDELIVERED-CONSUMERS.md
