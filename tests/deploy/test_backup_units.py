@@ -40,6 +40,8 @@ INSTALLED_TIMER = Path("/etc/systemd/system/broker-backup.timer")
 DROPIN_DIR = Path("/etc/systemd/system/broker-backup.service.d")
 #: The static system user (#109): no home, no login, in no supplementary group.
 USER = "broker-backup"
+#: How deploy/README.md's Install makes it, and what a missing user's failure says.
+USERADD = f"sudo useradd --system --no-create-home --shell /usr/sbin/nologin {USER}"
 WRITER_KEY = "/etc/broker/co-broker-backup.json"
 #: The one line root runs: coreutils, never Python. ``-p`` keeps the mtime
 #: ``snapshot_time`` falls back to.
@@ -287,14 +289,20 @@ def test_the_user_is_static_and_in_no_supplementary_group() -> None:
     try:
         user = pwd.getpwnam(USER)
     except KeyError:
-        pytest.fail(
-            f"no {USER} user: sudo useradd --system --no-create-home "
-            f"--shell /usr/sbin/nologin {USER}"
-        )
+        pytest.fail(f"no {USER} user: {USERADD}")
     assert grp.getgrgid(user.pw_gid).gr_name == USER
     assert [g.gr_name for g in grp.getgrall() if USER in g.gr_mem] == []
     assert user.pw_shell == "/usr/sbin/nologin"
     assert not Path(user.pw_dir).exists()
+
+
+def test_install_makes_the_user_before_the_deploy() -> None:
+    """A ``User=`` that does not exist fails the deploy's forced run, which then
+    switches back: the user comes first, spelled as the failure above says."""
+    lines = [ln.strip() for ln in README.read_text().splitlines()]
+    assert USERADD in lines
+    deploys = [i for i, ln in enumerate(lines) if "scripts/deploy.sh" in ln]
+    assert deploys and lines.index(USERADD) < deploys[0]
 
 
 def _dropin_lines_beyond_the_prefix(directory: Path) -> list[str]:
