@@ -213,11 +213,10 @@ step 6's deploy, whose forced backup run would ship this default-config
 caller's `PYTHONPATH` or user site, no root-owned bytecode in the tree.
 
 The prefix defaults to the hostname. On a VM not named `co-broker`, pass
-`--prefix co-broker` here and in step 3. Then set `BROKER_BACKUP_PREFIX=co-broker` in
-`backup.env`, for later restores, and in a drop-in for the unit, which reads no
-env file (#109), so later backups continue the same history:
-`sudo systemctl edit broker-backup.service`, with `[Service]` and
-`Environment=BROKER_BACKUP_PREFIX=co-broker`.
+`--prefix co-broker` here and in step 3, and set `BROKER_BACKUP_PREFIX=co-broker`
+in `backup.env` for restores and, since the unit reads no env file (#109), in
+`sudo systemctl edit broker-backup.service` under `[Service]` as an
+`Environment=` line, so later backups continue the same history.
 
 It prints what it restored, then the lines a rebuild mints: `default`'s
 tombstone (one printed line), then the node credentials
@@ -435,9 +434,8 @@ sudo systemctl enable --now broker-backup.timer
 sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -o cat --no-pager
 ```
 
-`/etc/broker/backup.env` already names that path and the bucket, for the
-restore. The unit takes the key from that path as a credential and runs as
-`broker-backup`, which `deploy/README.md`'s *Install* makes first (#109).
+`/etc/broker/backup.env` names that path and the bucket for the restore; the
+unit takes the key as a credential, as the `broker-backup` user *Install* makes (#109).
 
 ---
 
