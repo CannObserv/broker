@@ -40,6 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SELECTOR = REPO_ROOT / "scripts" / "shellcheck.sh"
 HOOK = REPO_ROOT / ".githooks" / "pre-commit"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+DEPLOY = REPO_ROOT / "scripts" / "deploy.sh"
 CI_DOC = REPO_ROOT / "docs" / "CI.md"
 VENV_BIN = Path(sys.executable).parent
 
@@ -216,12 +217,16 @@ class TestTheHook:
 
 class TestTheWiring:
     def test_ci_runs_it_as_a_step_of_lint_and_test(self):
-        """A step, never a job: ``scripts/deploy.sh``'s ``CI_JOBS`` names the
-        jobs it requires green, and test_deploy.py holds those to ``ci.yml``."""
+        """A step of a job ``scripts/deploy.sh``'s ``CI_JOBS`` requires green,
+        so its gate covers the lint with no new entry; test_deploy.py holds
+        ``CI_JOBS`` to ``ci.yml``."""
+        required = re.search(r"^CI_JOBS=\((.*)\)$", DEPLOY.read_text(), re.M)
+        assert required, "deploy.sh names its jobs in CI_JOBS=(...)"
+        assert "lint + test" in re.findall(r'"([^"]+)"', required.group(1))
         jobs = CI_WORKFLOW.read_text().split("\njobs:\n", 1)[1]
-        assert re.findall(r"^  ([\w-]+):$", jobs, re.M) == ["test"]
-        steps = re.findall(r"^      - (?:name|uses): (.+)$|^        run: (.+)$", jobs, re.M)
-        runs = [run for _, run in steps if run]
+        blocks = re.split(r"^  [\w-]+:\n", jobs, flags=re.M)
+        (job,) = [b for b in blocks if re.search(r"^    name: lint \+ test$", b, re.M)]
+        runs = re.findall(r"^        run: (.+)$", job, re.M)
         assert "bash scripts/shellcheck.sh" in runs
         assert runs.index("uv sync --group dev") < runs.index("bash scripts/shellcheck.sh")
 
