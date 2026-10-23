@@ -43,7 +43,7 @@
     {
       "name": "recovery-runbook",
       "path": "./docs/RECOVERY.md",
-      "description": "Node or data loss: the hourly RDB backup to GCS and its findings, the restore staged as the AOF base under appendonly yes, and the rehearsal record."
+      "description": "Node or data loss: the hourly RDB backup to GCS and its findings, the restore staged as the AOF base under appendonly yes, and the rebuild runbook. The dated rehearsals are docs/archive/RECOVERY-REHEARSALS.md."
     },
     {
       "name": "restart-runbook",

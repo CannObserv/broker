@@ -29,7 +29,7 @@ imported by any service; the services reach the broker over the network, by URL.
 | [`docs/LWW-CAP.md`](docs/LWW-CAP.md) | The one threshold read off the stream rather than mirrored, because a corpus size is not a number anyone can mirror - split from BUS-HEALTH.md on 2026-10-07 |
 | [`docs/MEMORY-PROTECTION.md`](docs/MEMORY-PROTECTION.md) | The `maxmemory` cap: that all three producers survive `OOM command not allowed` without dropping or dead-lettering, which commands stay admitted at the cap, and why `noeviction` is load-bearing beyond refusing writes |
 | [`docs/UNDELIVERED-CONSUMERS.md`](docs/UNDELIVERED-CONSUMERS.md) | A consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and the positions the probe compares instead |
-| [`docs/RECOVERY.md`](docs/RECOVERY.md) | Losing the node: what is exposed, the backup's design and its grant, the ACL digests shipped with it (broker#72), the rebuild runbook, the rehearsal record |
+| [`docs/RECOVERY.md`](docs/RECOVERY.md) | Losing the node: what is exposed, the backup's design and its grant, the ACL digests shipped with it (broker#72), the rebuild runbook; its rehearsals in [`docs/archive/RECOVERY-REHEARSALS.md`](docs/archive/RECOVERY-REHEARSALS.md) |
 | [`docs/RESTART-WINDOW.md`](docs/RESTART-WINDOW.md) | The cohort restart window: the identities and the steps as run |
 | [`docs/INCIDENT-2026-09-10.md`](docs/INCIDENT-2026-09-10.md) | What `databases 1` did to db0, and why `BGREWRITEAOF` comes before it |
 | [`docs/ACL-CUTOVER.md`](docs/ACL-CUTOVER.md) | The per-service credential cutover around that window: the passwords, the dry run, each service onto its own user, retiring `default`, the `nopass` trap, and why `CONFIG GET requirepass` reports a value that does not authenticate (broker#46) |
@@ -69,7 +69,9 @@ owns:
   naming only the streams that service consumes in a group, and every read
   into a selector naming the streams its owner answered for
   (CannObserv/archiver#321, CannObserv/watcher#344, CannObserv/replicator#129),
-  live 2026-10-06: no producer can take delivery in its consumer's group.
+  live 2026-10-06: no producer can take delivery in its consumer's group, and
+  `+info +ping` stand alone on each root (processor's root already named only
+  its own stream and queue).
 
 Onboarding and credential history since, moved from AGENTS.md's *Related*
 (2026-09-29):

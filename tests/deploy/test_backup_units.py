@@ -107,8 +107,8 @@ def test_service_sees_nothing_under_etc_broker() -> None:
     reader, the co-status check-in - so it is hidden whole: an empty read-only
     tmpfs, nothing bound back in. The writer key arrives as a credential: the
     manager reads it past the tmpfs, which #110 could not find documented and
-    #109's rehearsal measured on systemd 255 (docs/RECOVERY.md, *Rehearsal
-    record*). Defence in depth for a user no file there is readable by
+    #109's rehearsal measured on systemd 255 (docs/archive/RECOVERY-REHEARSALS.md,
+    2026-10-22). Defence in depth for a user no file there is readable by
     (test_drift_units' world-readable check)."""
     text = REPO_SERVICE.read_text()
     assert _directive(text, "TemporaryFileSystem") == ["/etc/broker:ro"]

@@ -229,3 +229,37 @@ docs/STREAMS.md :: retarget :: | `content.derived` | Processor → Watcher *(liv
 docs/STREAMS.md :: retarget :: Every other topic here carries a fact or a piece of state - the worst a stray
 docs/STREAMS.md :: retarget :: **`content.revisions` is Archiver's first consumer role** - every other row is a
 docs/STREAMS.md :: retarget :: stream it operates for someone else. Two operational consequences: the
+
+# 2026-10-23 broker#111 (C7, epic #22): the live-tree convention retired.
+# AGENTS.md: wheelhouse, Agent Skills and Layout lines rewritten in place for
+# scripts/deploy.sh and the drift check (the claims they lost are this change's
+# point, and every surviving atom is checked by --claims); paid for by folding
+# Related's #41/#43/#78 bullet into the first, whose README *Provenance* holds
+# each claim (#41/#43 there, `+info +ping` added there, #78 its own entry):
+# `duplicate` in claims, not verbatim - --claims shows no atom dropped.
+AGENTS.md :: tighten :: or resolution fails. No unit syncs it: on the node that is by hand, and due
+AGENTS.md :: tighten :: again after any `co-core` pin change (broker#37):
+AGENTS.md :: tighten :: deploy/          the artifacts the node deploys + the bus-health and backup units;
+AGENTS.md :: tighten :: scripts/         wheelhouse sync (runs before `uv sync`, must not import the project);
+AGENTS.md :: tighten :: audit_lock.sh (#86)
+AGENTS.md :: tighten :: revision.py (the build id both report, #105),
+AGENTS.md :: tighten :: logging.py (service-local, not a mirror)
+AGENTS.md :: tighten :: CI pins (#88), Dependabot (#90)
+AGENTS.md :: tighten :: and runbook loops (#98)
+AGENTS.md :: tighten :: `-python-fastapi` variants - right gate, wrong deploy step:
+AGENTS.md :: tighten :: after it on the grants and reads (#14, #29, #34, #59, #41, #43):
+AGENTS.md :: tighten :: #93 (the headless-Watcher pair) and archiver#251: [README.md](README.md),
+AGENTS.md :: duplicate :: - #41 and #43, live 2026-10-06: no service but archiver holds `+xtrim`, and
+AGENTS.md :: duplicate :: archiver, watcher and replicator consume through a selector naming only their
+AGENTS.md :: duplicate :: grouped streams, every read a selector, `+info +ping` alone on the root
+AGENTS.md :: duplicate :: (processor's root already named only its own stream and queue). #78
+AGENTS.md :: duplicate :: (provisioner, `content.revisions`' read-only second consumer) was minted on
+AGENTS.md :: duplicate :: that shape, 2026-10-07, and consumes since 2026-10-12.
+AGENTS.md :: retarget :: - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record
+# docs/RECOVERY.md: *Rehearsal record* -> docs/archive/RECOVERY-REHEARSALS.md
+# (operator's call (A) on #111). The intro's pointer and the one
+# cross-reference back into RECOVERY now name their new places.
+docs/RECOVERY.md :: retarget :: on every test run, and by hand against a real object - the record is at the
+docs/RECOVERY.md :: retarget :: bottom.
+docs/RECOVERY.md :: retarget :: - **16:34 UTC, a second run.** `unchanged`: the 412 that *Why create-only*
+docs/RECOVERY.md :: retarget :: predicts, observed - not a 403 from the missing `delete`.

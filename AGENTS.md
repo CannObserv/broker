@@ -23,8 +23,8 @@ TDD required. Red -> Green -> Refactor.
 
 Python >=3.12, uv, pytest, ruff. **`co-core` resolves from a local wheelhouse**
 (`./.wheelhouse`, gitignored), not PyPI. Populate it before `uv sync`/`uv run`
-or resolution fails. No unit syncs it: on the node that is by hand, and due
-again after any `co-core` pin change (broker#37):
+or resolution fails. The deploy syncs it for each release; the dev tree syncs
+by hand, again after any `co-core` pin change (broker#37):
 
 ```bash
 set -a; . /etc/broker/.env; set +a   # GOOGLE_APPLICATION_CREDENTIALS
@@ -36,6 +36,11 @@ uv run ruff check . && uv run ruff format --check .
 
 Source env files as `set -a; . <file>; set +a` - `export $(cat ... | xargs)`
 silently corrupts values.
+
+**Deploy:** units run `/srv/broker/live`, a release `scripts/deploy.sh` builds
+from a CI-green `origin/main` commit. A merge reaches nothing until it runs,
+detached, from `~/broker` on a clean `main`:
+[deploy/README.md](deploy/README.md), *Deploying*.
 
 **No test targets `co-broker`.** `tests/deploy/` spawns its own throwaway
 `redis-server` on 127.0.0.1 (skipped where the binary is absent, as on CI's
@@ -146,22 +151,22 @@ Types: feat, fix, refactor, docs, test, chore.
 ## Layout
 
 ```
-deploy/          the artifacts the node deploys + the bus-health and backup units;
+deploy/          the node's artifacts + the probe, backup and drift units;
                  see deploy/README.md
 docs/            one reference doc per topic - see Detail Docs below
-scripts/         wheelhouse sync (runs before `uv sync`, must not import the project);
-                 audit_lock.sh (#86)
+scripts/         deploy.sh (#106); wheelhouse sync (runs before `uv sync`, must not
+                 import the project); audit_lock.sh (#86)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
-                 revision.py (the build id both report, #105),
-                 logging.py (service-local, not a mirror)
+                 revision.py (the build id, #105), drift.py (#110), checkin.py
+                 (co-status), logging.py (service-local, not a mirror)
 tests/           mirrors src/; tests/deploy/ asserts installed artifacts match deploy/,
                  rehearses the restore against the node's engine, and guards the
                  SocratiCode config (#17), ruff's reach into the docs (#38),
                  credentials out of every runbook's argv (#47), the vendored
                  skills' links, listing and channel URLs (#63), pytest's
                  conftest reach across argument orders (#73), the lock audit (#86),
-                 CI pins (#88), Dependabot (#90)
-                 and runbook loops (#98)
+                 CI pins (#88), Dependabot (#90), runbook loops (#98), deploy.sh
+                 (test_deploy.py) and the live release (test_live_release.py)
 ```
 
 ## Agent Skills
@@ -171,22 +176,16 @@ Vendored from `gregoryfoster/skills` into `skills/` (agentskills.io) and
 initialised: `bash .skills/doctor.sh`. Unprompted commits land on `main`:
 a `SessionStart` hook bumping the submodule daily, and a Thursday workflow
 appending a context measurement - pull before pushing. Review/ship are the
-`-python-fastapi` variants - right gate, wrong deploy step:
+`-python-fastapi` variants; the deploy step is `scripts/deploy.sh`:
 [docs/SKILLS.md](docs/SKILLS.md).
 
 ## Related
 
 - CannObserv/broker#1 - the relocation epic, closed 2026-09-15. What landed
-  after it on the grants and reads (#14, #29, #34, #59, #41, #43):
+  after it on the grants and reads (#14, #29, #34, #59, #41, #43, #78):
   [README.md](README.md), *Provenance*.
-- #41 and #43, live 2026-10-06: no service but archiver holds `+xtrim`, and
-  archiver, watcher and replicator consume through a selector naming only their
-  grouped streams, every read a selector, `+info +ping` alone on the root
-  (processor's root already named only its own stream and queue). #78
-  (provisioner, `content.revisions`' read-only second consumer) was minted on
-  that shape, 2026-10-07, and consumes since 2026-10-12.
 - The history of #62, #64 (`content.persist` live 2026-10-01, #76), #75, #53,
-  #93 (the headless-Watcher pair) and archiver#251: [README.md](README.md),
+  #93 and archiver#251: [README.md](README.md),
   *Provenance*.
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
   2026-09-29; what it leaves open: `docs/NODE-CREDENTIALS.md`. #72 (the ACL
@@ -208,7 +207,7 @@ appending a context measurement - pull before pushing. Review/ship are the
 - [docs/LWW-CAP.md](docs/LWW-CAP.md) - the LWW length threshold, read off the stream
 - [docs/MEMORY-PROTECTION.md](docs/MEMORY-PROTECTION.md) - the `maxmemory` cap: that all three producers survive it, and why `noeviction` is load-bearing beyond refusing writes
 - [docs/UNDELIVERED-CONSUMERS.md](docs/UNDELIVERED-CONSUMERS.md) - a consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and what the probe compares instead
-- [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore, the rehearsal record
+- [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore
 - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook and its symptom playbook
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
 - [docs/NODE-CREDENTIALS.md](docs/NODE-CREDENTIALS.md) - `acladmin`/`brokeradmin` as encrypted credentials: mint, rotate, what it does not protect; `requirepass` nobody's

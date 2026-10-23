@@ -32,6 +32,9 @@ Off the node they skip, so CI and dev clones pass. "Off the node" is
 under test: on the node a missing copy **fails**, so deleting a drop-in cannot
 quiet its own guard (broker#79).
 
+The `broker-*` units above reach the node through the deploy script, which
+installs a changed copy from the release it switches to: *Deploying*, below.
+
 ## The ACL users need a restart, and that was not obvious
 
 `aclfile` is an **immutable** config. `CONFIG SET aclfile` fails with "can't set
@@ -412,6 +415,9 @@ sudo install -d -o root -g root -m 755 /srv/broker
 
 # From the checkout, as exedev. Never as root, and never from a release, which
 # has no .git. It syncs the wheelhouse itself, with the key path in /etc/broker/.env.
+# The script and that sync run from the checkout's working tree; the release is
+# `git archive` of the commit. So ~/broker stays on a clean main: a branch or an
+# edit there changes the deploy's logic, never what it deploys (#111).
 ~/broker/scripts/deploy.sh                 # origin/main
 ~/broker/scripts/deploy.sh <sha12>         # an older main commit: how a rollback is spelled
 ~/broker/scripts/deploy.sh --skip-ci ...   # GitHub cannot answer: an emergency, journaled
@@ -456,6 +462,17 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
    it, and one installed before is never enabled again, so an operator's
    `systemctl disable --now` sticks. A failed enable is a note.
 7. **Compare** the host configs, then **prune** to 5 releases plus `live`.
+
+**Accepted limits** (#111):
+- **The switch races `daemon-reload`**, about 0.25 s measured once (#107). A
+  tick in that gap runs the new `live` under the previous unit file.
+- **The verdict is not in the journal.** `broker-deploy` logs the CI gate,
+  `live -> <sha12>` and `units from ...`; the verified tick and "live is on
+  <build>" go to stderr alone, so a detached deploy's outcome is its log file,
+  or the probe's tick logging the sha12.
+- **A probe unit added with its timer not enabled** is waited on for a tick
+  that never comes: 900 s, then a failure, after a note naming the timer.
+  Install enables the timer before the first deploy.
 
 **Run it detached when an agent runs it.** A deploy can outlast a 10-minute
 tool call: up to 600 s waiting for CI, then up to 900 s for a probe tick, and
@@ -671,9 +688,9 @@ rewrite time, which `maxmemory` also caps.
   whose venv was resolved at build, so nothing resolves at start
   (CannObserv/broker#37, #107).
 
-**No unit syncs the wheelhouse.** CI syncs on every run. `scripts/deploy.sh`
-syncs before each build and copies into the release only the wheels `uv.lock`
-names. In the checkout the sync is manual, and it is due before any `uv sync`
+**The deploy syncs the wheelhouse; no unit does.** CI syncs on every run.
+`scripts/deploy.sh` syncs before each build and copies into the release only the
+wheels `uv.lock` names. In the checkout the sync is manual, and it is due before any `uv sync`
 or `uv run` there that follows a `co-core` pin change. Miss it and that command
 fails with a resolution error.
 
@@ -934,6 +951,7 @@ both are done, the probe or the drift check presents the old key and gets a 401.
 
 ```bash
 sudo systemctl start broker-drift.service             # one run now: drift check, kind, checkin: 202
+                                                      # (OnUnitActiveSec=1h: the hourly run moves to now)
 journalctl -u broker-drift -n 5 -o cat --no-pager
 systemctl list-timers broker-drift.timer              # the next run
 
@@ -997,8 +1015,8 @@ which is what the staleness rule reads.
 
 **A restored snapshot is ignored under `appendonly yes` unless it is staged as
 the AOF base** - `python -m src.broker.restore` does that, and
-[`../docs/RECOVERY.md`](../docs/RECOVERY.md) is the runbook around it, the
-rehearsal record, and the provisioning commands for the bucket and its writer.
+[`../docs/RECOVERY.md`](../docs/RECOVERY.md) is the runbook around it and the
+provisioning commands for the bucket and its writer.
 
 ## DLQ evidence
 
