@@ -872,8 +872,12 @@ def test_both_fetch_handler_groups_clear_two_handlers_at_replicators_ceiling() -
     thresholds = {g.name: g.warn_undelivered_age_seconds for c in STREAM_CHECKS for g in c.groups}
     for name in _ON_THE_FETCH_HANDLER:
         assert thresholds[name] >= 2 * bus_health.FETCH_HANDLER_CEILING_SECONDS, name
-    others = {n: t for n, t in thresholds.items() if n not in _ON_THE_FETCH_HANDLER}
-    assert set(others.values()) == {bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS}
+    off_shared = {
+        n: t
+        for n, t in thresholds.items()
+        if n not in _ON_THE_FETCH_HANDLER and t != bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
+    }
+    assert off_shared == {}
 
 
 def test_the_fetch_handler_threshold_moves_with_its_ceiling() -> None:
