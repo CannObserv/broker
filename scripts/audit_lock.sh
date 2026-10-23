@@ -8,6 +8,7 @@
 # exit is 0:
 #   uv exit 1 (findings)        -> warning "uv.lock advisories"
 #   any other non-zero exit     -> warning "uv audit did not run", never clean
+#   checkout not entered        -> warning "uv audit did not run", uv never called
 # The audit text goes to the job summary. In Actions the stdout copy sits
 # between stop-commands and a random resume token: it is OSV's text, and a line
 # of it starting `::` would otherwise be read as a workflow command.
