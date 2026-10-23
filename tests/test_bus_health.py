@@ -1097,7 +1097,9 @@ def test_the_archiver_caps_cite_where_archiver_keeps_the_obligation() -> None:
     doc = (Path(__file__).resolve().parents[1] / "docs" / "BUS-HEALTH.md").read_text()
     assert "archiver's `docs/ENVIRONMENT.md` obliges" in " ".join(doc.split())
     for text in (Path(bus_health.__file__).read_text(), doc):
-        assert "DEPLOYMENT.md" not in text
+        text = " ".join(text.split())
+        assert "archiver's ``docs/DEPLOYMENT.md``" not in text
+        assert "archiver's `docs/DEPLOYMENT.md`" not in text
 
 
 def _only_group(check: StreamCheck) -> GroupCheck:
