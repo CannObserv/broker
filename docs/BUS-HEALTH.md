@@ -167,8 +167,8 @@ Per tick it probes:
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
   minutes on ten of the twelve groups, and over 320 s on `replicator.fetch` and
   `replicator.capture` (two fetch handlers at Replicator's ceiling,
-  CannObserv/broker#114, #117). The check a
-  pending count cannot make, and the one the 2026-09-16 event asked for; see
+  CannObserv/broker#114, #117). The check a pending count cannot make, and the
+  one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
   named and the entries captured; see [DLQ-DRAINING.md](DLQ-DRAINING.md).

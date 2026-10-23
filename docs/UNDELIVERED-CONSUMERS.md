@@ -83,9 +83,9 @@ So the check compares positions and dates one entry:
    entry it has not been offered. The timestamp in that id is its age.
 
 **The threshold is 5 minutes on ten of the twelve groups, and it is not a
-mirrored constant.** Every other threshold in this probe copies a retention cap owned in
-another repo; this one is owned here, because it describes the consumer's read
-loop as this node can observe it. All six live groups are blocking `XREADGROUP`
+mirrored constant.** Every other threshold in this probe copies a retention cap
+owned in another repo; this one is owned here, because it describes the
+consumer's read loop as this node can observe it. All six live groups are blocking `XREADGROUP`
 readers, so delivery is immediate - `replicator.fetch` answered the 14:18:00Z
 command at 14:18:01Z - and five minutes is two orders of magnitude of slack over
 that, and ~55x the slowest handler: `content.replicate`'s, 5.4 s at the 64 MiB
