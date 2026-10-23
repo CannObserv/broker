@@ -12,13 +12,17 @@ cd "$(git rev-parse --show-toplevel)"
 
 scripts/shellcheck.sh --staged
 
-python=()
+# ruff lints Python and formats Python and the docs' fences (#38). --force-exclude:
+# a path named on the command line is still held to extend-exclude (skills-vendor/).
+python=() formatted=()
 while IFS= read -r -d '' f; do
-	python+=("$f")
+	formatted+=("$f")
+	[[ $f == *.md ]] || python+=("$f")
 done < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.py' '*.pyi' '*.md')
 
-[ ${#python[@]} -gt 0 ] || exit 0
-# --force-exclude: a path named on the command line is still held to the
-# config's extend-exclude (skills-vendor/).
-uv run --frozen --only-group lint ruff check --force-exclude -- "${python[@]}"
-uv run --frozen --only-group lint ruff format --check --force-exclude -- "${python[@]}"
+if [ ${#python[@]} -gt 0 ]; then
+	uv run --frozen --only-group lint ruff check --force-exclude -- "${python[@]}"
+fi
+if [ ${#formatted[@]} -gt 0 ]; then
+	uv run --frozen --only-group lint ruff format --check --force-exclude -- "${formatted[@]}"
+fi

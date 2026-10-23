@@ -205,6 +205,18 @@ class TestTheHook:
         assert rule in result.stdout + result.stderr
         assert self._head(repo) == before
 
+    def test_a_doc_is_format_checked_only(self, clone):
+        """ruff formats a doc's Python fences (#38) but lints no Markdown, so a
+        doc reaching ``ruff check`` only prints "No Python files found"."""
+        repo, env, log = clone
+        seen = len(log.read_text().splitlines())
+        result = self._commit(repo, env, **{"doc.md": "# A doc\n"})
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "No Python files" not in result.stderr
+        assert log.read_text().splitlines()[seen:] == [
+            f"{' '.join(UV_RUN)} ruff format --check --force-exclude -- doc.md"
+        ]
+
     def test_upstream_scripts_are_not_its_to_lint(self, clone):
         """A symlink (a ``.claude/hooks/`` one points into ``skills-vendor/``),
         ``skills-vendor/`` itself and ``.skills/`` are upstream's."""
