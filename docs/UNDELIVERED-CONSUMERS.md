@@ -113,9 +113,9 @@ ceiling. The headless-Watcher pair (CannObserv/broker#93), `archiver.watch-event
 and `watcher.watch-check`, take it on the shared assumption too, before either
 consumer exists (CannObserv/archiver#369, CannObserv/watcher#371); a
 watch-check's handler is a pre-flight and a deferred job, not the fetch it
-asks for. `replicator.capture` (CannObserv/broker#114) takes its own, measured
-before its consumer exists: a render runs within Replicator's fetch ceiling
-(CannObserv/replicator#138), so one capture holds the serial loop at most
+asks for. `replicator.capture` (CannObserv/broker#114) takes the fetch
+handler's, sized before its consumer exists: a render runs within Replicator's
+fetch ceiling (CannObserv/replicator#138), so one capture holds the serial loop at most
 Replicator's own stop-budget sum for a fetch handler - a 5 s poll, a 5 s pacing
 sleep, the 120 s whole-fetch deadline and a 30 s store, 160 s
 (`FETCH_HANDLER_CEILING_SECONDS`, with its movers). The stream's head can wait

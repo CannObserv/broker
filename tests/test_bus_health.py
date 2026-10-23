@@ -831,8 +831,9 @@ def test_content_capture_is_a_never_trimmed_command_stream_with_one_pool() -> No
     the group exists before the first command. A stream Archiver has written
     without it is the go-live order inverted.
 
-    Its own undelivered threshold, two handlers at replicator's fetch ceiling
-    (CR 2, CannObserv/broker#117): see the tests below.
+    Its undelivered threshold is the fetch handler's, two handlers at
+    replicator's fetch ceiling (CR 2, CannObserv/broker#117): see the tests
+    below.
     """
     check = _check_for(CONTENT_CAPTURE)
     assert _only_group(check) == GroupCheck(
@@ -852,7 +853,7 @@ _ON_THE_FETCH_HANDLER = {"replicator.fetch", "replicator.capture"}
 
 
 def test_both_fetch_handler_groups_clear_two_handlers_at_replicators_ceiling() -> None:
-    """The measured bound, as arithmetic (CannObserv/broker#114 CR 2, #117).
+    """The bound, as arithmetic (CannObserv/broker#114 CR 2, #117).
 
     One fetch handler at replicator's ceiling is 160 s, its own stop-budget
     sum. The stream's head can wait two: the handler in flight when an entry
