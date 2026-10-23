@@ -23,7 +23,12 @@
 # tests/deploy/test_lock_audit.py pins all of it.
 set -u
 
-cd "$(dirname "$0")/.."
+# The lock is the one beside this script. A checkout it cannot enter is not
+# audited: the caller's directory may hold some other lock (#112, SC2164).
+if ! cd "$(dirname "$0")/.."; then
+	echo "::warning title=uv audit did not run::cannot enter the checkout at $(dirname "$0")/..; the lock was not audited."
+	exit 0
+fi
 
 out=$(uv audit --frozen --preview-features audit-command 2>&1)
 rc=$?
@@ -37,7 +42,8 @@ if [ -n "${GITHUB_ACTIONS:-}" ]; then
 	echo "::stop-commands::$token"
 	printf '%s\n' "$out"
 	echo "::$token::"
-	printf '### uv audit --frozen (exit %s)\n\n```\n%s\n```\n' "$rc" "$out" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+	fence='```'
+	printf '### uv audit --frozen (exit %s)\n\n%s\n%s\n%s\n' "$rc" "$fence" "$out" "$fence" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
 else
 	printf '%s\n' "$out"
 fi

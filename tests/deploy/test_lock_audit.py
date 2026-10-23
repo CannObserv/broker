@@ -45,10 +45,12 @@ def _run(
     *,
     actions: bool = True,
     knows_flag: bool = True,
+    argv0: str | None = None,
 ):
     """Run the script with a fake ``uv`` that records each call's argv, prints
     ``uv_output`` and exits ``uv_exit``. With ``knows_flag=False`` it answers
-    ``--preview-features`` as uv < 0.11.19 does, exit 2, and runs nothing."""
+    ``--preview-features`` as uv < 0.11.19 does, exit 2, and runs nothing.
+    ``argv0`` runs the script's text under that ``$0`` instead of its path."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     argv_file = tmp_path / "argv"
@@ -77,9 +79,8 @@ def _run(
     env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path)}
     if actions:
         env |= {"GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": str(summary)}
-    result = subprocess.run(
-        ["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=30
-    )
+    argv = ["bash", str(SCRIPT)] if argv0 is None else ["bash", "-c", SCRIPT.read_text(), argv0]
+    result = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=30)
     calls = (
         [line.split() for line in argv_file.read_text().splitlines()] if argv_file.exists() else []
     )
@@ -169,6 +170,18 @@ def test_an_audit_that_did_not_run_never_reads_as_clean(tmp_path, uv_exit):
     result, _, summary = _run(tmp_path, uv_exit)
     assert "::warning title=uv audit did not run::" in result.stdout
     assert f"exit {uv_exit}" in summary
+
+
+def test_a_checkout_it_cannot_enter_is_not_audited(tmp_path):
+    """The script audits the lock beside it, so it ``cd``\\s to the repo root
+    first. If that fails it must not audit whatever lock the caller's directory
+    holds, nor fail the step: it says the audit did not run (shellcheck's
+    SC2164, #112)."""
+    result, calls, summary = _run(tmp_path, 0, argv0=str(tmp_path / "gone" / "scripts" / "x.sh"))
+    assert result.returncode == 0, result.stderr
+    assert calls == []
+    assert "::warning title=uv audit did not run::" in result.stdout
+    assert summary == ""
 
 
 def test_uv_output_cannot_issue_workflow_commands(tmp_path):
