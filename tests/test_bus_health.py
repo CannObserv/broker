@@ -892,7 +892,8 @@ def test_the_fetch_handler_threshold_moves_with_its_ceiling() -> None:
             for t in node.targets
         )
     ]
-    moved = eval(  # noqa: S307 - one expression from this repo's own module
+    # Safe to eval: one expression from this repo's own module, its names supplied.
+    moved = eval(
         compile(ast.Expression(assigned), "bus_health.py", "eval"),
         {"FETCH_HANDLER_CEILING_SECONDS": 200.0},
     )
