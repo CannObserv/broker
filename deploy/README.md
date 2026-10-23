@@ -695,6 +695,15 @@ wheels `uv.lock` names. In the checkout the sync is manual, and it is due before
 or `uv run` there that follows a `co-core` pin change. Miss it and that command
 fails with a resolution error.
 
+**GCS's TLS trust is certifi's bundle, not the system store** (CannObserv/broker#124).
+The backup, the restore and the wheelhouse sync reach GCS over `requests`, which
+verifies against the venv's `certifi`, so a system-store remediation such as
+exe.dev's for eMudhra never reaches them. A CA distrust there is
+`uv lock --upgrade-package certifi` and a deploy; `pyproject.toml`'s
+`constraint-dependencies` floor holds it through a re-lock, and
+`tests/test_tls_trust.py` checks it. The drift check's `urllib` reads the system
+store.
+
 The probe holds **no** database credential, joins **no** consumer group, and
 inherits no variable from `/etc/broker/.env` that it does not read. All three
 are asserted by `tests/deploy/test_bus_health_units.py`; the last one against

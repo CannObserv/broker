@@ -82,3 +82,8 @@ packages = ["src"]
 # artifact (find-links locks by filename, not hash; content integrity rests on
 # the GCS bucket's immutability and access control).
 find-links = ["./.wheelhouse"]
+# A floor a re-lock keeps (CannObserv/broker#124): certifi is transitive, through
+# requests, and its bundle is the GCS clients' whole TLS trust. 2026.10.19 drops
+# emSign ECC Root CA - G3, the eMudhra-compromised chains' root
+# (https://exe.dev/security/emudhra-compromise). tests/test_tls_trust.py.
+constraint-dependencies = ["certifi>=2026.10.19"]
