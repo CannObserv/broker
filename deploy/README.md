@@ -32,7 +32,7 @@ Off the node they skip, so CI and dev clones pass. "Off the node" is
 under test: on the node a missing copy **fails**, so deleting a drop-in cannot
 quiet its own guard (broker#79).
 
-The `broker-*` units above reach the node through the deploy script, which
+The `broker-*` units above reach the node through `../scripts/deploy.sh`, which
 installs a changed copy from the release it switches to: *Deploying*, below.
 
 ## The ACL users need a restart, and that was not obvious

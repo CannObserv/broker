@@ -298,8 +298,10 @@ def test_the_user_is_static_and_in_no_supplementary_group() -> None:
 
 def test_install_makes_the_user_before_the_deploy() -> None:
     """A ``User=`` that does not exist fails the deploy's forced run, which then
-    switches back: the user comes first, spelled as the failure above says."""
-    lines = [ln.strip() for ln in README.read_text().splitlines()]
+    switches back: the user comes first, spelled as the failure above says.
+    Within Install alone: a mention of the script elsewhere is not its order."""
+    install = README.read_text().split("\n## Install\n", 1)[1].split("\n## ", 1)[0]
+    lines = [ln.strip() for ln in install.splitlines()]
     assert USERADD in lines
     deploys = [i for i, ln in enumerate(lines) if "scripts/deploy.sh" in ln]
     assert deploys and lines.index(USERADD) < deploys[0]
