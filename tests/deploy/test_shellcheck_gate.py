@@ -107,6 +107,19 @@ class TestTheLock:
         assert wheels, pkg["wheels"]
         assert all(w["hash"].startswith("sha256:") for w in wheels)
 
+    def test_the_doc_names_the_locked_version(self):
+        """docs/CI.md says which shellcheck the gate runs. A bump is one
+        ``uv lock`` away, so the doc is held to the lock: shellcheck-py's
+        fourth field is its own packaging release, the first three the binary's."""
+        lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+        (pkg,) = [p for p in lock["package"] if p["name"] == "shellcheck-py"]
+        binary = ".".join(pkg["version"].split(".")[:3])
+        reported = subprocess.run(
+            [VENV_BIN / "shellcheck", "--version"], capture_output=True, text=True, check=True
+        ).stdout
+        assert f"version: {binary}\n" in reported
+        assert f"shellcheck {binary} from `shellcheck-py`" in CI_DOC.read_text()
+
 
 class TestTheSelector:
     def test_it_takes_every_own_script_and_no_upstream_one(self, tmp_path):
