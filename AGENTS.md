@@ -212,7 +212,7 @@ appending a context measurement - pull before pushing. Review/ship are the
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
 - [docs/NODE-CREDENTIALS.md](docs/NODE-CREDENTIALS.md) - `acladmin`/`brokeradmin` as encrypted credentials: mint, rotate, what it does not protect; `requirepass` nobody's
 - [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, [deploy/README.md](deploy/README.md)
-- [docs/CI.md](docs/CI.md) - action pins, Dependabot and how its PRs land
+- [docs/CI.md](docs/CI.md) - the shellcheck hook, action pins, Dependabot and how its PRs land
 - [docs/SKILLS.md](docs/SKILLS.md) - the vendored agent skills, their refresh hook, the context cadence
 - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) - semantic search over this repo and its four siblings: the tool table, the prefetch, graph health, index scope
 

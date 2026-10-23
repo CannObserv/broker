@@ -17,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    { include-group = "lint" },
     "fakeredis>=2.20",
     # 9.1.0 and 9.1.1 lose a directory's conftest fixtures when the command line
     # interleaves it with a sibling (pytest-dev/pytest#14635, CannObserv/broker#73).
@@ -25,8 +26,13 @@ dev = [
     # tests/deploy/test_pytest_collection.py is what says whether it carries the fix.
     "pytest>=9.0.3,!=9.1.0,!=9.1.1,<10",
     "pytest-asyncio>=1.3.0,<2",
-    "ruff>=0.16.8,<0.17",
 ]
+# The gate's tools, which .githooks/pre-commit and CI's lint step run as
+# `uv run --frozen --only-group lint`: no project, so no wheelhouse (#112).
+# shellcheck-py's wheel carries the shellcheck binary, so the lock hash-pins it:
+# no root install on the node, one version everywhere. A bump moves the gate:
+# `uv lock --upgrade-package shellcheck-py`, then fix what it finds (docs/CI.md).
+lint = ["ruff>=0.16.8,<0.17", "shellcheck-py>=0.11.0.1,<0.12"]
 # scripts/sync_wheelhouse.py's own deps, locked: `uv run --frozen --only-group
 # wheelhouse` installs them without the project, whose co-core is what the sync
 # fetches (CannObserv/broker#113). One package, the project's own pin.

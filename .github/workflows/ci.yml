@@ -59,5 +59,9 @@ jobs:
       - name: ruff format --check
         run: uv run ruff format --check .
 
+      - name: shellcheck
+        # A step, not a job: scripts/deploy.sh's CI_JOBS gate covers it as is (#112).
+        run: bash scripts/shellcheck.sh
+
       - name: pytest
         run: uv run pytest
