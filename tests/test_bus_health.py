@@ -831,13 +831,13 @@ def test_content_capture_is_a_never_trimmed_command_stream_with_one_pool() -> No
     the group exists before the first command. A stream Archiver has written
     without it is the go-live order inverted.
 
-    Its own undelivered threshold, two handlers at replicator's ceiling (CR 2):
-    see the test below.
+    Its own undelivered threshold, two handlers at replicator's fetch ceiling
+    (CR 2, CannObserv/broker#117): see the tests below.
     """
     check = _check_for(CONTENT_CAPTURE)
     assert _only_group(check) == GroupCheck(
         "replicator.capture",
-        warn_undelivered_age_seconds=bus_health.CAPTURE_WARN_UNDELIVERED_AGE_SECONDS,
+        warn_undelivered_age_seconds=bus_health.FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS,
     )
     assert check.never_trimmed is True
     assert check.warn_length is None
@@ -845,24 +845,75 @@ def test_content_capture_is_a_never_trimmed_command_stream_with_one_pool() -> No
     assert bus_health.DLQ_DRAINERS[dlq_name(CONTENT_CAPTURE)] == "replicator"
 
 
-def test_the_capture_threshold_clears_two_renders_at_replicators_ceiling() -> None:
-    """The measured bound, as arithmetic (CannObserv/broker#114, CR 2).
+# The groups whose handler is replicator's fetch handler: `replicator.fetch`'s
+# own, and `replicator.capture`'s, since a render runs within the fetch ceiling
+# (CannObserv/replicator#138).
+_ON_THE_FETCH_HANDLER = {"replicator.fetch", "replicator.capture"}
 
-    One capture handler at replicator's ceiling is 160 s, its own stop-budget
+
+def test_both_fetch_handler_groups_clear_two_handlers_at_replicators_ceiling() -> None:
+    """The measured bound, as arithmetic (CannObserv/broker#114 CR 2, #117).
+
+    One fetch handler at replicator's ceiling is 160 s, its own stop-budget
     sum. The stream's head can wait two: the handler in flight when an entry
     arrives, then at most one reclaim before the stream gets its turn -
     "two handler durations, which is the figure an undelivered-age threshold has
     to clear" (replicator's `PollCadence`, CannObserv/replicator#98). 320 s is
-    over the shared 300, so the row carries its own value, derived, never
-    spelled: a mover on either side of the sum moves it.
+    over the shared 300, so both rows carry it; `replicator.fetch`, a live
+    group, took the shared value until #117.
+
+    The rule moves no other row: `replicator.replicate` and `replicator.persist`
+    keep five minutes on measured handlers (CannObserv/broker#30, #76).
     """
-    assert bus_health.CAPTURE_HANDLER_CEILING_SECONDS == 160.0
-    assert bus_health.CAPTURE_WARN_UNDELIVERED_AGE_SECONDS == (
-        2 * bus_health.CAPTURE_HANDLER_CEILING_SECONDS
+    assert bus_health.FETCH_HANDLER_CEILING_SECONDS == 160.0
+    doc = _constant_docstring("FETCH_HANDLER_CEILING_SECONDS")
+    assert "**Movers, which no commit records:**" in doc
+    thresholds = {g.name: g.warn_undelivered_age_seconds for c in STREAM_CHECKS for g in c.groups}
+    for name in _ON_THE_FETCH_HANDLER:
+        assert thresholds[name] >= 2 * bus_health.FETCH_HANDLER_CEILING_SECONDS, name
+    others = {n: t for n, t in thresholds.items() if n not in _ON_THE_FETCH_HANDLER}
+    assert set(others.values()) == {bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS}
+
+
+def test_the_fetch_handler_threshold_moves_with_its_ceiling() -> None:
+    """Derived, never spelled: a mover in the ceiling's sum moves both rows.
+
+    Value equality cannot tell `2 * ceiling` from a spelled 320.0, so this reads
+    the source: the threshold's assignment, evaluated with a moved ceiling, and
+    each fetch-handler row passing the constant by name.
+    """
+    tree = ast.parse(Path(bus_health.__file__).read_text())
+    (assigned,) = [
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(t, ast.Name) and t.id == "FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS"
+            for t in node.targets
+        )
+    ]
+    moved = eval(  # noqa: S307 - one expression from this repo's own module
+        compile(ast.Expression(assigned), "bus_health.py", "eval"),
+        {"FETCH_HANDLER_CEILING_SECONDS": 200.0},
     )
-    assert bus_health.CAPTURE_WARN_UNDELIVERED_AGE_SECONDS > (
-        bus_health.GROUP_WARN_UNDELIVERED_AGE_SECONDS
-    )
+    assert moved == 400.0
+
+    by_constant = {"FETCH_GROUP": "replicator.fetch", "CAPTURE_GROUP": "replicator.capture"}
+    assert {getattr(bus_health, k) for k in by_constant} == _ON_THE_FETCH_HANDLER
+    passed = {
+        node.args[0].id: kw.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "GroupCheck"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id in by_constant
+        for kw in node.keywords
+        if kw.arg == "warn_undelivered_age_seconds"
+    }
+    assert set(passed) == set(by_constant)
+    for constant, value in passed.items():
+        assert ast.unparse(value) == "FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS", constant
 
 
 async def test_content_capture_is_silent_before_archiver_issues(fake_redis) -> None:

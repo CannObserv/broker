@@ -215,9 +215,10 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # A consumer that ever moves to a schedule rather than a blocking read needs its
 # own value on its row: that schedule's period plus margin, with the source
 # named the way a mirrored constant names its owner. So does one whose two
-# slowest handlers outlast five minutes: `replicator.capture` takes
-# CAPTURE_WARN_UNDELIVERED_AGE_SECONDS for that reason (CannObserv/broker#114),
-# and `replicator.fetch`, on the same handler, is CannObserv/broker#117. The two groups declared
+# slowest handlers outlast five minutes: `replicator.fetch` and
+# `replicator.capture`, on replicator's fetch handler, take
+# FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS for that reason
+# (CannObserv/broker#114, #117). The two groups declared
 # ahead of their consumers by CannObserv/broker#62 - `processor.process` (the
 # worker pool #62 gave observo, re-homed by CannObserv/broker#75) and
 # `watcher.derived` - take this value on the same assumption, a blocking read
@@ -252,32 +253,34 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 # from the same reply as its position - instead of naming a stopped reader.
 GROUP_WARN_UNDELIVERED_AGE_SECONDS = 300.0
 
-CAPTURE_HANDLER_CEILING_SECONDS = 5.0 + 5.0 + 120.0 + 30.0
-"""The longest one capture can hold replicator's serial ``count=1`` loop
-(CannObserv/broker#114).
+FETCH_HANDLER_CEILING_SECONDS = 5.0 + 5.0 + 120.0 + 30.0
+"""The longest one fetch handler can hold replicator's serial ``count=1`` loop
+(CannObserv/broker#114, #117).
 
-A render runs "within the existing fetch-timeout ceiling"
-(CannObserv/replicator#138), so a capture handler is a fetch handler's shape,
-and this is replicator's own sum for one, from ``tests/test_deploy.py``'s stop
-budget at 9fcd33b: a poll in flight (``REPLICATOR_READ_BLOCK_MS``, 5 s), the
-pacing sleep bounded by it (5 s), the whole-fetch deadline
-(``REPLICATOR_MAX_FETCH_SECONDS``, 120 s) and the store
-(``REPLICATOR_BLOB_TIMEOUT_SECONDS``, 30 s).
+Replicator's own sum for one, from ``tests/test_deploy.py``'s stop budget at
+9fcd33b: a poll in flight (``REPLICATOR_READ_BLOCK_MS``, 5 s), the pacing sleep
+bounded by it (5 s), the whole-fetch deadline (``REPLICATOR_MAX_FETCH_SECONDS``,
+120 s) and the store (``REPLICATOR_BLOB_TIMEOUT_SECONDS``, 30 s). A capture is
+this handler's shape: a render runs "within the existing fetch-timeout ceiling"
+(CannObserv/replicator#138).
 
-**Movers, which no commit records:** those three in ``/etc/replicator/.env``,
-and a capture ceiling of its own if replicator#138 gives renders one."""
+**Movers, which no commit records:** those three in ``/etc/replicator/.env``.
+A ceiling replicator#138 gives renders of their own would split capture off
+into a constant of its own."""
 
-CAPTURE_WARN_UNDELIVERED_AGE_SECONDS = 2 * CAPTURE_HANDLER_CEILING_SECONDS
-"""``replicator.capture``'s undelivered threshold: two handlers, 320 s today.
+FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS = 2 * FETCH_HANDLER_CEILING_SECONDS
+"""``replicator.fetch``'s and ``replicator.capture``'s undelivered threshold: two
+handlers, 320 s today.
 
 The head of the stream can wait the handler in flight when an entry arrives,
 then at most one reclaim before the stream gets its turn - "two handler
 durations, which is the figure an undelivered-age threshold has to clear"
-(replicator's ``PollCadence``, CannObserv/replicator#98). Two renders at the
-ceiling are over the shared 300 s, so a slow capture beside a reclaimed one
-would warn with nothing wrong. Derived, so it moves with the ceiling's movers
-(CannObserv/broker#114, CR 2). The fetch row shares the handler sum and still
-takes the shared value: CannObserv/broker#117."""
+(replicator's ``PollCadence``, CannObserv/replicator#98). Two handlers at the
+ceiling are over the shared 300 s, so a fetch at the deadline beside a
+reclaimed one would warn with nothing wrong. Derived, so it moves with the
+ceiling's movers (CannObserv/broker#114 CR 2, #117). ``replicator.replicate``
+and ``replicator.persist`` keep the shared value: their handlers are measured,
+not this one."""
 
 # Every length threshold is its stream's retention cap plus this margin, so a
 # warning means the retention mechanism itself broke rather than that traffic
@@ -838,11 +841,15 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # Retention is each producer's to decide - content.replicate's slice is
     # CannObserv/archiver#267 - and a cap one adopts brings a mirrored
     # threshold back with it, not before.
+    #
+    # The undelivered threshold is two fetch handlers at replicator's ceiling,
+    # FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS (CannObserv/broker#117).
     StreamCheck(
         CONTENT_FETCH,
         groups=(
             GroupCheck(
-                FETCH_GROUP, warn_undelivered_age_seconds=GROUP_WARN_UNDELIVERED_AGE_SECONDS
+                FETCH_GROUP,
+                warn_undelivered_age_seconds=FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS,
             ),
         ),
     ),
@@ -1040,14 +1047,16 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # the first command. A stream archiver has written without it is the go-live
     # order inverted, and a later create at `$` would skip captures.
     #
-    # The undelivered threshold is the group's own, on a measurement: two
-    # captures at replicator's ceiling, CAPTURE_WARN_UNDELIVERED_AGE_SECONDS.
+    # The undelivered threshold is content.fetch's, on a measurement: two
+    # captures at replicator's fetch ceiling,
+    # FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS.
     StreamCheck(
         CONTENT_CAPTURE,
         never_trimmed=True,
         groups=(
             GroupCheck(
-                CAPTURE_GROUP, warn_undelivered_age_seconds=CAPTURE_WARN_UNDELIVERED_AGE_SECONDS
+                CAPTURE_GROUP,
+                warn_undelivered_age_seconds=FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS,
             ),
         ),
     ),

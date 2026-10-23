@@ -165,8 +165,9 @@ Per tick it probes:
   this finding while it has never existed; once seen, its pending count rides
   the state file and its absence is this finding every tick;
 - **the age of the oldest entry a group has not been DELIVERED** - WARN over 5
-  minutes on eleven of the twelve groups, and over 320 s on `replicator.capture`
-  (two renders at Replicator's ceiling, CannObserv/broker#114). The check a
+  minutes on ten of the twelve groups, and over 320 s on `replicator.fetch` and
+  `replicator.capture` (two fetch handlers at Replicator's ceiling,
+  CannObserv/broker#114, #117). The check a
   pending count cannot make, and the one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
@@ -334,7 +335,7 @@ of:
 | `LWW_REPUBLISH_PERIOD_SECONDS` (300) | Watcher's `*/5 * * * *` republish (CannObserv/watcher#264, #265; `info.watch-status` reads `WATCHER_WATCH_STATUS_REPUBLISH_CRON` and defaults to it) - already load-bearing as 3x the LWW age threshold before it was spelled out |
 | `PROVISIONER_TEXT_WAIT_SECONDS` (0) | The owner's number since 2026-10-12 (CannObserv/broker#78): since watcher#326 the revision is published after Processor stores the text (processor#29), so it never lags. 1800 s before that. Mover: `WATCHER_EXTRACT_MODE`, `/etc/watcher/.env` - #326's rollback brings the lag back, until watcher#350 deletes the variable |
 | `PROVISIONER_RECLAIM_MIN_IDLE_SECONDS` (600), `PROVISIONER_RECLAIM_INTERVAL_SECONDS` (60) | provisioner's `reclaim_min_idle_ms` and `reclaim_interval_s` settings. Movers: `PROVISIONER_RECLAIM_MIN_IDLE_MS`, `PROVISIONER_RECLAIM_INTERVAL_S`, `/etc/provisioner/consumer.env` (neither set, 2026-10-12). The three sum to `provisioner.revisions`' entry-age threshold, 660 s: an entry still pending after one full reclaim cycle |
-| `CAPTURE_HANDLER_CEILING_SECONDS` (160) | Replicator's stop-budget sum for one handler, `tests/test_deploy.py` at `9fcd33b`: a poll and its pacing bound (`REPLICATOR_READ_BLOCK_MS`, 5 s each), the whole-fetch deadline a render runs within (`REPLICATOR_MAX_FETCH_SECONDS`, 120 s, CannObserv/replicator#138) and the store (`REPLICATOR_BLOB_TIMEOUT_SECONDS`, 30 s). Movers: those three in `/etc/replicator/.env`, and any capture ceiling replicator#138 adds. Doubled into `replicator.capture`'s 320 s undelivered threshold, the handler in flight plus one reclaim (CannObserv/broker#114) |
+| `FETCH_HANDLER_CEILING_SECONDS` (160) | Replicator's stop-budget sum for one fetch handler, `tests/test_deploy.py` at `9fcd33b`: a poll and its pacing bound (`REPLICATOR_READ_BLOCK_MS`, 5 s each), the whole-fetch deadline a render runs within (`REPLICATOR_MAX_FETCH_SECONDS`, 120 s, CannObserv/replicator#138) and the store (`REPLICATOR_BLOB_TIMEOUT_SECONDS`, 30 s). Movers: those three in `/etc/replicator/.env`. Doubled into the 320 s undelivered threshold of `replicator.fetch` and `replicator.capture`, the handler in flight plus one reclaim (CannObserv/broker#114, #117) |
 | `DLQ_DRAINERS` (who triages each `*.dlq`) | the `DLQ (writer / drainer)` column of [STREAMS.md](STREAMS.md), the rule in [DLQ-DRAINING.md](DLQ-DRAINING.md) - an assignment, so it has no computable source; the keys are still derived through co-core's `dlq_name()` |
 
 `LWW_PRODUCER_MAXLEN` was already a mirror before the split - there was never an

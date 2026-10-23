@@ -82,8 +82,8 @@ So the check compares positions and dates one entry:
 4. behind, and `XRANGE <stream> (<last-delivered-id> + COUNT 1` gives the oldest
    entry it has not been offered. The timestamp in that id is its age.
 
-**The threshold is 5 minutes on every group, and it is not a mirrored
-constant.** Every other threshold in this probe copies a retention cap owned in
+**The threshold is 5 minutes on ten of the twelve groups, and it is not a
+mirrored constant.** Every other threshold in this probe copies a retention cap owned in
 another repo; this one is owned here, because it describes the consumer's read
 loop as this node can observe it. All six live groups are blocking `XREADGROUP`
 readers, so delivery is immediate - `replicator.fetch` answered the 14:18:00Z
@@ -118,11 +118,13 @@ before its consumer exists: a render runs within Replicator's fetch ceiling
 (CannObserv/replicator#138), so one capture holds the serial loop at most
 Replicator's own stop-budget sum for a fetch handler - a 5 s poll, a 5 s pacing
 sleep, the 120 s whole-fetch deadline and a 30 s store, 160 s
-(`CAPTURE_HANDLER_CEILING_SECONDS`, with its movers). The stream's head can wait
+(`FETCH_HANDLER_CEILING_SECONDS`, with its movers). The stream's head can wait
 two of those - the handler in flight, then one reclaim (replicator's
 `PollCadence`, CannObserv/replicator#98) - so the threshold is 320 s,
-`CAPTURE_WARN_UNDELIVERED_AGE_SECONDS`, derived. `replicator.fetch` shares the
-sum and keeps five minutes: CannObserv/broker#117.
+`FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS`, derived. `replicator.fetch`, on
+the same handler, took five minutes until CannObserv/broker#117 gave it the
+same 320 s; the rule moves neither replicate nor persist, whose handlers are
+measured above.
 `test_every_probed_group_carries_an_undelivered_threshold` fails if a
 thirteenth group arrives without one, and `StreamCheck` refuses the other direction - a
 threshold on a row with no group - at import.
