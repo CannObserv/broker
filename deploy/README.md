@@ -471,7 +471,8 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
   verified tick and "live is on <build>" go to stderr alone. So a detached
   deploy's success is its log file, or the probe's tick logging the sha12.
 - **A probe unit added with its timer not enabled** is waited on for a tick
-  that never comes: 900 s, then a failure, after a note naming the timer.
+  that never comes: 900 s, then a failure, after a note that the unit is new
+  and not enabled.
   Install enables the timer before the first deploy.
 
 **Run it detached when an agent runs it.** A deploy can outlast a 10-minute
