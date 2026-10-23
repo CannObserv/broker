@@ -1047,9 +1047,8 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
     # the first command. A stream archiver has written without it is the go-live
     # order inverted, and a later create at `$` would skip captures.
     #
-    # The undelivered threshold is content.fetch's, on a measurement: two
-    # captures at replicator's fetch ceiling,
-    # FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS.
+    # The undelivered threshold is the fetch handler's: two captures at
+    # replicator's fetch ceiling, FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS.
     StreamCheck(
         CONTENT_CAPTURE,
         never_trimmed=True,
