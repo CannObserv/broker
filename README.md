@@ -129,7 +129,8 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   replicator#138, runs before archiver#380 issues), never trimmed, outcomes on
   `content.artifacts` under grants both already held. The undelivered
   threshold is its own, 320 s: two renders at replicator's 160 s handler
-  ceiling (CR 2; the shared 300 s cleared only one). Retention rule:
+  ceiling (CR 2; the shared 300 s cleared only one); #117 made it the fetch
+  handler's, shared with `replicator.fetch`. Retention rule:
   `content.blobs` first (#20), four when they lost `info.changes`' borrowed
   110k (#60), the processing pair (#62), `content.persist` (#64) and
   `content.capture` (#114) with no cap by contract. Grants live
