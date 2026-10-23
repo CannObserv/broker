@@ -48,7 +48,7 @@ jobs:
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
 
       - name: Sync cannobserv wheelhouse
-        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+        run: uv run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py
 
       - name: uv sync
         run: uv sync --group dev

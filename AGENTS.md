@@ -28,7 +28,7 @@ by hand, again after any `co-core` pin change (broker#37):
 
 ```bash
 set -a; . /etc/broker/.env; set +a   # GOOGLE_APPLICATION_CREDENTIALS
-uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+uv run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py
 uv sync --group dev
 uv run pytest
 uv run ruff check . && uv run ruff format --check .

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -33,6 +33,9 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+wheelhouse = [
+    { name = "google-cloud-storage" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -49,6 +52,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.3.0,<2" },
     { name = "ruff", specifier = ">=0.16.8,<0.17" },
 ]
+wheelhouse = [{ name = "google-cloud-storage", specifier = ">=2,<4" }]
 
 [[package]]
 name = "certifi"

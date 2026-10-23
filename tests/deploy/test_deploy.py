@@ -846,10 +846,37 @@ class TestWheelhouse:
         (sync,) = [c for c in world.calls() if "sync_wheelhouse.py" in c]
         assert sync.startswith(f"uv {world.checkout} ")
         assert "GAC=/etc/broker/co-pypi-reader.json " in sync, "the file's, never the shell's"
-        assert (
-            "run --no-project --with google-cloud-storage>=2,<4 python scripts/sync_wheelhouse.py"
-            in sync
-        )
+        assert "run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py" in sync
+
+    def test_every_spelling_of_the_sync_runs_from_the_lock(self):
+        """#113: `--no-project --with` resolved the sync's env afresh on every
+        run, under the reader key, outside uv.lock and the audit. The group is
+        locked, and `--only-group` skips the project, so an empty wheelhouse
+        (CI's, a rebuilt node's) is no obstacle. Every site moves together."""
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        ).stdout.split()
+        spellings = {}
+        for name in tracked:
+            path = REPO_ROOT / name
+            if name.startswith("tests/") or path.is_symlink() or not path.is_file():
+                continue
+            try:
+                text = re.sub(r"\s*\\\n\s*", " ", path.read_text())
+            except UnicodeDecodeError:
+                continue
+            for flags in re.findall(r"uv run (.*?) python scripts/sync_wheelhouse\.py", text):
+                spellings.setdefault(name, set()).add(flags)
+        assert set(spellings) >= {
+            ".github/workflows/ci.yml",
+            "scripts/deploy.sh",
+            "scripts/sync_wheelhouse.py",
+            "AGENTS.md",
+            "README.md",
+            "docs/RECOVERY.md",
+        }
+        locked = {"--frozen --only-group wheelhouse"}
+        assert {n: s for n, s in spellings.items() if s != locked} == {}
 
     def test_a_key_missing_from_the_env_file_is_refused(self, world):
         world.env_file.write_text("BROKER_REDIS_URL=redis://brokeradmin@localhost:6379/0\n")

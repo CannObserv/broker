@@ -7,9 +7,11 @@ then resolves ``co-core`` / ``co-core-aio`` from that directory via the
 CannObserv/archiver (archiver#72, #75).
 
 Runs standalone, *before* ``uv sync`` - it must not import the project (whose
-deps are what the wheelhouse provides), so invoke it in an isolated env:
+deps are what the wheelhouse provides). Its own deps are uv.lock's
+``wheelhouse`` group, which ``--only-group`` installs without the project, so an
+empty wheelhouse is no obstacle (CannObserv/broker#113):
 
-    uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+    uv run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py
 
 Authentication is Application Default Credentials. On the VM/deploy that is the
 service-account key at ``GOOGLE_APPLICATION_CREDENTIALS`` (set in

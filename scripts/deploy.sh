@@ -368,7 +368,8 @@ locked_wheels() {
 # The checkout's copy of sync_wheelhouse.py writes its own ../.wheelhouse, the
 # whole bucket (652 files, 89 MB in 2026-10); the release's would take the
 # bucket into the release. Copied with cp, never linked: a link shares an inode
-# with the checkout, and the chown below would reach it.
+# with the checkout, and the chown below would reach it. The sync's own deps are
+# uv.lock's wheelhouse group, in the checkout's venv, never the project (#113).
 wheelhouse() {
   local key name missing=()
   [[ -r "$ENV_FILE" ]] ||
@@ -382,8 +383,8 @@ wheelhouse() {
     printf '%s' "${GOOGLE_APPLICATION_CREDENTIALS:-}"
   )" || die "cannot read $ENV_FILE as shell (set -a; . $ENV_FILE); nothing switched"
   [[ -n "$key" ]] || die "no GOOGLE_APPLICATION_CREDENTIALS in $ENV_FILE for the wheelhouse sync; nothing switched"
-  (cd "$SRC" && GOOGLE_APPLICATION_CREDENTIALS="$key" uv run --no-project \
-    --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py >&2) ||
+  (cd "$SRC" && GOOGLE_APPLICATION_CREDENTIALS="$key" uv run --frozen \
+    --only-group wheelhouse python scripts/sync_wheelhouse.py >&2) ||
     die "syncing the wheelhouse into $SRC/.wheelhouse failed for $build; nothing switched"
   mkdir -p "$release/.wheelhouse"
   while read -r name; do
