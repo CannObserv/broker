@@ -899,7 +899,7 @@ def test_the_fetch_handler_threshold_moves_with_its_ceiling() -> None:
     )
     assert moved == 400.0
 
-    by_constant = {"FETCH_GROUP": "replicator.fetch", "CAPTURE_GROUP": "replicator.capture"}
+    by_constant = ("FETCH_GROUP", "CAPTURE_GROUP")
     assert {getattr(bus_health, k) for k in by_constant} == _ON_THE_FETCH_HANDLER
     passed = {
         node.args[0].id: kw.value
