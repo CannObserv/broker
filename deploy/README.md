@@ -466,10 +466,10 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
 **Accepted limits** (#111):
 - **The switch races `daemon-reload`**, about 0.25 s measured once (#107). A
   tick in that gap runs the new `live` under the previous unit file.
-- **The verdict is not in the journal.** `broker-deploy` logs the CI gate,
-  `live -> <sha12>` and `units from ...`; the verified tick and "live is on
-  <build>" go to stderr alone, so a detached deploy's outcome is its log file,
-  or the probe's tick logging the sha12.
+- **A success is not in the journal.** `broker-deploy` logs the CI gate,
+  `live -> <sha12>`, `units from ...`, and any switch back or failure; the
+  verified tick and "live is on <build>" go to stderr alone. So a detached
+  deploy's success is its log file, or the probe's tick logging the sha12.
 - **A probe unit added with its timer not enabled** is waited on for a tick
   that never comes: 900 s, then a failure, after a note naming the timer.
   Install enables the timer before the first deploy.
