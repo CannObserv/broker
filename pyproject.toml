@@ -27,11 +27,12 @@ dev = [
     "pytest>=9.0.3,!=9.1.0,!=9.1.1,<10",
     "pytest-asyncio>=1.3.0,<2",
 ]
-# The gate's tools, which .githooks/pre-commit and CI's lint step run as
+# The gate's tools. .githooks/pre-commit and scripts/shellcheck.sh run them as
 # `uv run --frozen --only-group lint`: no project, so no wheelhouse (#112).
 # shellcheck-py's wheel carries the shellcheck binary, so the lock hash-pins it:
 # no root install on the node, one version everywhere. A bump moves the gate:
-# `uv lock --upgrade-package shellcheck-py`, then fix what it finds (docs/CI.md).
+# `uv lock --upgrade-package shellcheck-py`, then fix what it finds and the
+# version docs/CI.md names, which tests/deploy/test_shellcheck_gate.py holds.
 lint = ["ruff>=0.16.8,<0.17", "shellcheck-py>=0.11.0.1,<0.12"]
 # scripts/sync_wheelhouse.py's own deps, locked: `uv run --frozen --only-group
 # wheelhouse` installs them without the project, whose co-core is what the sync
