@@ -353,7 +353,7 @@ bounds `entries-removed`, which fires at a lowered cap.
 with no commit in either repo - `ARCHIVER_REDIS_STREAM_MAXLEN` and
 `ARCHIVER_REGISTRY_STREAM_MAXLEN`, from `/etc/archiver/.env`, the unit, or
 archiver's gitignored repo `.env`, which loads last and wins. All unset
-2026-09-23; archiver's `docs/DEPLOYMENT.md` obliges a note here
+2026-09-23; archiver's `docs/ENVIRONMENT.md` obliges a note here
 (CannObserv/archiver#254). Each docstring names them (CannObserv/broker#42).
 
 ## Who watches what, after the split

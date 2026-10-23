@@ -328,7 +328,7 @@ got it applied to four ``content.*`` streams it never trims
 **Movers, which no commit records:** ``ARCHIVER_REDIS_STREAM_MAXLEN`` in
 ``/etc/archiver/.env``, the unit, or archiver's gitignored repo ``.env``, which
 loads last and wins. All unset 2026-09-23 (CannObserv/broker#42); archiver's
-``docs/DEPLOYMENT.md`` obliges a note here when one is set."""
+``docs/ENVIRONMENT.md`` obliges a note here when one is set."""
 
 REGISTRY_PRODUCER_MAXLEN = 50_000
 """Mirrors ``DEFAULT_REGISTRY_STREAM_MAXLEN`` in archiver's

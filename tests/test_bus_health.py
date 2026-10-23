@@ -1081,6 +1081,19 @@ def _constant_docstring(name: str) -> str:
     raise AssertionError(f"{name} is not assigned in bus_health.py")
 
 
+def test_the_archiver_caps_cite_where_archiver_keeps_the_obligation() -> None:
+    """Archiver's note-to-broker obligation for each `*_STREAM_MAXLEN` override
+    lives in its `docs/ENVIRONMENT.md` since CannObserv/archiver#326, not
+    `docs/DEPLOYMENT.md`: a stale pointer sends the reader to a file that no
+    longer says it (CannObserv/broker#120)."""
+    docstring = " ".join(_constant_docstring("CHANGES_PRODUCER_MAXLEN").split())
+    assert "archiver's ``docs/ENVIRONMENT.md`` obliges" in docstring
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "BUS-HEALTH.md").read_text()
+    assert "archiver's `docs/ENVIRONMENT.md` obliges" in " ".join(doc.split())
+    for text in (Path(bus_health.__file__).read_text(), doc):
+        assert "DEPLOYMENT.md" not in text
+
+
 def _only_group(check: StreamCheck) -> GroupCheck:
     (group,) = check.groups
     return group
