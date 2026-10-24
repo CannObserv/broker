@@ -20,7 +20,8 @@
 # In this order:
 #   0. ask GitHub whether the commit's CI passed (unless --skip-ci)
 #   1. build releases/<sha12> at its final path (or reuse it): archive, the
-#      wheelhouse, uv sync, read-only, root's, REVISION last
+#      wheelhouse, each locked file held to its pinned sha256 (#125), uv sync,
+#      read-only, root's, REVISION last
 #   2. switch live (rename(2), atomic), then install each deploy/broker-* unit
 #      from the release that differs from its installed copy
 #   3. verify each unit this deploy changed: one whose unit it installed, or one
