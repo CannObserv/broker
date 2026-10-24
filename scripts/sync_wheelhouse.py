@@ -44,12 +44,13 @@ from google.cloud import storage
 
 BUCKET = os.environ.get("BROKER_WHEELHOUSE_BUCKET", "co-gcs-pypi")
 PREFIX = os.environ.get("BROKER_WHEELHOUSE_PREFIX", "wheels/")
-DEST = Path(__file__).resolve().parent.parent / ".wheelhouse"
+PROJECT = Path(__file__).resolve().parent.parent
 
 
 def sync() -> int:
-    """Mirror ``gs://{BUCKET}/{PREFIX}`` into ``DEST``; return an exit code."""
-    DEST.mkdir(parents=True, exist_ok=True)
+    """Mirror ``gs://{BUCKET}/{PREFIX}`` into the checkout's wheelhouse; return an exit code."""
+    dest = PROJECT / ".wheelhouse"
+    dest.mkdir(parents=True, exist_ok=True)
     downloaded = skipped = 0
     try:
         client = storage.Client()
@@ -57,7 +58,7 @@ def sync() -> int:
             name = blob.name.removeprefix(PREFIX)
             if not name:  # the prefix "directory" placeholder object, if any
                 continue
-            target = DEST / name
+            target = dest / name
             # Skip when a same-size file is already present. Published artifacts
             # are server-side immutable (cannobserv#215), so name + size is
             # sufficient; no need to fetch and compare the crc32c.
@@ -81,7 +82,7 @@ def sync() -> int:
         print(f"error: could not sync gs://{BUCKET}/{PREFIX}: {exc}", file=sys.stderr)
         return 1
 
-    print(f"wheelhouse in sync: {downloaded} downloaded, {skipped} already present -> {DEST}")
+    print(f"wheelhouse in sync: {downloaded} downloaded, {skipped} already present -> {dest}")
     return 0
 
 
