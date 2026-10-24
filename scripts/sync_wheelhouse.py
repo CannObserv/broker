@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sys
 import tempfile
 import tomllib
@@ -87,6 +88,13 @@ def pins() -> dict[str, str]:
             f" [tool.broker.{TABLE}] pins no digest for: pin each from"
             " `sha256sum .wheelhouse/<file>`"
         )
+    # As deploy.sh holds them: a blank one would read as no pin, and the size skip.
+    malformed = [name for name in names if not re.fullmatch(r"[0-9a-f]{64}", str(table[name]))]
+    if malformed:
+        raise ValueError(
+            f"pyproject.toml's [tool.broker.{TABLE}] pins {', '.join(malformed)}"
+            " with a value that is not a sha256 (64 lowercase hex)"
+        )
     return {name: table[name] for name in names}
 
 
@@ -116,7 +124,9 @@ def sync() -> int:
             # are server-side immutable (cannobserv#215), nothing installs it,
             # and it meets its pin when a lock names it.
             if target.exists() and (
-                sha256(target) == digest if digest else target.stat().st_size == blob.size
+                sha256(target) == digest
+                if digest is not None
+                else target.stat().st_size == blob.size
             ):
                 skipped += 1
                 continue
@@ -131,7 +141,7 @@ def sync() -> int:
                 blob.download_to_filename(tmp)
                 # Refused before it replaces anything: a planted copy stays as
                 # found, for whoever reads why, and deploy.sh refuses it too.
-                if digest and (got := sha256(tmp)) != digest:
+                if digest is not None and (got := sha256(tmp)) != digest:
                     raise ValueError(
                         f"{name} downloads with sha256 {got}, not the {digest}"
                         f" pyproject.toml's [tool.broker.{TABLE}] pins"

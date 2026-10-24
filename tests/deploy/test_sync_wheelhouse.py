@@ -166,6 +166,16 @@ class TestALockedFile:
         assert SDIST in err and TABLE in err
         assert "sha256sum .wheelhouse/" in err, "CR 3: how to make the pin"
 
+    @pytest.mark.parametrize("value", ["", "abc123", "A" * 64])
+    def test_a_pin_that_is_not_a_sha256_fails_the_sync(self, node, capsys, value):
+        """CR 5: a blank pin was falsy, so the file fell back to the size skip."""
+        node.pin({WHEEL: value, SDIST: sha(GOOD[SDIST])})
+        node.plant(WHEEL, b"the WHEEL")
+        rc, err = node.sync(capsys)
+        assert rc == 1
+        assert WHEEL in err and "not a sha256" in err
+        assert not node.downloads
+
     def test_a_lock_that_spells_the_wheelhouse_as_pyproject_does_is_still_read(self, node, capsys):
         """deploy.sh's locked_wheels() takes ./.wheelhouse too (#106 CR 12)."""
         (node.project / "uv.lock").write_text(lock(source="./.wheelhouse"))
