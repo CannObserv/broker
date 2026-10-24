@@ -695,6 +695,16 @@ wheels `uv.lock` names. In the checkout the sync is manual, and it is due before
 or `uv run` there that follows a `co-core` pin change. Miss it and that command
 fails with a resolution error.
 
+**A locked wheel is held to a committed sha256** (CannObserv/broker#125).
+uv records no digest for a wheelhouse file, so `uv sync --locked` installs any
+file with that name. `pyproject.toml`'s `[tool.broker.wheelhouse-sha256]` pins
+one per file `uv.lock` names, and a pin change moves it in the same diff. The
+sync fetches a file again when it misses its pin, and refuses a download that
+misses too. The deploy refuses a release whose copy misses its pin, journaled
+(`refused <sha12>: <file> has sha256 ...`), before `uv sync`. Each digest is of
+a file fetched over GCS's TLS: it stops a later swap, local or in transit, not
+one made at pin time.
+
 **GCS's TLS trust is certifi's bundle, not the system store** (CannObserv/broker#124).
 The backup, the restore and the wheelhouse sync reach GCS over `requests`, which
 verifies against the venv's `certifi`, so a system-store remediation such as

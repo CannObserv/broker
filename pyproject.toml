@@ -9,11 +9,28 @@ dependencies = [
     # CannObserv/broker#114. tests/canonical.py reads every topic constant, so a
     # release adding a stream turns the inventory and ACL tests red until it has
     # a row, a group and a grant: such a bump is a registration, never a ride-along.
+    # The locked files' digests move with it: [tool.broker.wheelhouse-sha256].
     "co-core>=0.37.1,<0.38",
     "google-cloud-storage>=2,<4",
     "python-json-logger>=4.0.0,<5",
     "redis[hiredis]>=5",
 ]
+
+# The sha256 of each wheelhouse file uv.lock names (CannObserv/broker#125). uv
+# records none for a find-links path, and a hand-added one is gone at the next
+# `uv lock`. scripts/sync_wheelhouse.py fetches a file that misses its digest
+# again and refuses a download that misses it too; scripts/deploy.sh refuses a
+# release whose copy misses it, before `uv sync`. A pin change moves these in the
+# same diff: sync, `uv lock`, then `sha256sum .wheelhouse/<file>` for each new
+# name, from a download checked against a second source where there is one.
+# Each digest is of a file fetched over GCS's TLS, so it stops a later swap,
+# local or in transit, not one made at pin time. One "file" = "hex" line each,
+# the form deploy.sh's awk reads: tests/deploy/test_sync_wheelhouse.py holds it,
+# and the table to the lock. 0.37.1's: fetched 2026-10-19 and again 2026-10-24,
+# one object generation, GCS's md5Hash and crc32c matching both times.
+[tool.broker.wheelhouse-sha256]
+"co_core-0.37.1-py3-none-any.whl" = "7a8b4c0c3f8fa00cf7f9c5e7b2b86e89d847118b6024c303c7efe5063db9aae5"
+"co_core-0.37.1.tar.gz" = "df068bc7b2226295f8087a65bed7c5f586c605581462e073c1080ce90ad2543b"
 
 [dependency-groups]
 dev = [
@@ -86,8 +103,8 @@ packages = ["src"]
 # index gs://co-gcs-pypi by scripts/sync_wheelhouse.py before `uv sync`/`uv run`
 # (the pattern is CannObserv/archiver#72, #75). No git sources for cannobserv:
 # reproducibility is uv.lock's pinned version plus the named wheelhouse
-# artifact (find-links locks by filename, not hash; content integrity rests on
-# the GCS bucket's immutability and access control).
+# artifact. find-links locks by filename, not hash: the content check is
+# [tool.broker.wheelhouse-sha256], above (#125).
 find-links = ["./.wheelhouse"]
 # A floor a re-lock keeps (CannObserv/broker#124): certifi is transitive, through
 # requests, and its bundle is the GCS clients' whole TLS trust. 2026.10.19 drops

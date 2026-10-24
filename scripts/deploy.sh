@@ -364,14 +364,28 @@ locked_wheels() {
   ' "$release/uv.lock"
 }
 
+# The digest the release's pyproject.toml pins for each wheelhouse file, as
+# "<file> <sha256>" lines (#125): its [tool.broker.wheelhouse-sha256] table, one
+# "file" = "hex" line each, the form tests/deploy/test_sync_wheelhouse.py holds.
+pinned_digests() {
+  awk '
+    /^\[/ { table = ($0 == "[tool.broker.wheelhouse-sha256]"); next }
+    table && /^"[^"]+" = "[^"]*"$/ { split($0, field, "\""); print field[2], field[4] }
+  ' "$release/pyproject.toml"
+}
+
 # D4/B3: the checkout's sync, then only what the lock names into the release.
 # The checkout's copy of sync_wheelhouse.py writes its own ../.wheelhouse, the
 # whole bucket (652 files, 89 MB in 2026-10); the release's would take the
 # bucket into the release. Copied with cp, never linked: a link shares an inode
 # with the checkout, and the chown below would reach it. The sync's own deps are
 # uv.lock's wheelhouse group, in the checkout's venv, never the project (#113).
+# Each copy is held to the release's own pinned digest (#125): uv.lock records
+# none, so `uv sync --locked` would install any file of that name. The check is
+# on the copy, the bytes uv sync reads, and comes before it.
 wheelhouse() {
-  local key name missing=()
+  local key name digest got missing=()
+  local -A pinned=()
   [[ -r "$ENV_FILE" ]] ||
     die "$ENV_FILE is missing or unreadable; the wheelhouse sync's key path is there. Nothing switched."
   # The file's value or nothing: the unit reads only the file, and so does this.
@@ -386,13 +400,26 @@ wheelhouse() {
   (cd "$SRC" && GOOGLE_APPLICATION_CREDENTIALS="$key" uv run --frozen \
     --only-group wheelhouse python scripts/sync_wheelhouse.py >&2) ||
     die "syncing the wheelhouse into $SRC/.wheelhouse failed for $build; nothing switched"
+  while read -r name digest; do
+    pinned[$name]="$digest"
+  done < <(pinned_digests)
   mkdir -p "$release/.wheelhouse"
   while read -r name; do
     [[ -n "$name" && "$name" != */* ]] ||
       die "uv.lock names the wheelhouse file '$name', not a file name; nothing switched"
+    digest="${pinned[$name]:-}"
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] ||
+      die "uv.lock names $name, which $build's pyproject.toml [tool.broker.wheelhouse-sha256] pins no sha256 for; nothing switched"
     if [[ -f "$SRC/.wheelhouse/$name" ]]; then
       cp -- "$SRC/.wheelhouse/$name" "$release/.wheelhouse/$name" ||
         die "copying $name into $build's wheelhouse failed; nothing switched"
+      got="$(sha256sum -- "$release/.wheelhouse/$name")" ||
+        die "cannot hash $name in $build's wheelhouse; nothing switched"
+      got="${got%% *}"
+      if [[ "$got" != "$digest" ]]; then
+        logger -t broker-deploy "refused $build: $name has sha256 $got, not the $digest it pins" || true
+        die "$name in $SRC/.wheelhouse has sha256 $got, not the $digest $build's pyproject.toml pins; nothing switched. The next sync fetches it again, and refuses a download that misses too"
+      fi
     else
       missing+=("$name")
     fi
