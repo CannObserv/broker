@@ -34,6 +34,7 @@ What the script must hold (the design's Q1-5, Q8, Q12, D1, D4, D7-D9):
 
 import fcntl
 import grp
+import hashlib
 import json
 import os
 import pwd
@@ -93,6 +94,25 @@ wheels = [
     {{ url = "https://files.example/pydantic-2.12.0-py3-none-any.whl", hash = "sha256:00" }},
 ]
 """
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+# What the world's wheelhouse holds: the synced bytes of each file uv.lock names.
+WHEEL_BYTES = b"wheel"
+SDIST_BYTES = b"sdist"
+
+
+# The digests a release holds its wheelhouse to (#125), one line each, as the
+# real pyproject.toml carries them.
+def pyproject(digests: dict[str, str]) -> str:
+    rows = "".join(f'"{name}" = "{value}"\n' for name, value in digests.items())
+    return f'[project]\nname = "broker"\n\n[tool.broker.wheelhouse-sha256]\n{rows}\n[tool.uv]\n'
+
+
+PYPROJECT = pyproject({CO_CORE_WHEEL: sha256(WHEEL_BYTES), CO_CORE_SDIST: sha256(SDIST_BYTES)})
 
 STUB_UV = r"""#!/usr/bin/env bash
 echo "uv $PWD GAC=${GOOGLE_APPLICATION_CREDENTIALS:-} PYDL=${UV_PYTHON_DOWNLOADS:-}" \
@@ -410,6 +430,7 @@ class World:
         self.live_units = self.units_on(self.root / "live")
         self.write_tree(self.checkout, self.dev_units)
         (self.checkout / "uv.lock").write_text(UV_LOCK)
+        (self.checkout / "pyproject.toml").write_text(PYPROJECT)
         (self.checkout / ".wheelhouse").mkdir()
         (self.checkout / ".wheelhouse" / ".gitkeep").touch()
         git(self.checkout, "add", "-A")
@@ -425,9 +446,9 @@ class World:
         # The synced wheelhouse: what uv.lock names, and one wheel it does not.
         # The wheel is a hardlink, as `uv sync` and the dev venvs leave them.
         wheelhouse = self.checkout / ".wheelhouse"
-        (self.tmp / "cache-wheel").write_bytes(b"wheel")
+        (self.tmp / "cache-wheel").write_bytes(WHEEL_BYTES)
         os.link(self.tmp / "cache-wheel", wheelhouse / CO_CORE_WHEEL)
-        (wheelhouse / CO_CORE_SDIST).write_bytes(b"sdist")
+        (wheelhouse / CO_CORE_SDIST).write_bytes(SDIST_BYTES)
         (wheelhouse / CO_CORE_SDIST).chmod(0o600)  # as the sync leaves them
         (wheelhouse / "other-9.9.9-py3-none-any.whl").write_bytes(b"other")
 
@@ -941,6 +962,55 @@ class TestWheelhouse:
         assert world.target() is None
         assert not syncs(world)
         assert not (world.release(world.main[-1]) / "REVISION").exists()
+
+    def test_a_same_size_wheel_with_other_bytes_is_refused(self, world):
+        """#125: the swap a size-only sync kept, and a spoofed fetch would bring.
+        The release installs nothing it holds: the refusal comes before uv sync."""
+        planted = b"WHEEL"
+        assert len(planted) == len(WHEEL_BYTES)
+        (world.tmp / "cache-wheel").write_bytes(planted)  # the checkout's, by its hardlink
+        result = world.run()
+        assert result.returncode == 1
+        assert CO_CORE_WHEEL in result.stderr
+        assert sha256(planted) in result.stderr and sha256(WHEEL_BYTES) in result.stderr
+        assert "nothing switched" in result.stderr
+        assert world.target() is None
+        assert not syncs(world)
+        assert not (world.release(world.main[-1]) / "REVISION").exists()
+        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
+        assert [c for c in logged if CO_CORE_WHEEL in c and sha256(planted) in c], logged
+
+    def test_the_sdist_is_held_to_its_digest_too(self, world):
+        (world.checkout / ".wheelhouse" / CO_CORE_SDIST).write_bytes(b"SDIST")
+        result = world.run()
+        assert result.returncode == 1
+        assert CO_CORE_SDIST in result.stderr
+        assert world.target() is None
+        assert not syncs(world)
+
+    def test_a_locked_file_with_no_digest_is_refused(self, world):
+        world.push(top={"pyproject.toml": pyproject({CO_CORE_WHEEL: sha256(WHEEL_BYTES)})})
+        result = world.run()
+        assert result.returncode == 1
+        assert CO_CORE_SDIST in result.stderr and "wheelhouse-sha256" in result.stderr
+        assert world.target() is None
+        assert not syncs(world)
+
+    def test_the_digests_are_the_releases_own_not_the_checkouts(self, world):
+        """A pin moves in the commit deployed: its pyproject.toml is what the
+        release is held to, whatever the checkout's working tree says."""
+        moved = b"wh33l"
+        world.push(
+            top={
+                "pyproject.toml": pyproject(
+                    {CO_CORE_WHEEL: sha256(moved), CO_CORE_SDIST: sha256(SDIST_BYTES)}
+                )
+            }
+        )
+        assert (world.checkout / "pyproject.toml").read_text() == PYPROJECT
+        (world.tmp / "cache-wheel").write_bytes(moved)
+        assert_ok(world.run())
+        assert (world.release(world.main[-1]) / ".wheelhouse" / CO_CORE_WHEEL).read_bytes() == moved
 
     def test_a_failed_sync_fails_the_build(self, world):
         result = world.run(FAKE_WHEELHOUSE_FAIL="1")
