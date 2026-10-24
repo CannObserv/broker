@@ -135,6 +135,15 @@ class TestALockedFile:
         assert WHEEL in err
         assert (node.wheelhouse / WHEEL).read_bytes() != GOOD[WHEEL]
 
+    def test_a_locked_file_the_bucket_does_not_list_fails_the_sync(self, node, capsys):
+        """CR 1: the loop visits what the listing names, so a copy planted under a
+        name the bucket lacks was never held to its pin."""
+        del node.bucket.objects[f"wheels/{WHEEL}"]
+        node.plant(WHEEL, b"the WHEEL")
+        rc, err = node.sync(capsys)
+        assert rc == 1
+        assert WHEEL in err and "does not list" in err
+
     def test_a_file_that_matches_its_pin_is_not_fetched_again(self, node, capsys):
         node.plant(WHEEL, GOOD[WHEEL])
         node.plant(SDIST, GOOD[SDIST])

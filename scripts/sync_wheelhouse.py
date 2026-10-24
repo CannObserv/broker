@@ -101,6 +101,7 @@ def sync() -> int:
     downloaded = skipped = 0
     try:
         pinned = pins()
+        unlisted = set(pinned)
         client = storage.Client()
         for blob in client.list_blobs(BUCKET, prefix=PREFIX):
             name = blob.name.removeprefix(PREFIX)
@@ -108,6 +109,7 @@ def sync() -> int:
                 continue
             target = dest / name
             digest = pinned.get(name)
+            unlisted.discard(name)
             # A locked file is skipped only when it is the pinned one. Any other
             # is skipped when a same-size file is present: published artifacts
             # are server-side immutable (cannobserv#215), nothing installs it,
@@ -137,6 +139,12 @@ def sync() -> int:
             finally:
                 Path(tmp).unlink(missing_ok=True)
             downloaded += 1
+        # A locked file the loop never reached was held to nothing: a copy here
+        # under that name would pass to uv sync unchecked.
+        if unlisted:
+            raise ValueError(
+                f"uv.lock names {', '.join(sorted(unlisted))}, which the bucket does not list"
+            )
     except Exception as exc:  # broad by design: auth/network/bucket failures degrade identically
         print(f"error: could not sync gs://{BUCKET}/{PREFIX}: {exc}", file=sys.stderr)
         return 1
