@@ -384,7 +384,7 @@ pinned_digests() {
 # none, so `uv sync --locked` would install any file of that name. The check is
 # on the copy, the bytes uv sync reads, and comes before it.
 wheelhouse() {
-  local key name digest got missing=()
+  local key name digest got missing=() checked=()
   local -A pinned=()
   [[ -r "$ENV_FILE" ]] ||
     die "$ENV_FILE is missing or unreadable; the wheelhouse sync's key path is there. Nothing switched."
@@ -420,12 +420,16 @@ wheelhouse() {
         logger -t broker-deploy "refused $build: $name has sha256 $got, not the $digest it pins" || true
         die "$name in $SRC/.wheelhouse has sha256 $got, not the $digest $build's pyproject.toml pins; nothing switched. Remove it and deploy again: the sync fetches a file that is not there, and this checks it again"
       fi
+      checked+=("$name")
     else
       missing+=("$name")
     fi
   done < <(locked_wheels)
   ((${#missing[@]} == 0)) ||
     die "uv.lock names ${missing[*]}, which the sync left out of $SRC/.wheelhouse; nothing switched"
+  # Journaled when it passes too: otherwise a deploy that checked reads like
+  # one from a deploy.sh that never did.
+  logger -t broker-deploy "wheelhouse for $build: ${checked[*]} match their pinned sha256" || true
 }
 
 # Each step says why it stopped: under set -e alone the deploy would exit

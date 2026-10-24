@@ -983,6 +983,17 @@ class TestWheelhouse:
         logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
         assert [c for c in logged if CO_CORE_WHEEL in c and sha256(planted) in c], logged
 
+    def test_a_check_that_passes_is_journaled_with_what_it_checked(self, world):
+        """CR 6: without it a deploy that checked reads like one from a
+        deploy.sh that never did: no refusal, either way."""
+        assert_ok(world.run())
+        build = world.build(world.main[-1])
+        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
+        assert (
+            f"logger -t broker-deploy wheelhouse for {build}: {CO_CORE_SDIST} {CO_CORE_WHEEL}"
+            " match their pinned sha256" in logged
+        ), logged
+
     def test_the_sdist_is_held_to_its_digest_too(self, world):
         (world.checkout / ".wheelhouse" / CO_CORE_SDIST).write_bytes(b"SDIST")
         result = world.run()

@@ -701,7 +701,8 @@ file with that name. `pyproject.toml`'s `[tool.broker.wheelhouse-sha256]` pins
 one per file `uv.lock` names, and a pin change moves it in the same diff. The
 sync fetches a file again when it misses its pin, and refuses a download that
 misses too. The deploy refuses a release whose copy misses its pin, journaled
-(`refused <sha12>: <file> has sha256 ...`), before `uv sync`. Each digest is of
+(`refused <sha12>: <file> has sha256 ...`), before `uv sync`, and journals a
+pass as `wheelhouse for <sha12>: <files> match their pinned sha256`. Each digest is of
 a file fetched over GCS's TLS: it stops a later swap, local or in transit, not
 one made at pin time.
 
