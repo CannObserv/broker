@@ -84,7 +84,8 @@ def pins() -> dict[str, str]:
     if missing:
         raise ValueError(
             f"uv.lock names {', '.join(missing)}, which pyproject.toml's"
-            f" [tool.broker.{TABLE}] pins no digest for"
+            f" [tool.broker.{TABLE}] pins no digest for: pin each from"
+            " `sha256sum .wheelhouse/<file>`"
         )
     return {name: table[name] for name in names}
 

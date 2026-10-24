@@ -163,6 +163,7 @@ class TestALockedFile:
         rc, err = node.sync(capsys)
         assert rc == 1
         assert SDIST in err and TABLE in err
+        assert "sha256sum .wheelhouse/" in err, "CR 3: how to make the pin"
 
     def test_a_lock_that_spells_the_wheelhouse_as_pyproject_does_is_still_read(self, node, capsys):
         """deploy.sh's locked_wheels() takes ./.wheelhouse too (#106 CR 12)."""
