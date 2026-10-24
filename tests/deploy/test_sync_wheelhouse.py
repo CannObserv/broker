@@ -127,13 +127,14 @@ class TestALockedFile:
         assert not (node.wheelhouse / WHEEL).exists()
         assert not list(node.wheelhouse.glob("*.part"))
 
-    def test_a_planted_file_stays_out_when_the_refetch_is_not_the_pin_either(self, node, capsys):
-        node.plant(WHEEL, b"the WHEEL")
+    def test_a_planted_file_is_left_as_found_when_the_refetch_misses_too(self, node, capsys):
+        """Evidence for whoever reads why; deploy.sh refuses it either way."""
+        node.plant(WHEEL, b"the wheeL")
         node.bucket.objects[f"wheels/{WHEEL}"] = b"the WHEEL"
         rc, err = node.sync(capsys)
         assert rc == 1
         assert WHEEL in err
-        assert (node.wheelhouse / WHEEL).read_bytes() != GOOD[WHEEL]
+        assert (node.wheelhouse / WHEEL).read_bytes() == b"the wheeL"
 
     def test_a_locked_file_the_bucket_does_not_list_fails_the_sync(self, node, capsys):
         """CR 1: the loop visits what the listing names, so a copy planted under a
