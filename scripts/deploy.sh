@@ -418,7 +418,7 @@ wheelhouse() {
       got="${got%% *}"
       if [[ "$got" != "$digest" ]]; then
         logger -t broker-deploy "refused $build: $name has sha256 $got, not the $digest it pins" || true
-        die "$name in $SRC/.wheelhouse has sha256 $got, not the $digest $build's pyproject.toml pins; nothing switched. The next sync fetches it again, and refuses a download that misses too"
+        die "$name in $SRC/.wheelhouse has sha256 $got, not the $digest $build's pyproject.toml pins; nothing switched. Remove it and deploy again: the sync fetches a file that is not there, and this checks it again"
       fi
     else
       missing+=("$name")

@@ -974,6 +974,9 @@ class TestWheelhouse:
         assert CO_CORE_WHEEL in result.stderr
         assert sha256(planted) in result.stderr and sha256(WHEEL_BYTES) in result.stderr
         assert "nothing switched" in result.stderr
+        # CR 2: the remedy that holds on a rollback too, whose files the
+        # checkout's lock may not name, so its sync does not hold them to a pin.
+        assert "Remove it and deploy again" in result.stderr
         assert world.target() is None
         assert not syncs(world)
         assert not (world.release(world.main[-1]) / "REVISION").exists()
