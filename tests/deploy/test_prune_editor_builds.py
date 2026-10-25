@@ -71,10 +71,10 @@ def home(tmp_path: Path) -> Path:
 
 
 def _run(
-    tmp_path: Path, home: Path, *args: str, ps: list[str] | None = None
+    tmp_path: Path, home: Path, *args: str, ps: list[str] | None = None, uid: int = 1000
 ) -> subprocess.CompletedProcess[str]:
     """Run under a ``ps`` stub that prints ``ps[i]`` on its i-th call (the last
-    one thereafter), and an ``id`` that says the caller is not root."""
+    one thereafter), and an ``id -u`` that answers ``uid``."""
     stub = tmp_path / "stub-bin"
     stub.mkdir(exist_ok=True)
     calls = [_ps_line(RUNNING)] if ps is None else ps
@@ -87,6 +87,8 @@ def _run(
         'cat "$d/ps.$i"\n'
     )
     (stub / "ps").chmod(0o755)
+    (stub / "id").write_text(f'#!/bin/sh\n[ "$1" = -u ] && echo {uid} || exec /usr/bin/id "$@"\n')
+    (stub / "id").chmod(0o755)
     env = {**os.environ, "HOME": str(home), "PATH": f"{stub}:{os.environ['PATH']}"}
     return subprocess.run(
         ["bash", str(SCRIPT), *args], env=env, capture_output=True, text=True, check=False
@@ -184,4 +186,13 @@ def test_an_unknown_argument_is_refused(tmp_path, home) -> None:
     before = _servers(home)
     result = _run(tmp_path, home, "--aply")
     assert result.returncode == 2
+    assert _servers(home) == before
+
+
+def test_root_is_refused(tmp_path, home) -> None:
+    """The builds are the editor's user's; as root a removal could reach any home."""
+    before = _servers(home)
+    result = _run(tmp_path, home, "--apply", uid=0)
+    assert result.returncode == 2
+    assert "not root" in result.stderr
     assert _servers(home) == before
