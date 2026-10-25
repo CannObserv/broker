@@ -735,7 +735,7 @@ class TestADeploy:
                 assert not path.stat().st_mode & 0o222, path
 
     def test_the_release_is_readable_by_every_user_under_any_umask(self, world):
-        """The probe runs as exedev, not root: under umask 077 the archive and
+        """The probe runs as its own user, not root (#121): under umask 077 the archive and
         the venv come out 0600/0700, and the synced wheels are 0600 anyway."""
         assert_ok(world.run(umask=0o077))
         release = world.release(world.main[-1])

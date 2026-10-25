@@ -327,6 +327,10 @@ sudo install -m 0644 -D deploy/redis-server.service.d/broker.conf \
 # The deploy installs a unit it finds absent but never enables it, then waits
 # on the probe's next natural tick, which a timer not enabled never gives.
 # Ticks before live exists fail at chdir: a missed check-in, nothing worse.
+# Its user comes first: a User= that does not exist fails every tick, the one
+# that deploy waits on included, and it then switches back (#121).
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin broker-bus-health
+id broker-bus-health                                 # its own group alone
 sudo install -m 0644 deploy/broker-bus-health.service \
     deploy/broker-bus-health.timer /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -807,10 +811,10 @@ journalctl -u broker-bus-health -n 5 -o cat --no-pager
 ```
 
 `0400 root:root`, and **not** `/etc/broker/.env`. That file is `0640
-root:exedev`, so the unit's own `User=` can read it at any time, running or not.
+root:exedev`, so the operator's account can read it at any time, running or not.
 systemd reads an `EnvironmentFile` as root *before* dropping privileges, so a
-root-only file still reaches the process while staying unreadable to the
-account. The process seeing its own environment is unavoidable; a second copy in
+root-only file still reaches the process while staying unreadable to every
+account. The probe's own user, since #121, reads neither file. The process seeing its own environment is unavoidable; a second copy in
 a file `exedev` can `cat` is not.
 
 Both unset is the supported default and costs nothing - the `EnvironmentFile`
@@ -961,7 +965,7 @@ sudo stat -c '%U:%G %a' /etc/broker/status-checkin.key      # root:root 400
 The unit reads it at each start: nothing to reload. Absent, the unit's
 `SetCredential=` fallback runs the check, logs `not sent: missing the
 status-checkin-key credential`, and exits 1. The backup's `/etc/broker`
-allowlist hides it from the backup, and the probe's `exedev` cannot read it.
+allowlist hides it from the backup, and the probe's user cannot read it (#121).
 
 **Rotating `co-broker-checkin`** is now two files: put the new key in
 `/etc/broker/status.env` (*The co-status check-in*, above), then run the copy

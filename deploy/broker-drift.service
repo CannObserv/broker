@@ -37,13 +37,17 @@ LoadCredential=status-checkin-key:/etc/broker/status-checkin.key
 SetCredential=status-checkin-key:\n
 
 # DynamicUser= already implies most of this; said here so the tests pin it. The
-# dev tree's .env, under /home, holds the cohort's GitHub tokens. /etc/broker is
-# NOT hidden (#110 CR 2): the credential's source is there, and systemd 255 does
-# not document reading it before the mount namespace. Nothing in it is readable
-# by a dynamic user anyway: every file is 0400 root or 0640 root:exedev.
+# dev tree's .env, under /home, holds the cohort's GitHub tokens. /etc/broker
+# holds other identities' keys and is hidden whole (#121). The key still loads:
+# the manager reads a credential's source past the tmpfs. Not documented, but
+# measured on systemd 255 (#109, and #121 for this unit: the source's size, not
+# the fallback's). Were that to change, the fallback above runs and co-broker-drift
+# goes quiet. Defence in depth: nothing in it is readable by a dynamic user
+# anyway, every file being 0400 root or 0640 root:exedev.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
+TemporaryFileSystem=/etc/broker:ro
 
 ExecStart=/srv/broker/live/.venv/bin/python -m src.broker.drift

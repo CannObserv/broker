@@ -7,7 +7,14 @@ After=network.target
 
 [Service]
 Type=oneshot
-User=exedev
+# A static system user (#121), made by hand before the deploy that installs this
+# unit, as the backup's (#109): no home, no login, in no supplementary group.
+# Not exedev, whose passwordless sudo and dev tree's .env no tick needs. NOT
+# DynamicUser=, which moves StateDirectory= under /var/lib/private (0700), out
+# of reach of the operator who triages dlq-evidence/. It reads no file under
+# /etc/broker or the credential store itself: the manager hands each over at start.
+User=broker-bus-health
+Group=broker-bus-health
 # The release scripts/deploy.sh last switched to (#22, #107): root's, read-only,
 # one commit on origin/main with its own frozen venv. Resolved at each start,
 # so a tick already running finishes on the release it started on, and nothing
@@ -37,12 +44,12 @@ UnsetEnvironment=GOOGLE_APPLICATION_CREDENTIALS
 
 # STATUS_MONITOR_ID and STATUS_API_KEY (CannObserv/broker#3, #66), in a file of
 # their own at 0400 root:root - NOT in /etc/broker/.env, which is 0640
-# root:exedev and therefore readable by this unit's own User= at any time,
-# whether or not the probe is running. systemd reads EnvironmentFile as root
-# before dropping privileges, so the process still gets the value while the
-# file stays unreadable to the account. The running process can of course see
+# root:exedev and therefore readable by the operator at any time, whether or not
+# the probe is running. systemd reads EnvironmentFile as root before dropping
+# privileges, so the process still gets the value while the file stays
+# unreadable to every account but root. The running process can of course see
 # its own environment; the point is that the credential is not also sitting in a
-# file `exedev` can cat.
+# file `exedev` can cat. Since #121 this unit's User= reads neither file.
 #
 # Leading `-`: absent is the supported state. The probe predates the check-in
 # and must start without it, so a node that has not been wired to co-status is
@@ -53,12 +60,18 @@ EnvironmentFile=-/etc/broker/status.env
 # encrypted to this host, in systemd's credential store (0700 root); systemd
 # decrypts it into $CREDENTIALS_DIRECTORY for the life of the tick, and
 # src/broker/bus_health.py reads it from there. Until #52 it sat in
-# BROKER_REDIS_URL above, plaintext in a file this unit's User= can read at any
-# time. What is left: while a tick runs, systemd grants that same User= read on
-# the decrypted copy, so another process of the account can read it for that
-# second - in RAM, never on disk. Closing that means a User= of its own: #22's
-# D3 follow-up, which nothing in this unit blocks now that it runs a release
-# rather than the checkout. Minted and installed by docs/NODE-CREDENTIALS.md.
+# BROKER_REDIS_URL above, plaintext in a file this unit's User= could read at
+# any time. While a tick runs, systemd grants that User= read on the decrypted
+# copy, in RAM, never on disk: since #121 a user of the unit's own, so no
+# other account's process can read it for that second. Minted and installed by
+# docs/NODE-CREDENTIALS.md.
+#
+# No SetCredential= fallback, unlike the backup's and the drift check's. A
+# missing source fails the start (exit 243, CREDENTIALS), and the co-status
+# check-in going quiet is the alarm. An empty fallback would start the tick
+# with a URL naming brokeradmin and no password, and redis-py would still send
+# AUTH: one ACL LOG denial a tick, the evidence log filling with the probe's
+# own noise (#121).
 LoadCredentialEncrypted=broker-brokeradmin:/etc/credstore.encrypted/broker-brokeradmin
 
 # This probe holds NO database credential. The outbox half of the old combined
@@ -70,9 +83,35 @@ LoadCredentialEncrypted=broker-brokeradmin:/etc/credstore.encrypted/broker-broke
 # a consumer group. It has no group-membership code path at all - the probe
 # imports no consumer - but stating it here keeps the rule with the unit.
 
-# Carries the two-tick pending state between oneshot runs
-# (/var/lib/broker-bus-health, owned by User= automatically).
+# Carries the two-tick pending state between oneshot runs, and dlq-evidence/
+# (/var/lib/broker-bus-health). systemd chowns it to User= at start whenever its
+# owner differs: to exedev again under the unit a switch back restores. The
+# default 0755: the operator reads state.json and the DLQ evidence.
 StateDirectory=broker-bus-health
+
+# The sandbox (#121), the backup's (#109). Read-only filesystem except the state
+# directory, and a private /tmp; no new privileges and no capability. /home is
+# not visible at all: the release reaches nothing under it, and the checkout's
+# .env holds the cohort's tokens. /etc/broker and the node users' encrypted
+# credentials are hidden whole ('-': absent is no failure). Defence in depth: no
+# file under either is readable by this user anyway. Both inputs there still
+# arrive: the manager reads EnvironmentFile= past the tmpfs and
+# LoadCredentialEncrypted= past InaccessiblePaths=, measured on systemd 255
+# (#121). What a tick opens beyond the release and Python's own: the credential,
+# its state, the backup's state.json, and /etc's resolver and locale files.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+TemporaryFileSystem=/etc/broker:ro
+InaccessiblePaths=-/etc/credstore.encrypted
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Hard backstop under systemd's 90s default. src/broker/bus_health.py bounds
 # each Redis call (5s connect / 10s read), but ~25 calls per tick could in
@@ -83,7 +122,8 @@ TimeoutStartSec=60
 
 # --backup-state-file: the record broker-backup.service writes after each run
 # (CannObserv/broker#4). Read-only here by construction - it is under that
-# unit's StateDirectory, which this unit's User= cannot write - and its absence
+# unit's StateDirectory, which this unit's User= cannot write, and 0644 in a
+# 0755 directory, which it can read - and its absence
 # where the directory itself is absent means "no backup unit on this node",
 # which is a deploy checklist item rather than a finding every ten minutes.
 ExecStart=/srv/broker/live/.venv/bin/python -m src.broker.bus_health --state-file ${STATE_DIRECTORY}/state.json --backup-state-file /var/lib/broker-backup/state.json

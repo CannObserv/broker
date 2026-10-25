@@ -156,8 +156,9 @@ def test_service_runs_as_its_own_user_with_no_capability() -> None:
     assert _directive(text, "NoNewPrivileges") == ["yes"]
     assert _directive(text, "ReadWritePaths") == []  # StateDirectory is the only writable path
     assert _directive(text, "StateDirectory") == ["broker-backup"]
-    # The default 0755: the probe and deploy.sh's verify_backup read state.json
-    # as exedev, so a tighter mode is a finding every tick and a switch back.
+    # The default 0755: the probe (as broker-bus-health, #121) and deploy.sh's
+    # verify_backup (as exedev) read state.json, so a tighter mode is a finding
+    # every tick and a switch back.
     assert _directive(text, "StateDirectoryMode") == []
 
 
