@@ -4,7 +4,7 @@
 # is the operator's working surface. Run as the editor's user, never root.
 #
 # This is the interim step for the monthly patching run until patching-hosts
-# prunes editor builds itself (#126 option 1, an ask on gregoryfoster/skills).
+# prunes editor builds itself (#126 option 1, gregoryfoster/skills#482).
 # Delete it when that ships. docs/HOST-DISK.md has why it is needed: the
 # editor's own LRU loses track of builds, and `code tunnel prune` is a no-op on
 # 1.140.0 and would take a staged newer build on 1.143.1.

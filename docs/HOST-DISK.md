@@ -58,8 +58,9 @@ builds and CLI binaries by nothing.
 
 `scripts/prune_editor_builds.sh`, until patching-hosts prunes editor builds
 itself (#126 chose that: the attended monthly run, not a timer in this repo's
-units; the ask is drafted on #126). It keeps what `ps` shows running, anything
-newer, and what it cannot read, and touches nothing the editor prunes itself.
+units; the ask is gregoryfoster/skills#482). It keeps what `ps` shows running,
+anything newer, and what it cannot read, and touches nothing the editor prunes
+itself. Its first run, 2026-10-25, freed 69 MB: two CLI binaries (#126).
 The rules are in its header and `tests/deploy/test_prune_editor_builds.py`.
 
 In the monthly patching run, before its dry-run cost reads free disk, as the
