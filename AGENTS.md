@@ -155,8 +155,7 @@ deploy/          the node's artifacts + the probe, backup and drift units;
                  see deploy/README.md
 docs/            one reference doc per topic - see Detail Docs below
 scripts/         deploy.sh (#106); wheelhouse sync (runs before `uv sync`, must not
-                 import the project); audit_lock.sh (#86);
-                 prune_editor_builds.sh (#126, by hand only)
+                 import the project); audit_lock.sh (#86)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  revision.py (the build id, #105), drift.py (#110), checkin.py
                  (co-status), logging.py (service-local, not a mirror)
@@ -164,10 +163,9 @@ tests/           mirrors src/; tests/deploy/ asserts installed artifacts match d
                  rehearses the restore against the node's engine, and guards the
                  SocratiCode config (#17), ruff's reach into the docs (#38),
                  credentials out of every runbook's argv (#47), the vendored
-                 skills' links, listing and channel URLs (#63), pytest's
-                 conftest reach across argument orders (#73), the lock audit (#86),
-                 CI pins (#88), Dependabot (#90), runbook loops (#98), deploy.sh
-                 (test_deploy.py) and the live release (test_live_release.py)
+                 skills (#63), pytest's conftest reach (#73) and tmp retention
+                 (#126), the lock audit (#86), CI pins (#88), Dependabot (#90),
+                 runbook loops (#98), deploy.sh and the live release
 ```
 
 ## Agent Skills
@@ -208,7 +206,7 @@ appending a context measurement - pull before pushing. Review/ship are the
 - [docs/LWW-CAP.md](docs/LWW-CAP.md) - the LWW length threshold, read off the stream
 - [docs/MEMORY-PROTECTION.md](docs/MEMORY-PROTECTION.md) - the `maxmemory` cap: that all three producers survive it, and why `noeviction` is load-bearing beyond refusing writes
 - [docs/UNDELIVERED-CONSUMERS.md](docs/UNDELIVERED-CONSUMERS.md) - a consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and what the probe compares instead
-- [docs/HOST-DISK.md](docs/HOST-DISK.md) - what else fills `/`: the editor's builds (what it prunes itself, what it doesn't), pytest's temp, the by-hand prune
+- [docs/HOST-DISK.md](docs/HOST-DISK.md) - what else fills `/`, and its prune
 - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore
 - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook and its symptom playbook
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
