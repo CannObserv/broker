@@ -14,7 +14,7 @@ Measured 2026-10-25, after the 2026-10-24 cleanup (`/` at 71%, 5.6 GB free):
 |---|---|---|
 | `~/.vscode-server/cli/servers/` | 1.3 GB, two builds | **none that holds** - below |
 | `~/.vscode-server/code-<hash>` | 35 MB per CLI binary, three | none: one per client update |
-| `~/.vscode-server/extensions/` | 910 MB, three Claude Code builds | the editor's restart - below |
+| `~/.vscode-server/extensions/` | 910 MB: three Claude Code builds, one Redis | the editor's restart - below |
 | `/tmp/pytest-of-exedev` | 611 MB | `tmp_path_retention_policy = "failed"` (#126) - below |
 | `/srv/broker/releases` | 441 MB | `scripts/deploy.sh` keeps five |
 | `~/.npm`, `~/.cache` (uv) | 1.2 GB, 913 MB | unchanged since 2026-10-24; not pruned |
@@ -48,7 +48,7 @@ this node's files, 2026-10-25. Nothing was reloaded or restarted to find out.
 - **`code tunnel prune` - supported, and not usable here.** It deletes every
   server directory without a live pid. On 1.140.0 it deletes nothing and says
   it succeeded: it parses `Stable-<hash>` with a lowercase-only quality match
-  (microsoft/vscode#337944, open). 1.143.1's source has the fix, and from then it
+  (read in `options.rs` and microsoft/vscode#337944, open; not run here). 1.143.1's source has the fix, and from then it
   would also delete the agent host's staged newer build. No dry run, no record.
 
 So the extensions are bounded by the operator's own restarts, and the server
