@@ -53,16 +53,20 @@ def _ini() -> str:
     return "[pytest]\n" + "".join(f"{k} = {OPTIONS[k]}\n" for k in keys if k in OPTIONS)
 
 
-def _run(work: Path, root: Path, *select: str) -> None:
+def _run(work: Path, root: Path, *select: str, rc: int = 0) -> None:
+    """One inner session. ``rc`` is its expected exit: a run that broke for another
+    reason (a collection error) would otherwise fail later, as a file-list diff."""
     env = {**os.environ, "PYTEST_DEBUG_TEMPROOT": str(root)}
-    subprocess.run(
+    result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:asyncio"]
         + list(select),
         cwd=work,
         env=env,
         capture_output=True,
+        text=True,
         check=False,
     )
+    assert result.returncode == rc, result.stdout + result.stderr
 
 
 @pytest.fixture
@@ -101,7 +105,7 @@ def test_a_passing_test_keeps_nothing_but_its_read_only_release(work) -> None:
 
 def test_a_failing_test_keeps_its_evidence(work) -> None:
     work_dir, root = work
-    _run(work_dir, root)
+    _run(work_dir, root, rc=1)
     (session,) = _sessions(root)
     assert "test_fails0/evidence" in _files(session)
     assert "test_passes0/plain" not in _files(session)
