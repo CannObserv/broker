@@ -814,8 +814,9 @@ journalctl -u broker-bus-health -n 5 -o cat --no-pager
 root:exedev`, so the operator's account can read it at any time, running or not.
 systemd reads an `EnvironmentFile` as root *before* dropping privileges, so a
 root-only file still reaches the process while staying unreadable to every
-account. The probe's own user, since #121, reads neither file. The process seeing its own environment is unavoidable; a second copy in
-a file `exedev` can `cat` is not.
+account. The probe's own user, since #121, reads neither file. The process
+seeing its own environment is unavoidable; a second copy in a file `exedev` can
+`cat` is not.
 
 Both unset is the supported default and costs nothing - the `EnvironmentFile`
 line carries a leading `-`. One set without the other is a config mistake and is
