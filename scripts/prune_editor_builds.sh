@@ -113,7 +113,7 @@ for f in "${clis[@]}"; do
 done
 
 if [ "$apply" -eq 0 ]; then
-	printf '%s\n' "${notes[@]}"
+	[ "${#notes[@]}" -eq 0 ] || printf '%s\n' "${notes[@]}"
 	for p in "${plan[@]}"; do echo "would remove ${p% *} ($(du -sh "${p% *}" | cut -f1))"; done
 	[ "${#plan[@]}" -gt 0 ] || echo "nothing to prune"
 	echo "dry run: nothing removed. Rerun with --apply to remove the above."
