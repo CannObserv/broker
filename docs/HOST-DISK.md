@@ -76,8 +76,10 @@ Never run it blind mid-session: the editor is the operator's working surface.
 
 ## pytest's share
 
-`tmp_path_retention_policy = "failed"` in `pyproject.toml` keeps a failed
-test's `tmp_path` and nothing else. The default kept every test's for three
+`tmp_path_retention_policy = "failed"` in `pyproject.toml`: a passing session
+keeps no `tmp_path`. A session with a failure, or one cut short, keeps the
+failed tests' and its session-scoped `mktemp` dirs (the throwaway engines'
+`acl*`, with their ACL files). The default kept every test's for three
 sessions, about 200 MB each on a node run. The deploy tests' `555` releases
 outlast the per-test cleanup (`rmtree(..., ignore_errors=True)` cannot enter
 them) and go with the three-session rotation, which makes them writable first.
