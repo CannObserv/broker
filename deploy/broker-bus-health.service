@@ -63,7 +63,8 @@ EnvironmentFile=-/etc/broker/status.env
 # BROKER_REDIS_URL above, plaintext in a file this unit's User= could read at
 # any time. While a tick runs, systemd grants that User= read on the decrypted
 # copy, in RAM, never on disk: since #121 a user of the unit's own, so no
-# other account's process can read it for that second. Minted and installed by
+# other unprivileged account's process can read it for that second. Root, and
+# so exedev through sudo, still can. Minted and installed by
 # docs/NODE-CREDENTIALS.md.
 #
 # No SetCredential= fallback, unlike the backup's and the drift check's. A

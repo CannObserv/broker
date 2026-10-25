@@ -19,8 +19,8 @@ ciphertext is useless off the node. The host key sits on the same disk
 (`systemd-creds` says "not located on encrypted media"), so an image of the disk
 carries both. While a probe tick runs, systemd also grants the unit's `User=`
 read on its decrypted copy, in RAM, never on disk. Since #121 that is
-`broker-bus-health`, a user of the unit's own, so no other account's process can
-read it for that second ([deploy/broker-bus-health.service](../deploy/broker-bus-health.service)).
+`broker-bus-health`, a user of the unit's own, so no other unprivileged
+account's process can read it for that second ([deploy/broker-bus-health.service](../deploy/broker-bus-health.service)).
 
 **Rotate one** - on exposure, not on a schedule. Run it as a script (`bash
 rotate.sh`); it defines its own helpers. It adds before it retires, as #46's
