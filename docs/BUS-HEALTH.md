@@ -198,8 +198,7 @@ Per tick it probes:
   the per-queue drain grants (CannObserv/broker#12) made worth having;
 - `/` disk headroom (WARN at 90% used or under 2 GiB free) - which on this node
   is the AOF's headroom, and is the check whose meaning the move restored.
-  What else shares `/`, and the by-hand prune for the editor's builds:
-  [HOST-DISK.md](HOST-DISK.md).
+  What else shares `/`: [HOST-DISK.md](HOST-DISK.md).
 
 `content.blobs` carries a group row and nothing else. The unqualified "never
 `content.blobs`" rule was Archiver's *role* boundary and a neutral node has no
