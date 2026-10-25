@@ -472,16 +472,41 @@ def test_install_makes_the_user_before_the_deploy() -> None:
     assert installs and lines.index(USERADD) < installs[0], "the unit is installed by hand first"
 
 
+def _not_the_users_or_not_world_readable(directory: Path) -> list[str]:
+    """Each entry under ``directory``, itself included, not owned by ``USER``, or
+    a directory not ``0755``. Walked rather than named: ``dlq-evidence/`` exists
+    only once a DLQ has had depth, and a topic's evidence is a level below it."""
+    wrong = []
+    for path in [directory, *directory.rglob("*")]:
+        st = path.lstat()
+        owner = pwd.getpwuid(st.st_uid).pw_name
+        mode = stat.S_IMODE(st.st_mode)
+        if owner != USER or (path.is_dir() and mode != 0o755):
+            wrong.append(f"{path} {owner} {mode:o}")
+    return wrong
+
+
 def test_the_state_directory_is_the_users_and_world_readable() -> None:
     """systemd chowns ``StateDirectory=`` to ``User=`` at start; ``0755`` keeps
-    ``state.json`` and the DLQ evidence readable to the operator. On the node,
-    after the deploy that installs the unit; a switch back chowns it to exedev
-    again, and this fails, as it should."""
+    ``state.json`` and the DLQ evidence (``dlq-evidence/``) readable to the
+    operator. On the node, after the deploy that installs the unit; a switch
+    back chowns it to exedev again, and this fails, as it should."""
     require_broker_node()
-    for path in (STATE_DIRECTORY, STATE_DIRECTORY / DLQ_EVIDENCE_DIRNAME):
-        st = path.stat()
-        assert pwd.getpwuid(st.st_uid).pw_name == USER, path
-        assert stat.S_IMODE(st.st_mode) == 0o755, path
+    if not STATE_DIRECTORY.is_dir():
+        pytest.fail(f"no {STATE_DIRECTORY}: the probe has not ticked on this node")
+    assert _not_the_users_or_not_world_readable(STATE_DIRECTORY) == []
+
+
+def test_the_state_walk_names_another_owner_and_a_tight_mode(tmp_path, monkeypatch) -> None:
+    """The walk reaches below ``dlq-evidence/``, and passes a tree that is right."""
+    topic = tmp_path / DLQ_EVIDENCE_DIRNAME / "content.replicate.dlq"
+    topic.mkdir(parents=True)
+    for path in (tmp_path, topic.parent, topic):
+        path.chmod(0o755)
+    monkeypatch.setattr(sys.modules[__name__], "USER", pwd.getpwuid(tmp_path.stat().st_uid).pw_name)
+    assert _not_the_users_or_not_world_readable(tmp_path) == []
+    topic.chmod(0o700)
+    assert _not_the_users_or_not_world_readable(tmp_path) == [f"{topic} {USER} 700"]
 
 
 def test_the_shared_env_carries_no_redis_password() -> None:
