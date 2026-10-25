@@ -65,6 +65,11 @@ asyncio_default_test_loop_scope = "session"
 filterwarnings = [
     "error::DeprecationWarning",
 ]
+# Keep a failed test's tmp_path, nothing else (#126): the default kept every
+# test's for three sessions, about 600 MB on a node whose root is Redis's AOF
+# headroom. The deploy tests' 555 releases outlast the per-test cleanup, which
+# cannot enter them, and go with the rotation. tests/deploy/test_pytest_tmp_retention.py.
+tmp_path_retention_policy = "failed"
 
 [tool.ruff]
 line-length = 100
