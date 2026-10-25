@@ -8,24 +8,40 @@ absence: on the node a missing unit, or ``/etc/broker/.env``, fails
 (CannObserv/broker#81).
 """
 
+import grp
+import pwd
 import re
+import stat
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
-from src.broker.bus_health import BROKER_CREDENTIAL
+from src.broker.bus_health import BROKER_CREDENTIAL, DLQ_EVIDENCE_DIRNAME
 from src.broker.revision import REVISION_PATH
-from tests.deploy.conftest import LIVE, outcome_of, pretend_node, read_installed
+from tests.deploy.conftest import (
+    LIVE,
+    outcome_of,
+    pretend_node,
+    read_installed,
+    require_broker_node,
+)
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DEPLOY = _ROOT / "deploy"
 REPO_SERVICE = _DEPLOY / "broker-bus-health.service"
 REPO_TIMER = _DEPLOY / "broker-bus-health.timer"
+README = _DEPLOY / "README.md"
 INSTALLED_SERVICE = Path("/etc/systemd/system/broker-bus-health.service")
 INSTALLED_TIMER = Path("/etc/systemd/system/broker-bus-health.timer")
 PROBE_SOURCE = _ROOT / "src" / "broker" / "bus_health.py"
+#: The static system user (#121), as the backup's (#109): no home, no login, in
+#: no supplementary group.
+USER = "broker-bus-health"
+#: How deploy/README.md's Install makes it, and what a missing user's failure says.
+USERADD = f"sudo useradd --system --no-create-home --shell /usr/sbin/nologin {USER}"
+STATE_DIRECTORY = Path("/var/lib/broker-bus-health")
 # The file the probe shares with the operator: 0640 root:exedev, so readable by
 # the account these tests run as, by design.
 SHARED_ENV = Path("/etc/broker/.env")
@@ -379,8 +395,93 @@ def test_the_probe_password_is_an_encrypted_credential() -> None:
         "a plaintext LoadCredential= would put the password back on disk"
     )
     assert not _directive(REPO_SERVICE.read_text(), "SetCredential"), (
-        "SetCredential= writes the password into the unit"
+        "SetCredential= either writes the password into the unit or, empty, is a "
+        "fallback that sends AUTH brokeradmin with no password: one ACL LOG denial "
+        "a tick, where a missing source now fails the start (#121)"
     )
+
+
+def test_service_runs_as_its_own_user_with_no_capability() -> None:
+    """Not exedev (#121): passwordless sudo, and the dev tree's ``.env`` with the
+    cohort's tokens. Not ``DynamicUser=``, which moves ``StateDirectory=`` under
+    0700 /var/lib/private, out of reach of the operator who triages
+    ``dlq-evidence/``. A static user of its own, as the backup's (#109), so the
+    decrypted credential is readable for the tick by this unit's processes alone."""
+    text = REPO_SERVICE.read_text()
+    assert _directive(text, "User") == [USER]
+    assert _directive(text, "Group") == [USER]
+    assert _directive(text, "SupplementaryGroups") == []
+    assert _directive(text, "DynamicUser") == []
+    assert _directive(text, "CapabilityBoundingSet") == [""]
+    assert _directive(text, "AmbientCapabilities") == []
+    assert _directive(text, "ProtectSystem") == ["strict"]
+    assert _directive(text, "ProtectHome") == ["yes"]
+    assert _directive(text, "PrivateTmp") == ["yes"]
+    assert _directive(text, "NoNewPrivileges") == ["yes"]
+    assert _directive(text, "ReadWritePaths") == []  # StateDirectory is the only writable path
+    assert _directive(text, "StateDirectory") == ["broker-bus-health"]
+    # The default 0755: the operator reads state.json and dlq-evidence/.
+    assert _directive(text, "StateDirectoryMode") == []
+
+
+def test_service_sees_nothing_under_etc_broker_or_the_credstore() -> None:
+    """Both its inputs there are read by the manager before the namespace:
+    ``EnvironmentFile=`` past ``TemporaryFileSystem=``, and
+    ``LoadCredentialEncrypted=`` past ``InaccessiblePaths=``, measured on systemd
+    255 (#121; ``LoadCredential=`` was #109's). Defence in depth: no file under
+    either is readable by this user anyway."""
+    text = REPO_SERVICE.read_text()
+    assert _directive(text, "TemporaryFileSystem") == ["/etc/broker:ro"]
+    assert _directive(text, "InaccessiblePaths") == ["-/etc/credstore.encrypted"]
+    assert _directive(text, "BindReadOnlyPaths") == []
+    assert _directive(text, "BindPaths") == []
+
+
+def test_no_exec_line_is_privileged() -> None:
+    """``+``, ``!`` and ``!!`` lift the sandbox or the user for one command. The
+    probe needs neither: every input reaches it through the manager."""
+    execs = [
+        ln.split("=", 1)[1] for ln in REPO_SERVICE.read_text().splitlines() if ln.startswith("Exec")
+    ]
+    assert execs
+    assert [e for e in execs if set("+!") & set(e.split("/", 1)[0])] == []
+
+
+def test_the_user_is_static_and_in_no_supplementary_group() -> None:
+    """On the node only; ``useradd`` comes before the deploy that installs the unit."""
+    require_broker_node()
+    try:
+        user = pwd.getpwnam(USER)
+    except KeyError:
+        pytest.fail(f"no {USER} user: {USERADD}")
+    assert grp.getgrgid(user.pw_gid).gr_name == USER
+    assert [g.gr_name for g in grp.getgrall() if USER in g.gr_mem] == []
+    assert user.pw_shell == "/usr/sbin/nologin"
+    assert not Path(user.pw_dir).exists()
+
+
+def test_install_makes_the_user_before_the_deploy() -> None:
+    """A ``User=`` that does not exist fails the tick the deploy waits on, which
+    then switches back. Within Install alone: a mention elsewhere is not its order."""
+    install = README.read_text().split("\n## Install\n", 1)[1].split("\n## ", 1)[0]
+    lines = [ln.strip() for ln in install.splitlines()]
+    assert USERADD in lines
+    deploys = [i for i, ln in enumerate(lines) if "scripts/deploy.sh" in ln]
+    assert deploys and lines.index(USERADD) < deploys[0]
+    installs = [i for i, ln in enumerate(lines) if "deploy/broker-bus-health.service" in ln]
+    assert installs and lines.index(USERADD) < installs[0], "the unit is installed by hand first"
+
+
+def test_the_state_directory_is_the_users_and_world_readable() -> None:
+    """systemd chowns ``StateDirectory=`` to ``User=`` at start; ``0755`` keeps
+    ``state.json`` and the DLQ evidence readable to the operator. On the node,
+    after the deploy that installs the unit; a switch back chowns it to exedev
+    again, and this fails, as it should."""
+    require_broker_node()
+    for path in (STATE_DIRECTORY, STATE_DIRECTORY / DLQ_EVIDENCE_DIRNAME):
+        st = path.stat()
+        assert pwd.getpwuid(st.st_uid).pw_name == USER, path
+        assert stat.S_IMODE(st.st_mode) == 0o755, path
 
 
 def test_the_shared_env_carries_no_redis_password() -> None:

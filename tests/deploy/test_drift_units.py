@@ -90,15 +90,20 @@ def test_service_holds_no_redis_credential_and_no_env_file() -> None:
     assert "BROKER_REDIS_URL" not in text
 
 
-def test_service_sees_no_home_and_hides_nothing_its_credential_needs() -> None:
-    """The dev tree's .env, under /home, holds the cohort's GitHub tokens. Nothing
-    may hide /etc/broker (CR 2): the credential's source is there, and whether
-    systemd reads it before the mount namespace is not documented. A dynamic user
-    reads nothing there anyway (test_etc_broker_holds_nothing_a_dynamic_user_reads)."""
+def test_service_sees_no_home_and_nothing_under_etc_broker() -> None:
+    """The dev tree's .env, under /home, holds the cohort's GitHub tokens.
+    /etc/broker holds other identities' keys, so it is hidden whole (#121): an
+    empty read-only tmpfs, nothing bound back in. The key is the credential's
+    source and still loads: systemd 255 reads a ``LoadCredential=`` source past
+    ``TemporaryFileSystem=``. Still not documented; measured by #109 and again
+    for this unit by #121 (the source's 48 bytes, not the fallback's one). Were
+    a later systemd to stop, the fallback runs, logs no key, and exits 1, and
+    co-broker-drift goes quiet. A dynamic user reads nothing there anyway
+    (test_etc_broker_holds_nothing_a_dynamic_user_reads)."""
     text = REPO_SERVICE.read_text()
-    key_dir = str(Path(KEY_FILE).parent)
-    for key in ("TemporaryFileSystem", "InaccessiblePaths", "BindPaths", "BindReadOnlyPaths"):
-        assert not [v for v in _directive(text, key) if key_dir in v], key
+    assert _directive(text, "TemporaryFileSystem") == [f"{Path(KEY_FILE).parent}:ro"]
+    assert _directive(text, "BindPaths") == []
+    assert _directive(text, "BindReadOnlyPaths") == []
     assert _directive(text, "ProtectHome") == ["yes"]
     assert _directive(text, "ProtectSystem") == ["strict"]
     assert _directive(text, "PrivateTmp") == ["yes"]
