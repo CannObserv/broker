@@ -12,14 +12,13 @@ context budget (CannObserv/broker#42).
 `LWW_PRODUCER_MAXLEN` is a **default, not the whole rule**. Each producer
 (watcher's `resolve_stream_maxlen`, archiver's `resolve_fetch_policy_maxlen`)
 floors each LWW cap at `RETAINED_FULL_SETS` (10) copies of the set it is about
-to republish, so the cap in force is
-`max(500, 10 x set)`. The sets were 3 (`content.fetch-policy`) and 4
-(`info.watch-status`) on 2026-09-22 and the default governs; from about 54
-entries per set a threshold of 550 would have said *the retention cap for this
-stream is not being applied* while the cap was being applied correctly, just
-higher - and a standing WARN with the wrong cause trains an operator to ignore
-the LWW rows, which is the blindness CannObserv/broker#40 closed
-(CannObserv/broker#44).
+to republish, so the cap in force is `max(500, 10 x set)`. The sets were 3
+(`content.fetch-policy`) and 4 (`info.watch-status`) on 2026-09-22 and the
+default governs; from about 54 entries per set a threshold of 550 would have
+said *the retention cap for this stream is not being applied* while the cap was
+being applied correctly, just higher - and a standing WARN with the wrong cause
+trains an operator to ignore the LWW rows, which is the blindness
+CannObserv/broker#40 closed (CannObserv/broker#44).
 
 **The third term cannot be mirrored.** It is the size of Watcher's corpus, it
 changes with no edit anywhere, and that is precisely the failure a mirror cannot
