@@ -1087,6 +1087,13 @@ def _constant_docstring(name: str) -> str:
     raise AssertionError(f"{name} is not assigned in bus_health.py")
 
 
+def _as_prose(source: str) -> str:
+    """Source text with each comment line's marker dropped and whitespace
+    collapsed, so a sentence wrapped across ``#`` lines reads as one: without it
+    a phrase split by a wrap is absent whatever the comment says."""
+    return " ".join(re.sub(r"\n[ \t]*#:?", "\n", source).split())
+
+
 def test_the_archiver_caps_cite_where_archiver_keeps_the_obligation() -> None:
     """Archiver's note-to-broker obligation for each `*_STREAM_MAXLEN` override
     lives in its `docs/ENVIRONMENT.md` since CannObserv/archiver#326, not
@@ -1873,7 +1880,7 @@ def test_the_lww_mirrors_name_each_owner_across_f1() -> None:
         assert f"archiver's {constant} {archiver_module}" in docstring, name
         assert mover in docstring, name
         assert "``info.watch-status``: Watcher's" in docstring, name
-    source = " ".join(Path(bus_health.__file__).read_text().split())
+    source = _as_prose(Path(bus_health.__file__).read_text())
     assert "watcher gives them one rule" not in source
     assert "If either owner moves one, the floor splits per stream" in source
     doc = (Path(__file__).resolve().parents[1] / "docs" / "BUS-HEALTH.md").read_text()
