@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Deploy broker: build a root-owned release from a pushed commit, switch, verify (#106).
 #
-#   scripts/deploy.sh [<ref>]            <ref> on origin/main, CI green; default origin/main
-#   scripts/deploy.sh --skip-ci [<ref>]  without asking CI: an emergency, logged
+#   scripts/deploy.sh [<ref>]               <ref> on origin/main, CI green; default origin/main
+#   scripts/deploy.sh --skip-ci [<ref>]     without asking CI: an emergency, logged
+#   scripts/deploy.sh --build-only [<ref>]  build releases/<sha12> and stop: nothing switched
 #   scripts/deploy.sh --help
 #
 # A rollback is a deploy of the previous build: scripts/deploy.sh <old sha12>,
-# gated the same way. Exits 0 when deployed and verified, 1 when refused or
-# switched back to a build that answers, 4 when nothing answers.
+# gated the same way. Exits 0 when deployed and verified (or built, with
+# --build-only), 1 when refused or switched back to a build that answers, 4 when
+# nothing answers.
 #
 # Epic #22's design (docs/plans/2026-10-17-22-release-deploy.md, D1, D4, D7-D9),
 # adapted from CannObserv/processor's deploy.sh (no HTTP surface, a CI gate, a
@@ -21,7 +23,9 @@
 #   0. ask GitHub whether the commit's CI passed (unless --skip-ci)
 #   1. build releases/<sha12> at its final path (or reuse it): archive, the
 #      wheelhouse, each locked file held to its pinned sha256 (#125), uv sync,
-#      read-only, root's, REVISION last
+#      read-only, root's, REVISION last. --build-only stops here (#122)
+#   1a. refuse a unit whose User= does not exist, and a deploy that would wait
+#      on a tick of a probe whose timer is not active (#122)
 #   2. switch live (rename(2), atomic), then install each deploy/broker-* unit
 #      from the release that differs from its installed copy
 #   3. verify each unit this deploy changed: one whose unit it installed, or one
@@ -30,7 +34,8 @@
 #      drift check by nothing, on purpose (#110)
 #   4. on failure, switch back, units too, and prove the old build the same way
 #   5. verified: enable the drift timer if this deploy added it (#110)
-#   6. compare the host configs (never installed), prune to KEEP releases plus live
+#   6. compare the host configs (never installed), prune to KEEP releases plus
+#      live, never the release live replaced
 #
 # It restarts nothing, and never redis-server. The one thing it starts is the
 # drift timer, the first time it installs it. Runs as exedev; sudo -n for every
@@ -67,6 +72,7 @@ CI_JOBS=("lint + test")
 GITHUB_API="https://api.github.com/repos/CannObserv/broker"
 UNIT_DIR="$HOST/etc/systemd/system"
 PROBE_UNIT=broker-bus-health.service
+PROBE_TIMER=broker-bus-health.timer
 BACKUP_UNIT=broker-backup.service
 DRIFT_UNIT=broker-drift.service
 # The timers a deploy enables, once, when it adds one and verifies (#110): a
@@ -100,6 +106,11 @@ IMPORT_PROBE='import src.broker.bus_health, src.broker.backup, src.broker.restor
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 note() { echo "deploy: $*" >&2; }
+# Said and journaled: what a verify proved outlives a detached deploy's log file (#122).
+say() {
+  note "$*"
+  logger -t broker-deploy "$*" || true
+}
 die() {
   note "$*"
   exit 1
@@ -109,7 +120,7 @@ dead() {
   exit 4
 }
 
-usage() { sed -n '4,6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '4,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # Whole numbers, or refused before anything runs: bash arithmetic on "5x" is an
 # error that would otherwise end a verified deploy at the prune.
@@ -118,10 +129,12 @@ for knob in KEEP CI_WAIT_SECONDS CI_POLL_SECONDS PROBE_WAIT_SECONDS BACKUP_WAIT_
 done
 
 skip_ci=0
+build_only=0
 ref=""
 while (($#)); do
   case "$1" in
     --skip-ci) skip_ci=1 ;;
+    --build-only) build_only=1 ;;
     -h | --help)
       usage
       exit 0
@@ -506,6 +519,15 @@ unusable() {
   fi
 }
 
+link="$ROOT/live"
+# The link exactly as it was, to put back on failure: one made by hand may point
+# anywhere. Its last component is for comparing and for messages, and the prune
+# never takes it: it is what a rollback deploys.
+previous_link="$(readlink "$link" 2>/dev/null || true)"
+previous="$(release_of)"
+moved=1
+[[ -n "$previous_link" && "$previous" == "$build" ]] && moved=0
+
 # A release live runs is never rebuilt in place, whatever is wrong with it: that
 # pulls the code out from under its units, and a failed sync leaves live with no
 # release at all. Unless it is gone altogether: building it is the repair.
@@ -518,8 +540,18 @@ else
   [[ "$why" == "not built" ]] || note "release $build is $why; rebuilding"
   build_release
 fi
-# Prune by last deploy, not first build. A failure only reorders the prune.
+# Prune by last build or deploy, not first build. A failure only reorders the prune.
 sudo -n touch "$release" || note "cannot touch $release; the prune may take it sooner"
+
+# #108's option (b): a release to run from with live left alone, as a rebuild's
+# restore does before the first deploy (docs/RECOVERY.md). Nothing installed,
+# verified or pruned, and none of the switch's preflights: they guard a switch,
+# and a rebuild builds before Install makes the units' users.
+if ((build_only)); then
+  say "built $build (--build-only); live stays on ${previous_link:-nothing}"
+  note "nothing switched, installed or pruned. It runs from $release; a deploy of $build reuses it"
+  exit 0
+fi
 
 # --- switch, verify, or switch back ----------------------------------------
 
@@ -730,7 +762,7 @@ verify_backup() { # <build it must report>
   read -r outcome revision < <(jq -r '"\(.outcome // "none") \(.revision // "none")"' \
     "$BACKUP_STATE" 2>/dev/null || echo "unreadable none")
   if [[ ("$outcome" == uploaded || "$outcome" == unchanged) && "$revision" == "$want" ]]; then
-    note "the backup run on $want: $outcome"
+    say "the backup run on $want: $outcome"
     return 0
   fi
   note "the $BACKUP_UNIT run on $want wrote outcome $outcome, revision $revision to $BACKUP_STATE"
@@ -784,13 +816,13 @@ verify_probe() { # <build it must report>
     note "the probe's tick $id reported revision ${rev:-none}, not $want"
     return 1
   }
-  note "the probe's tick $id on $want: exited 0"
+  say "the probe's tick $id on $want: exited 0"
 }
 
 verify_all() { # each service in $verify, against what its own unit runs
   local svc
   ((${#verify[@]})) || {
-    note "nothing to verify: no unit changed, and none runs live from a link that moved"
+    say "nothing to verify: no unit changed, and none runs live from a link that moved"
     return 0
   }
   for svc in "${verify[@]}"; do
@@ -804,6 +836,56 @@ verify_all() { # each service in $verify, against what its own unit runs
       *) note "$svc changed but is not verified: this deploy has no check for it" ;;
     esac
   done
+}
+
+# --- before the switch (#122) ------------------------------------------------
+#
+# Failures the verify would find only after the switch, then switch back from:
+# refused with nothing switched, and journaled, as the wheelhouse pin check is.
+
+# A User= that does not exist fails every run of its unit (#121's review,
+# finding 5). Each of the release's services is asked about as it will run:
+# not a DynamicUser= one, whose user systemd makes at start, nor one with no
+# User=, which runs as root.
+check_users() {
+  local name path user unmade=""
+  while read -r name; do
+    [[ "$name" == *.service ]] || continue
+    path="$release/deploy/$name"
+    [[ "$(sed -n 's/^DynamicUser= *//p' "$path" | tail -n 1)" =~ ^(yes|true|on|1)$ ]] && continue
+    user="$(sed -n 's/^User= *//p' "$path" | tail -n 1)"
+    [[ -z "$user" ]] || getent passwd "$user" >/dev/null || unmade+=", $name (User=$user)"
+  done < <(units_of)
+  [[ -n "$unmade" ]] || return 0
+  logger -t broker-deploy "refused $build: no such user for ${unmade#, }" || true
+  die "no such user for ${unmade#, }: every run of its unit would fail, the verify's too;" \
+    "nothing switched. Make it first (deploy/README.md, Install), then deploy again."
+}
+
+# Whether the verify will wait on the probe's next tick: changed_services' rule,
+# asked before the switch. Its unit or timer differs from the installed copy, or
+# live moves under a probe unit that runs it.
+waits_on_probe() {
+  local name path
+  for name in "$PROBE_UNIT" "$PROBE_TIMER"; do
+    [[ -f "$release/deploy/$name" ]] && ! cmp -s "$release/deploy/$name" "$UNIT_DIR/$name" && return 0
+  done
+  ((moved)) || return 1
+  path="$release/deploy/$PROBE_UNIT"
+  [[ -f "$path" ]] || path="$UNIT_DIR/$PROBE_UNIT"
+  [[ "$(sed -n 's/^WorkingDirectory=//p' "$path" 2>/dev/null | tail -n 1)" == "$ROOT/live" ]]
+}
+
+# A timer that is not active gives no tick: the verify would wait
+# PROBE_WAIT_SECONDS for one, then switch back. Install enables it before the
+# deploy that adds the probe's unit; an operator's disable is undone by hand.
+check_probe_timer() {
+  waits_on_probe || return 0
+  systemctl is-active --quiet "$PROBE_TIMER" && return 0
+  logger -t broker-deploy "refused $build: $PROBE_TIMER is not active, so the probe never ticks" || true
+  die "$PROBE_TIMER is not active, so the probe tick this deploy is verified by never comes;" \
+    "nothing switched. Enable it, then deploy again: sudo systemctl enable --now $PROBE_TIMER" \
+    "(deploy/README.md, Install, if it is not installed yet)"
 }
 
 # Broker's installed units that this release no longer has. A deploy never
@@ -849,14 +931,8 @@ compare_host_configs() {
   done
 }
 
-link="$ROOT/live"
-# The link exactly as it was, to put back on failure: one made by hand may point
-# anywhere. Its last component is for comparing and for messages.
-previous_link="$(readlink "$link" 2>/dev/null || true)"
-previous="$(release_of)"
-moved=1
-[[ -n "$previous_link" && "$previous" == "$build" ]] && moved=0
-
+check_users
+check_probe_timer
 stage="while switching"
 swap "$link" "releases/$build" || die "cannot switch live to $build (sudo ln, mv); nothing switched"
 stage="after the switch, installing units and verifying"
@@ -871,7 +947,7 @@ done < <(changed_services)
 
 if ((units_ok)) && verify_all; then
   keep_units=0
-  note "live is on $build"
+  say "live is on $build"
   enable_new_timers
 else
   stage="while switching back"
@@ -912,10 +988,17 @@ compare_host_configs
 # --- prune -----------------------------------------------------------------
 
 # KEEP releases besides the one live names (the design's Q2): live is left out
-# of the count, never only out of the deletion.
+# of the count, never only out of the deletion. Newest first by last build or
+# deploy, so --build-only releases count, and can push the release live
+# replaced out of the KEEP newest. That one is kept anyway (#122): it is what a
+# rollback deploys, and the next deploy's prune takes it like any other.
 live_build="$(release_of)"
 # shellcheck disable=SC2012 # names are 12 hex characters
 ls -1t "$ROOT/releases" | { grep -vxF -- "$live_build" || :; } | tail -n +$((KEEP + 1)) | while read -r old; do
+  if [[ "$old" == "$previous" ]]; then
+    note "keeping release $old past KEEP=$KEEP: live replaced it, so a rollback deploys it"
+    continue
+  fi
   note "pruning release $old"
   # REVISION first: a prune cut short leaves an interrupted build, never a
   # "complete" one with half its files. Verified by now: a failed prune is a note.
