@@ -280,8 +280,8 @@ this handler's shape: a render runs "within the existing fetch-timeout ceiling"
 (CannObserv/replicator#138).
 
 **Movers, which no commit records:** those three in ``/etc/replicator/.env``.
-A ceiling replicator#138 gives renders of their own would split capture off
-into a constant of its own."""
+If replicator#138 gives renders a ceiling of their own, capture splits off into
+its own constant."""
 
 FETCH_HANDLER_WARN_UNDELIVERED_AGE_SECONDS = 2 * FETCH_HANDLER_CEILING_SECONDS
 """``replicator.fetch``'s and ``replicator.capture``'s undelivered threshold: two
