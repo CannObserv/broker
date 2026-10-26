@@ -213,9 +213,8 @@ sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
 **Steps 2 and 3 run that release as root, not `live`** (#122): `live` comes
 with step 6's deploy, whose forced backup run would ship this default-config
 `dump.rdb` as the newest snapshot, the one `--latest` takes. `--build-only`
-builds and checks a release as a deploy does and stops: nothing switched,
-installed, backed up or pruned, and no unit's user is asked for yet. Step 6
-reuses it. `-I -B`: no caller's `PYTHONPATH` or user site, no bytecode written.
+switches, installs and backs up nothing (`deploy/README.md`, *Deploying*).
+`-I -B`: no caller's `PYTHONPATH` or user site, no bytecode written.
 
 The prefix defaults to the hostname. On a VM not named `co-broker`, pass
 `--prefix co-broker` here and in step 3, and set `BROKER_BACKUP_PREFIX=co-broker`
