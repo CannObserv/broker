@@ -521,8 +521,8 @@ unusable() {
 
 link="$ROOT/live"
 # The link exactly as it was, to put back on failure: one made by hand may point
-# anywhere. Its last component is for comparing and for messages, and the prune
-# never takes it: it is what a rollback deploys.
+# anywhere. Its last component is for comparing and for messages, and this
+# deploy's prune spares it: it is what a rollback deploys.
 previous_link="$(readlink "$link" 2>/dev/null || true)"
 previous="$(release_of)"
 moved=1
