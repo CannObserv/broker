@@ -9,9 +9,10 @@ context budget (CannObserv/broker#42).
 
 ## The one cap that is read, not mirrored
 
-`LWW_PRODUCER_MAXLEN` is a **default, not the whole rule**. Watcher's
-`resolve_stream_maxlen` floors each LWW cap at `RETAINED_FULL_SETS` (10) copies
-of the set it is about to republish, so the cap in force is
+`LWW_PRODUCER_MAXLEN` is a **default, not the whole rule**. Each producer
+(watcher's `resolve_stream_maxlen`, archiver's `resolve_fetch_policy_maxlen`)
+floors each LWW cap at `RETAINED_FULL_SETS` (10) copies of the set it is about
+to republish, so the cap in force is
 `max(500, 10 x set)`. The sets were 3 (`content.fetch-policy`) and 4
 (`info.watch-status`) on 2026-09-22 and the default governs; from about 54
 entries per set a threshold of 550 would have said *the retention cap for this
