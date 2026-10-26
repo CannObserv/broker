@@ -254,7 +254,9 @@ REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
 #
 # What no duration sizes is a consumer alive and not reading. Replicator names
 # two: one stalled-provider attempt (a 30 s download and a 120 s create timeout,
-# each with the SDK's retry deadline on top - inside five minutes, not by much),
+# each with the SDK's retry deadline on top - inside five minutes, not by much,
+# though two back to back would not be: the replicate row accepts that on its
+# measured handler, ~5.4 s at worst, rather than taking the two-handler rule),
 # and recovery re-claiming its own failing entry every cycle so XREADGROUP
 # never runs. The second is a state, not a duration, and to a positional check
 # it looks like a gone consumer. Replicator's own case of it is fixed -
