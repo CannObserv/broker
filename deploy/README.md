@@ -444,7 +444,8 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
    complete, root's, and still imports. A release `live` links is never rebuilt.
    Then two refusals before the switch, each journaled (#122):
    - a release service whose `User=` does not exist (`getent passwd`), unless
-     it is `DynamicUser=yes`: every run of it would fail;
+     it is `DynamicUser=yes`: every run of it would fail. The release's unit
+     file is read, not a `systemctl edit` drop-in;
    - a deploy the probe's tick will verify (step 5) while
      `broker-bus-health.timer` is not active, as when the deploy would add the
      probe's unit before Install enabled its timer. No tick would come.
