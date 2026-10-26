@@ -41,10 +41,10 @@ nothing can write `content.fetch-policy.dlq` and nothing would trigger one.
 **Retention on this stream is the producer's, not the broker's.** A stream whose
 producer republishes its full set on a timer grows without bound unless trimmed;
 `BusPublish.maxlen` (co-core >=0.7.7) rides the trim on each publish, and the
-knob sits with the producer (CannObserv/watcher#292) because the
-consumer's replay-from-`0-0` boot depends on the retention policy - it is a
-contract property, not broker tuning. The broker's exposure is the
-shared-instance blast radius, which `maxmemory` bounds and the probe watches.
+knob sits with the producer (CannObserv/watcher#292) because the consumer's
+replay-from-`0-0` boot depends on the retention policy - it is a contract
+property, not broker tuning. The broker's exposure is the shared-instance
+blast radius, which `maxmemory` bounds and the probe watches.
 
 **`info.registry` retention is different in kind** (CannObserv/archiver#141): consumers
 boot by replaying from `0-0`, so the floor is "at least one full snapshot plus

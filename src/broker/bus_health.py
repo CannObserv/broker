@@ -643,8 +643,8 @@ class FullSetFloor:
     is for.
     """
 
-    #: The producer's ``default``, and the name is its own: the cap in force is this
-    #: or the floor, whichever is larger, and ``FlooredCap.maxlen`` is that.
+    #: The producer's ``default``, and the name is its own: the cap in force is
+    #: this or the floor, whichever is larger, and ``FlooredCap.maxlen`` is that.
     default_maxlen: int
     retained_full_sets: int
     republish_period_seconds: float
@@ -1563,10 +1563,11 @@ def floor_in_force(check: StreamCheck, reading: SetReading) -> FlooredCap | None
     """The cap this stream's full-set floor puts in force, or ``None``.
 
     ``None`` means the mirrored default governs - either because the floor is
-    under it (``max(default, 10 x set)``, the producers' rule and not ``10 x set``,
-    so a reading can only ever *raise* the threshold and never hand back the
-    blindness CannObserv/broker#40 closed), or because there is no reading to
-    raise it on: a reply without the ids, or a window ``read_set_size`` refused.
+    under it (``max(default, 10 x set)``, the producers' rule and not
+    ``10 x set``, so a reading can only ever *raise* the threshold and never hand
+    back the blindness CannObserv/broker#40 closed), or because there is no
+    reading to raise it on: a reply without the ids, or a window
+    ``read_set_size`` refused.
     Both are treated the way every other missing field here is: fall back, and
     fall back to the threshold that warns early rather than the one that goes
     quiet.
