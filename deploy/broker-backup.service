@@ -46,9 +46,9 @@ SetCredential=acl-passwords:\n
 
 # /var/lib/broker-backup/state.json - one record per run, written 0644 because
 # the probe reads it as broker-bus-health (#121) for the freshness finding, and
-# deploy.sh's verify_backup as exedev. systemd chowns the
-# directory to User= at start whenever its owner differs: to root again under
-# the #108 unit, which a switch back needs.
+# deploy.sh's verify_backup as exedev. systemd chowns the directory to User= at
+# start whenever its owner differs: to root again under the #108 unit, which a
+# switch back needs.
 StateDirectory=broker-backup
 # /run/broker-backup, for the copy below: 0700, removed at stop. /run is tmpfs,
 # so the copy is RAM charged to this unit and freed with it, bounded by the RDB
