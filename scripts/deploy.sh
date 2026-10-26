@@ -845,14 +845,15 @@ verify_all() { # each service in $verify, against what its own unit runs
 
 # A User= that does not exist fails every run of its unit (#121's review,
 # finding 5). Each of the release's services is asked about as it will run:
-# not a DynamicUser= one, whose user systemd makes at start, nor one with no
-# User=, which runs as root.
+# not a DynamicUser= one, whose user systemd makes at start (any of systemd's
+# true spellings, in any case), nor one with no User=, which runs as root.
 check_users() {
-  local name path user unmade=""
+  local name path user dynamic unmade=""
   while read -r name; do
     [[ "$name" == *.service ]] || continue
     path="$release/deploy/$name"
-    [[ "$(sed -n 's/^DynamicUser= *//p' "$path" | tail -n 1)" =~ ^(yes|true|on|1)$ ]] && continue
+    dynamic="$(sed -n 's/^DynamicUser= *//p' "$path" | tail -n 1)"
+    [[ "${dynamic,,}" =~ ^(1|yes|y|true|t|on)$ ]] && continue
     user="$(sed -n 's/^User= *//p' "$path" | tail -n 1)"
     [[ -z "$user" ]] || getent passwd "$user" >/dev/null || unmade+=", $name (User=$user)"
   done < <(units_of)

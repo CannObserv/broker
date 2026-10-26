@@ -2374,9 +2374,11 @@ class TestTheUserPreflight:
         asked = calls.index("getent passwd broker-backup")
         assert asked < index_of(calls, "logger -t broker-deploy live -> ")
 
-    def test_a_dynamic_user_unit_is_not_asked_about(self, world):
-        """systemd makes a DynamicUser= unit's user when it starts."""
-        self.with_user(world, "DynamicUser=yes\nUser=broker-made-at-start\n")
+    @pytest.mark.parametrize("value", ["yes", "True", "y", "ON", "1"])
+    def test_a_dynamic_user_unit_is_not_asked_about(self, world, value):
+        """systemd makes a DynamicUser= unit's user when it starts, and reads
+        the boolean as it reads any: 1, yes, y, true, t or on, in any case."""
+        self.with_user(world, f"DynamicUser={value}\nUser=broker-made-at-start\n")
         assert_ok(world.run())
         assert not getents(world)
 
