@@ -125,8 +125,12 @@ one publishes at a time**, which is the flip's rule (the design's D8, one hard
 flip, no dual-run). The set read off the stream follows whichever producer is
 writing, and the flip itself (a gap, then a full set) is the gap and the step
 the readings above already survive, with `stream-age` if the gap passes 15 min.
-The mirrored 500 and the 10-set floor move from Watcher's environment to
-Archiver's at F1 (CannObserv/broker#94).
+The three mirrored numbers (the 500, the 10-set floor and the five-minute
+period) are Watcher's until F1 and Archiver's after, equal on both sides, so no
+threshold moves at the flip. Only the movers change: the 500's becomes
+`ARCHIVER_FETCH_POLICY_STREAM_MAXLEN`, and the other two have none on
+Archiver's side. If either owner moves one, `LWW_FULL_SET_FLOOR` splits per
+stream (CannObserv/broker#94).
 
 **Both at once is invisible while the sets are small.** Replayed as above,
 each producer on its own `*/5`, offset a minute

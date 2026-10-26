@@ -1198,8 +1198,8 @@ def test_lww_threshold_catches_the_backlog_its_cap_was_cut_for(topic: str) -> No
 
 # --- the producer's full-set floor, read off the stream (CannObserv/broker#44) ---
 #
-# `LWW_PRODUCER_MAXLEN` mirrors watcher's *default*, and the default is not the
-# whole rule: `resolve_stream_maxlen` floors each cap at `RETAINED_FULL_SETS`
+# `LWW_PRODUCER_MAXLEN` mirrors the producer's *default*, and the default is not
+# the whole rule: each producer floors each cap at `RETAINED_FULL_SETS`
 # copies of the set being republished, so the cap in force is
 # `max(500, 10 x set)`. Every case below is about which of the two governs.
 
@@ -1837,15 +1837,47 @@ def test_a_floor_refuses_a_period_it_cannot_divide_by() -> None:
         FullSetFloor(default_maxlen=500, retained_full_sets=0, republish_period_seconds=300.0)
 
 
-def test_the_floor_constants_mirror_watchers() -> None:
-    """Both are copies of numbers owned in CannObserv/watcher, so the source is
-    named on each (docs/BUS-HEALTH.md, "Mirrored constants")."""
+def test_both_lww_floors_are_built_from_the_three_mirrors() -> None:
+    """One floor serves both streams while their owners hold the same numbers
+    (docs/BUS-HEALTH.md, "Mirrored constants"; CannObserv/broker#94)."""
     for topic in (CONTENT_FETCH_POLICY, INFO_WATCH_STATUS):
         floor = _check_for(topic).full_set_floor
         assert floor is not None
         assert floor.default_maxlen == LWW_PRODUCER_MAXLEN
         assert floor.retained_full_sets == LWW_RETAINED_FULL_SETS
         assert floor.republish_period_seconds == LWW_REPUBLISH_PERIOD_SECONDS
+
+
+def test_the_lww_mirrors_name_each_owner_across_f1() -> None:
+    """`content.fetch-policy`'s producer moves from Watcher to Archiver at F1,
+    and `info.watch-status` stays Watcher's. Each of the three numbers names
+    both owners and Archiver's mover, in wording true either side of the flip,
+    under the names archiver's and watcher's docstrings point at
+    (CannObserv/broker#94)."""
+    f1 = (
+        "``content.fetch-policy``: Watcher until CannObserv/watcher#374 and "
+        "``ARCHIVER_FETCH_POLICY_PRODUCER``, Archiver after"
+    )
+    archiver_module = "(``src/core/changes/fetch_policy_snapshot.py``)"
+    archivers = {
+        "LWW_PRODUCER_MAXLEN": (
+            "``DEFAULT_FETCH_POLICY_STREAM_MAXLEN``",
+            "``ARCHIVER_FETCH_POLICY_STREAM_MAXLEN``",
+        ),
+        "LWW_RETAINED_FULL_SETS": ("``RETAINED_FULL_SETS``", "Archiver's has none"),
+        "LWW_REPUBLISH_PERIOD_SECONDS": ("``REPUBLISH_PERIOD_SECONDS``", "Archiver's has none"),
+    }
+    for name, (constant, mover) in archivers.items():
+        docstring = " ".join(_constant_docstring(name).split())
+        assert f1 in docstring, name
+        assert f"archiver's {constant} {archiver_module}" in docstring, name
+        assert mover in docstring, name
+        assert "``info.watch-status``: Watcher's" in docstring, name
+    source = " ".join(Path(bus_health.__file__).read_text().split())
+    assert "watcher gives them one rule" not in source
+    assert "If either owner moves one, the floor splits per stream" in source
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "BUS-HEALTH.md").read_text()
+    assert "`ARCHIVER_FETCH_POLICY_STREAM_MAXLEN`" in doc
 
 
 def test_trimmed_stream_names_the_broken_cap() -> None:

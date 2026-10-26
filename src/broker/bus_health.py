@@ -27,7 +27,7 @@ The checks, per tick:
   cap + margin, so a breach means the retention mechanism broke rather than
   that traffic grew. Three different caps apply here - see the constants below.
   Two of them are constants; the LWW one is ``max(mirrored default, 10 x the
-  set watcher republishes)``, so its threshold is read off the stream each
+  set its producer republishes)``, so its threshold is read off the stream each
   tick rather than mirrored whole (CannObserv/broker#44) - off its span, off
   what arrived since the last tick, and off a span remembered from before a
   gap entered the window (CannObserv/broker#45). A trimmed window too narrow
@@ -181,17 +181,30 @@ SOCKET_TIMEOUT_SECONDS = 10.0
 # can read at any time (CannObserv/broker#52).
 BROKER_CREDENTIAL = "broker-brokeradmin"
 
-# The period both LWW streams republish their full set on, `*/5 * * * *`
-# (CannObserv/watcher#264, #265; `info.watch-status` reads it from
-# ``WATCHER_WATCH_STATUS_REPUBLISH_CRON`` and defaults to it). Spelled as a
-# constant rather than folded into the age threshold below because
-# ``read_set_size`` divides by it: the period is what turns a retained window
-# into a count of republishes, and it was already load-bearing here -
-# lengthened at home and not here, the age check below false-WARNs every tick.
-# Shortened, or beaten by watcher's mutation-deferred republishes, the window
-# narrows and the length check says so by name (CannObserv/broker#51): the
-# rate is the one term here watcher#319's pins cannot reach.
 LWW_REPUBLISH_PERIOD_SECONDS = 300.0
+"""The period both LWW streams republish their full set on, five minutes
+(CannObserv/watcher#264, #265). Two owners hold it:
+
+- ``content.fetch-policy``: Watcher until CannObserv/watcher#374 and
+  ``ARCHIVER_FETCH_POLICY_PRODUCER``, Archiver after (F1). Watcher's
+  ``*/5 * * * *`` (``src/workers/fetch_policy.py``), then archiver's
+  ``REPUBLISH_PERIOD_SECONDS`` (``src/core/changes/fetch_policy_snapshot.py``).
+- ``info.watch-status``: Watcher's ``DEFAULT_REPUBLISH_CRON``
+  (``src/workers/watch_status.py``).
+
+**Movers, which no commit records:** ``WATCHER_WATCH_STATUS_REPUBLISH_CRON``
+in watcher's environment, on ``info.watch-status`` only. Watcher's fetch-policy
+cron is a literal, and Archiver's has none, deliberately (its
+``docs/DOMAINS.md``).
+
+Spelled as a constant rather than folded into the age threshold below because
+``read_set_size`` divides by it: the period is what turns a retained window
+into a count of republishes, and it was already load-bearing here -
+lengthened at home and not here, the age check below false-WARNs every tick.
+Shortened, or beaten by publishes off the period (Watcher's mutation-deferred
+republishes, Archiver's deltas), the window narrows and the length check says
+so by name (CannObserv/broker#51): the rate is the one term here neither
+producer's pins can reach."""
 
 # 3x the period of silence means the producer is down, not slow.
 LWW_WARN_LAST_ENTRY_AGE_SECONDS = 3 * LWW_REPUBLISH_PERIOD_SECONDS
@@ -311,7 +324,8 @@ def with_margin(cap: int) -> int:
 #   allowlist (CannObserv/archiver#239);
 # - info.registry is excluded from that loop and capped on every publish
 #   instead, because its retention floor is a consumer boot contract;
-# - the LWW streams are capped by their producer, Watcher.
+# - the LWW streams are capped by their producer on every publish:
+#   Watcher, and Archiver on content.fetch-policy from F1.
 #
 # The seven content.* streams are capped by nothing, so they carry no length
 # threshold. Until CannObserv/broker#60 four of the then five borrowed the
@@ -346,11 +360,26 @@ Moved down underneath this mirror, the floor fires at the real cap; moved up
 past the 10% margin, the ceiling does. Within the margin, neither."""
 
 LWW_PRODUCER_MAXLEN = 500
-"""Mirrors watcher's ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN`` (``src/core/fetch_policy.py``)
-and ``DEFAULT_WATCH_STATUS_STREAM_MAXLEN`` (``src/core/watch_status.py``), both cut
-from 50k by CannObserv/watcher#292.
+"""The default cap on both LWW streams, cut from 50k by CannObserv/watcher#292.
+Two owners hold it:
 
-**The default, not the whole rule.** Watcher's ``resolve_stream_maxlen`` floors
+- ``content.fetch-policy``: Watcher until CannObserv/watcher#374 and
+  ``ARCHIVER_FETCH_POLICY_PRODUCER``, Archiver after (F1). Watcher's
+  ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN`` (``src/core/fetch_policy.py``), then
+  archiver's ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN``
+  (``src/core/changes/fetch_policy_snapshot.py``).
+- ``info.watch-status``: Watcher's ``DEFAULT_WATCH_STATUS_STREAM_MAXLEN``
+  (``src/core/watch_status.py``).
+
+**Movers, which no commit records:** on ``content.fetch-policy``,
+``WATCHER_FETCH_POLICY_STREAM_MAXLEN`` in watcher's environment until F1, then
+``ARCHIVER_FETCH_POLICY_STREAM_MAXLEN`` in ``/etc/archiver/.env``, the unit, or
+archiver's gitignored repo ``.env``, which loads last and wins; archiver's
+``docs/ENVIRONMENT.md`` obliges a note here when it is set. On
+``info.watch-status``, ``WATCHER_WATCH_STATUS_STREAM_MAXLEN``.
+
+**The default, not the whole rule.** Each producer (watcher's
+``resolve_stream_maxlen``, archiver's ``resolve_fetch_policy_maxlen``) floors
 each cap at ``LWW_RETAINED_FULL_SETS`` copies of the set being republished, so
 the cap in force is ``max(500, 10 x set)`` and this number governs only while
 the set is under 50 entries - it was 3 and 4 on 2026-09-22. Past that the floor
@@ -362,7 +391,16 @@ a constant anyone could mirror.
 """
 
 LWW_RETAINED_FULL_SETS = 10
-"""Mirrors ``RETAINED_FULL_SETS`` in watcher's ``src/core/bus.py`` (CannObserv/watcher#292).
+"""The floor's multiplier on both LWW streams (CannObserv/watcher#292). Two
+owners hold it:
+
+- ``content.fetch-policy``: Watcher until CannObserv/watcher#374 and
+  ``ARCHIVER_FETCH_POLICY_PRODUCER``, Archiver after (F1). Watcher's
+  ``RETAINED_FULL_SETS`` (``src/core/bus.py``), then archiver's
+  ``RETAINED_FULL_SETS`` (``src/core/changes/fetch_policy_snapshot.py``).
+- ``info.watch-status``: Watcher's, the same ``src/core/bus.py`` constant.
+
+**No mover but a commit:** Watcher's is a constant, and Archiver's has none.
 
 The second mirrored number this stream's cap is made of, and it fails the same
 way the first does: raised at home and not here the threshold goes stale-low and
@@ -587,22 +625,23 @@ class FullSetFloor:
     """A producer that republishes its whole set on a timer and floors the
     stream's cap at ``retained_full_sets`` copies of it.
 
-    The rule is watcher's ``resolve_stream_maxlen``: ``max(default, floor)``,
-    where the caller passes ``len(set) * RETAINED_FULL_SETS`` as the floor
+    The rule is the producer's - watcher's ``resolve_stream_maxlen``, archiver's
+    ``resolve_fetch_policy_maxlen`` - ``max(default, floor)``, where the caller
+    passes ``len(set) * RETAINED_FULL_SETS`` as the floor
     (CannObserv/watcher#292). Both halves have to be here, because mirroring
     only the first is what CannObserv/broker#44 was - a cap that is correct
     today and wrong from about 54 entries per set, in the direction that says
     a working cap is broken.
 
     ``default_maxlen`` and ``retained_full_sets`` are mirrored constants. The third
-    term - the set size - is **not mirrorable**: it is the size of watcher's
+    term - the set size - is **not mirrorable**: it is the size of the producer's
     corpus, it changes without anybody editing anything, and that is exactly
     the failure a mirror cannot be made to cover. It is read off the stream
     instead, by ``read_set_size``, which is what ``republish_period_seconds``
     is for.
     """
 
-    #: Watcher's ``default``, and the name is its own: the cap in force is this
+    #: The producer's ``default``, and the name is its own: the cap in force is this
     #: or the floor, whichever is larger, and ``FlooredCap.maxlen`` is that.
     default_maxlen: int
     retained_full_sets: int
@@ -816,8 +855,10 @@ class StreamCheck:
 
 
 # The other half of the LWW cap, alongside LWW_PRODUCER_MAXLEN
-# (CannObserv/broker#44). One object for both streams because watcher gives
-# them one rule: the same default, the same floor multiplier, the same `*/5`.
+# (CannObserv/broker#44). One object for both streams because both owners hold
+# the same three numbers: the same default, the same floor multiplier, the same
+# five minutes. If either owner moves one, the floor splits per stream
+# (CannObserv/broker#94).
 LWW_FULL_SET_FLOOR = FullSetFloor(
     default_maxlen=LWW_PRODUCER_MAXLEN,
     retained_full_sets=LWW_RETAINED_FULL_SETS,
@@ -1520,7 +1561,7 @@ def floor_in_force(check: StreamCheck, reading: SetReading) -> FlooredCap | None
     """The cap this stream's full-set floor puts in force, or ``None``.
 
     ``None`` means the mirrored default governs - either because the floor is
-    under it (``max(default, 10 x set)``, watcher's rule and not ``10 x set``,
+    under it (``max(default, 10 x set)``, the producers' rule and not ``10 x set``,
     so a reading can only ever *raise* the threshold and never hand back the
     blindness CannObserv/broker#40 closed), or because there is no reading to
     raise it on: a reply without the ids, or a window ``read_set_size`` refused.

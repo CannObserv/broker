@@ -41,7 +41,7 @@ nothing can write `content.fetch-policy.dlq` and nothing would trigger one.
 **Retention on this stream is the producer's, not the broker's.** A stream whose
 producer republishes its full set on a timer grows without bound unless trimmed;
 `BusPublish.maxlen` (co-core >=0.7.7) rides the trim on each publish, and the
-knob sits with Watcher (CannObserv/watcher#292, both LWW streams) because the
+knob sits with the producer (CannObserv/watcher#292) because the
 consumer's replay-from-`0-0` boot depends on the retention policy - it is a
 contract property, not broker tuning. The broker's exposure is the
 shared-instance blast radius, which `maxmemory` bounds and the probe watches.
@@ -93,7 +93,7 @@ Per tick it probes:
   `info.changes` on archiver's operator-side `XTRIM`
   (`ARCHIVER_REDIS_STREAM_MAXLEN`), 55k for `info.registry` (capped on publish
   instead, `ARCHIVER_REGISTRY_STREAM_MAXLEN`), and for the two LWW streams
-  `max(500, 10 x the set Watcher republishes)` + 10% - the 550 while the sets are small,
+  `max(500, 10 x the set republished)` + 10% - the 550 while the sets are small,
   which is the state the node is in today, and the floor past ~50 entries per
   set. See [LWW-CAP.md](LWW-CAP.md) and *Mirrored constants*
   below. **The nine `content.*` streams and the headless-Watcher pair get no
@@ -331,9 +331,9 @@ of:
 |---|---|
 | `CHANGES_PRODUCER_MAXLEN` (100k) | `DEFAULT_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/publisher.py` - **reaches `info.changes` only**, the one stream in archiver's `trim_topics` allowlist; `FACT_PRODUCER_MAXLEN` until CannObserv/broker#60, a name that got it lent to four `content.*` streams it never trims |
 | `REGISTRY_PRODUCER_MAXLEN` (50k) | `DEFAULT_REGISTRY_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/registry_snapshot.py` |
-| `LWW_PRODUCER_MAXLEN` (500) | Watcher's two `DEFAULT_*_STREAM_MAXLEN`, `src/core/{fetch_policy,watch_status}.py` (CannObserv/watcher#292) |
-| `LWW_RETAINED_FULL_SETS` (10) | `RETAINED_FULL_SETS`, `CannObserv/watcher:src/core/bus.py` (CannObserv/watcher#292) - the multiplier on the floor the line above is only the *default* of |
-| `LWW_REPUBLISH_PERIOD_SECONDS` (300) | Watcher's `*/5 * * * *` republish (CannObserv/watcher#264, #265; `info.watch-status` reads `WATCHER_WATCH_STATUS_REPUBLISH_CRON` and defaults to it) - already load-bearing as 3x the LWW age threshold before it was spelled out |
+| `LWW_PRODUCER_MAXLEN` (500) | Watcher's two `DEFAULT_*_STREAM_MAXLEN` (CannObserv/watcher#292); Archiver's on `content.fetch-policy` from F1, mover `ARCHIVER_FETCH_POLICY_STREAM_MAXLEN` |
+| `LWW_RETAINED_FULL_SETS` (10) | Watcher's `RETAINED_FULL_SETS` (CannObserv/watcher#292), and Archiver's from F1 - the multiplier on the floor the line above is only the *default* of |
+| `LWW_REPUBLISH_PERIOD_SECONDS` (300) | Watcher's `*/5` (CannObserv/watcher#264, #265; `info.watch-status` reads `WATCHER_WATCH_STATUS_REPUBLISH_CRON`), and Archiver's from F1 - already load-bearing as 3x the LWW age threshold before it was spelled out |
 | `PROVISIONER_TEXT_WAIT_SECONDS` (0) | The owner's number since 2026-10-12 (CannObserv/broker#78): since watcher#326 the revision is published after Processor stores the text (processor#29), so it never lags. 1800 s before that. Mover: `WATCHER_EXTRACT_MODE`, `/etc/watcher/.env` - #326's rollback brings the lag back, until watcher#350 deletes the variable |
 | `PROVISIONER_RECLAIM_MIN_IDLE_SECONDS` (600), `PROVISIONER_RECLAIM_INTERVAL_SECONDS` (60) | provisioner's `reclaim_min_idle_ms` and `reclaim_interval_s` settings. Movers: `PROVISIONER_RECLAIM_MIN_IDLE_MS`, `PROVISIONER_RECLAIM_INTERVAL_S`, `/etc/provisioner/consumer.env` (neither set, 2026-10-12). The three sum to `provisioner.revisions`' entry-age threshold, 660 s: an entry still pending after one full reclaim cycle |
 | `FETCH_HANDLER_CEILING_SECONDS` (160) | Replicator's stop-budget sum for one fetch handler, `tests/test_deploy.py` at `9fcd33b`: a poll and its pacing bound (`REPLICATOR_READ_BLOCK_MS`, 5 s each), the whole-fetch deadline a render runs within (`REPLICATOR_MAX_FETCH_SECONDS`, 120 s, CannObserv/replicator#138) and the store (`REPLICATOR_BLOB_TIMEOUT_SECONDS`, 30 s). Movers: those three in `/etc/replicator/.env`. Doubled into the 320 s undelivered threshold of `replicator.fetch` and `replicator.capture`, the handler in flight plus one reclaim (CannObserv/broker#114, #117) |
