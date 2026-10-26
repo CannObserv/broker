@@ -243,8 +243,9 @@ def test_recovery_runs_restore_as_root_isolated() -> None:
 
 def test_recovery_verifies_a_backup_with_the_release() -> None:
     """On a running node, by hand, root runs the release, as the unit does
-    (#108). Only a rebuild's steps 2-3 run the checkout: no release exists until
-    step 6's deploy, and that deploy's forced backup must follow the data."""
+    (#108). A rebuild's steps 2-3 run a release too, one ``deploy.sh
+    --build-only`` made (#122): ``live`` exists only from step 6's deploy, whose
+    forced backup must follow the data. Root never imports the checkout."""
     heading = "## Verifying a backup by hand"
     text = RECOVERY.read_text()
     assert heading in text, f"{RECOVERY.name} has no {heading!r} section"
@@ -253,7 +254,11 @@ def test_recovery_verifies_a_backup_with_the_release() -> None:
     assert len(runs) == 2, runs
     assert all(run.startswith(f"{LIVE}/.venv/bin/python ") for run in runs), runs
     rebuild = _restore_runs(rebuild_text)
-    assert all(run.startswith("/home/exedev/broker/.venv/bin/python ") for run in rebuild), rebuild
+    assert len(rebuild) == 3, rebuild
+    built = "/srv/broker/releases/<sha12>/.venv/bin/python "
+    assert all(run.startswith(built) for run in rebuild), rebuild
+    first = rebuild_text.index("-m src.broker.restore")
+    assert "scripts/deploy.sh --build-only" in rebuild_text[:first], "built before it is run"
 
 
 def test_service_bounds_its_own_runtime() -> None:

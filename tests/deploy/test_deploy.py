@@ -4,8 +4,8 @@ Ported from CannObserv/status's harness (``tests/deploy/test_deploy.py`` at
 ``16102ea``, its root ledger from status#14) and CannObserv/processor's
 (``tests/test_deploy.py`` at ``4b3a500``, no HTTP and a CI gate). Real git, a
 temporary origin and clone; stubs for ``uv``, ``sudo``, ``systemctl``,
-``journalctl``, ``stat``, ``curl`` and ``logger`` on ``PATH`` that record every
-call. ``FAKE_*`` variables make them play a failing sync, a venv that no longer
+``journalctl``, ``stat``, ``curl``, ``getent`` and ``logger`` on ``PATH`` that
+record every call. ``FAKE_*`` variables make them play a failing sync, a venv that no longer
 runs, a backup run that fails, or a probe tick on the wrong build.
 
 What the script must hold (the design's Q1-5, Q8, Q12, D1, D4, D7-D9):
@@ -276,6 +276,11 @@ case "$1" in
     printf '{"outcome": "%s", "revision": "%s"}\n' "${FAKE_BACKUP_OUTCOME:-uploaded}" \
       "${FAKE_BACKUP_SAYS:-$build}" > "$FAKE_BACKUP_STATE" ;;
   try-restart) [[ "$2" == "${FAKE_TRY_RESTART_FAIL:-none}" ]] && exit 1 ;;
+  # Active while its file is installed, unless FAKE_INACTIVE names it: a unit
+  # systemd has never loaded is inactive, exit 3.
+  is-active)
+    unit="${@: -1}"
+    [[ -f "$FAKE_UNIT_DIR/$unit" && " ${FAKE_INACTIVE:-} " != *" $unit "* ]] || exit 3 ;;
   enable) [[ "${@: -1}" == "${FAKE_ENABLE_FAIL:-none}" ]] && exit 1 ;;
   daemon-reload) [[ -z "${FAKE_SLOW_RELOAD:-}" ]] || sleep "$FAKE_SLOW_RELOAD" ;;
 esac
@@ -338,6 +343,12 @@ exec /bin/rm "$@"
 
 STUB_LOGGER = r"""#!/usr/bin/env bash
 echo "logger $*" >> "$FAKE_LOG"
+"""
+
+# The users that exist are FAKE_USERS, space-separated; no other does.
+STUB_GETENT = r"""#!/usr/bin/env bash
+echo "getent $*" >> "$FAKE_LOG"
+[[ "$1" == passwd && " ${FAKE_USERS:-} " == *" $2 "* ]] || exit 2
 """
 
 BOT = {
@@ -461,6 +472,7 @@ class World:
             ("sudo", STUB_SUDO),
             ("curl", STUB_CURL),
             ("logger", STUB_LOGGER),
+            ("getent", STUB_GETENT),
             ("systemctl", STUB_SYSTEMCTL),
             ("journalctl", STUB_JOURNALCTL),
             ("rm", STUB_RM),
@@ -850,6 +862,13 @@ class TestTheC2Shape:
         assert not journal_reads(world)
         assert not [c for c in world.calls() if "systemctl" in c and PROBE in c]
         assert "nothing to verify" in result.stderr
+
+    def test_a_deploy_with_nothing_to_verify_journals_that_and_its_verdict(self, world):
+        """#122: the journal says what was verified, nothing included."""
+        assert_ok(world.run())
+        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
+        assert any("nothing to verify" in c for c in logged), logged
+        assert logged[-1] == f"logger -t broker-deploy live is on {world.build(world.main[-1])}"
 
     def test_redis_is_never_touched(self, world):
         world.go_live()
@@ -1679,6 +1698,29 @@ class TestVerification:
         assert len(journal_reads(world)) == 1
         assert f"live is on {world.build(world.main[-1])}" in result.stderr
 
+    def test_a_verified_deploy_journals_its_tick_its_backup_and_its_verdict(self, world):
+        """#122: a detached deploy's outcome is in the journal, not only in its log file."""
+        self.on_live(world)
+        assert_ok(world.run())
+        new = world.build(world.main[-1])
+        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
+        (tick,) = [c for c in logged if c.startswith("logger -t broker-deploy the probe's tick ")]
+        assert tick.endswith(f" on {new}: exited 0")
+        backup = f"logger -t broker-deploy the backup run on {new}: uploaded"
+        verdict = f"logger -t broker-deploy live is on {new}"
+        assert backup in logged and verdict in logged
+        assert logged.index(verdict) > max(logged.index(tick), logged.index(backup))
+
+    def test_a_switched_back_deploy_never_journals_the_new_build_as_live(self, world):
+        old = self.on_live(world)
+        new = world.build(world.main[-1])
+        assert world.run(FAKE_BACKUP_FAIL_BUILD=new).returncode == 1
+        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
+        assert f"logger -t broker-deploy live is on {new}" not in logged
+        assert f"logger -t broker-deploy the backup run on {old}: uploaded" in logged, (
+            "the old build's proof is journaled too"
+        )
+
     def test_the_probe_is_never_started_by_the_deploy(self, world):
         """The two-tick pending rule: a forced tick seconds after the last one
         reads an in-flight entry as stuck (docs/BUS-HEALTH.md)."""
@@ -2250,6 +2292,224 @@ class TestHostConfigs:
                 or f"{Path(dest).parent}/" in install
                 or ('"/etc/systemd/system/$d"' in install and dest == f"/etc/systemd/system/{rel}")
             ), dest
+
+
+PROBE_TIMER = "broker-bus-health.timer"
+
+
+class TestTheProbeTimer:
+    """#122: a deploy that would wait on the probe's next natural tick refuses at
+    once, before the switch, when the probe's timer is not active: it gives no
+    tick. Before, the deploy waited 900 s for one and then switched back."""
+
+    def test_an_inactive_timer_is_refused_before_the_switch_naming_it(self, world):
+        old = TestVerification.on_live(world)
+        result = world.run(FAKE_INACTIVE=PROBE_TIMER)
+        assert result.returncode == 1, result.stderr
+        assert f"sudo systemctl enable --now {PROBE_TIMER}" in result.stderr
+        assert "nothing switched" in result.stderr
+        assert world.target() == f"releases/{old}"
+        assert not [c for c in world.calls() if c.startswith("systemctl show")], "no wait"
+        assert not forced_backups(world)
+        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy refused ")]
+        assert any(PROBE_TIMER in c for c in logged), logged
+
+    def test_an_added_probe_unit_whose_timer_is_not_installed_is_refused(self, world):
+        """C3's shape on a node where Install's enable was skipped (deploy/README.md)."""
+        for name in (PROBE, PROBE_TIMER):
+            (world.units / name).unlink()
+        world.push(world.live_units)
+        result = world.run()
+        assert result.returncode == 1, result.stderr
+        assert PROBE_TIMER in result.stderr and "nothing switched" in result.stderr
+        assert world.target() is None
+        assert world.installed(PROBE) is None and not installs(world.calls())
+
+    def test_it_is_asked_after_the_build_and_before_the_switch(self, world):
+        TestVerification.on_live(world)
+        assert_ok(world.run())
+        calls = world.calls()
+        asked = calls.index(f"systemctl is-active --quiet {PROBE_TIMER}")
+        built = calls.index(f"sudo tee {world.release(world.main[-1])}/REVISION")
+        assert built < asked < index_of(calls, "logger -t broker-deploy live -> ")
+
+    def test_a_deploy_that_does_not_wait_on_the_probe_does_not_ask(self, world):
+        """The C2 shape: the probe runs ~/broker, and its unit is unchanged."""
+        assert_ok(world.run(FAKE_INACTIVE=PROBE_TIMER))
+        assert not [c for c in world.calls() if "is-active" in c]
+
+
+def getents(world: World) -> list[str]:
+    return [c for c in world.calls() if c.startswith("getent ")]
+
+
+class TestTheUserPreflight:
+    """#121's review, finding 5: a User= that does not exist fails every run of
+    its unit, so the verify failed and the deploy switched back. Refused before
+    the switch now, journaled, as the wheelhouse pin check is (#125)."""
+
+    @staticmethod
+    def with_user(world: World, lines: str) -> None:
+        world.push({BACKUP: world.dev_units[BACKUP] + lines})
+        world.reset_log()
+
+    def test_a_user_that_does_not_exist_is_refused_before_the_switch(self, world):
+        assert_ok(world.run(world.main[0]))
+        previous = world.target()
+        self.with_user(world, "User=broker-nobody\n")
+        result = world.run()
+        assert result.returncode == 1, result.stderr
+        assert f"{BACKUP} (User=broker-nobody)" in result.stderr
+        assert "nothing switched" in result.stderr
+        assert world.target() == previous
+        assert not installs(world.calls())
+        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy refused ")]
+        assert any("User=broker-nobody" in c for c in logged), logged
+
+    def test_a_user_that_exists_passes_and_is_asked_before_the_switch(self, world):
+        self.with_user(world, "User=broker-backup\n")
+        assert_ok(world.run(FAKE_USERS="broker-backup"))
+        calls = world.calls()
+        assert getents(world) == ["getent passwd broker-backup"]
+        asked = calls.index("getent passwd broker-backup")
+        assert asked < index_of(calls, "logger -t broker-deploy live -> ")
+
+    def test_a_dynamic_user_unit_is_not_asked_about(self, world):
+        """systemd makes a DynamicUser= unit's user when it starts."""
+        self.with_user(world, "DynamicUser=yes\nUser=broker-made-at-start\n")
+        assert_ok(world.run())
+        assert not getents(world)
+
+    def test_a_unit_with_no_user_runs_as_root_and_is_not_asked_about(self, world):
+        assert_ok(world.run())
+        assert not getents(world)
+
+    def test_the_repos_units_are_each_asked_about_or_dynamic(self, world):
+        """The node's three: the probe's and the backup's users exist only once
+        Install made them (#121, #109); the drift check's is DynamicUser=yes."""
+        names = (PROBE, BACKUP, DRIFT)
+        world.push({name: (REPO_ROOT / "deploy" / name).read_text() for name in names})
+        world.reset_log()
+        result = world.run()
+        assert result.returncode == 1, result.stderr
+        assert sorted(getents(world)) == [
+            "getent passwd broker-backup",
+            "getent passwd broker-bus-health",
+        ]
+        assert world.target() is None
+
+
+def release_names(world: World) -> set[str]:
+    return {p.name for p in (world.root / "releases").iterdir()}
+
+
+class TestBuildOnly:
+    """#122, #108's option (b): build and check a release as a deploy does, and
+    stop. live, the units and the backup are left alone, nothing is pruned, and
+    the switch's preflights are skipped: docs/RECOVERY.md's rebuild builds one
+    before Install has made the units' users, then runs restore from it."""
+
+    def test_it_builds_the_release_and_switches_nothing(self, world):
+        old = TestVerification.on_live(world)
+        new = world.build(world.main[-1])
+        result = world.run("--build-only")
+        assert_ok(result)
+        release = world.release(world.main[-1])
+        assert (release / "REVISION").read_text().strip() == new
+        assert world.root_owned(release)
+        assert world.target() == f"releases/{old}"
+        assert str(release) in result.stderr, "where to run restore from"
+
+    def test_what_the_drift_check_reads_is_unchanged(self, world):
+        """The drift check reports the REVISION of the release live names
+        (src/broker/revision.py, from the tree its unit runs)."""
+        old = TestVerification.on_live(world)
+        assert_ok(world.run("--build-only"))
+        assert (world.root / "live" / "REVISION").read_text().strip() == old
+
+    def test_it_installs_starts_and_verifies_nothing(self, world):
+        TestVerification.on_live(world)
+        world.push({BACKUP: unit(BACKUP, world.root / "live", V2)})
+        world.reset_log()
+        assert_ok(world.run("--build-only"))
+        assert world.installed(BACKUP) == world.live_units[BACKUP]
+        assert not [c for c in world.calls() if c.startswith(("systemctl", "sudo systemctl"))]
+        assert not journal_reads(world)
+
+    def test_it_is_journaled_naming_what_live_stays_on(self, world):
+        old = TestVerification.on_live(world)
+        new = world.build(world.main[-1])
+        assert_ok(world.run("--build-only"))
+        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
+        assert (
+            f"logger -t broker-deploy built {new} (--build-only); live stays on releases/{old}"
+            in logged
+        )
+        assert not [c for c in logged if " live -> " in c]
+
+    def test_it_is_gated_by_ci_as_a_deploy_is(self, world):
+        world.ci_answers([ci_run(7, world.main[-1])])
+        world.ci_jobs(7, **{JOB: "failure"})
+        result = world.run("--build-only")
+        assert result.returncode == 1
+        assert "CI did not pass" in result.stderr
+        assert not (world.root / "releases").exists()
+
+    def test_a_deploy_of_it_after_reuses_it(self, world):
+        assert_ok(world.run("--build-only"))
+        world.reset_log()
+        result = world.run()
+        assert_ok(result)
+        assert not syncs(world)
+        assert "reusing release" in result.stderr
+
+    def test_it_prunes_nothing(self, world):
+        for sha in world.main:
+            assert_ok(world.run(sha))
+        world.push()
+        before = release_names(world)
+        assert_ok(world.run("--build-only", BROKER_DEPLOY_KEEP="0"))
+        assert release_names(world) == before | {world.build(world.main[-1])}
+
+    def test_it_skips_the_switchs_preflights(self, world):
+        TestVerification.on_live(world)
+        world.push({PROBE: world.live_units[PROBE] + "User=broker-nobody\n"})
+        world.reset_log()
+        assert_ok(world.run("--build-only", FAKE_INACTIVE=PROBE_TIMER))
+        assert not getents(world)
+        assert not [c for c in world.calls() if "is-active" in c]
+
+    def test_the_help_names_it(self, world):
+        assert "--build-only" in world.run("--help").stdout
+
+    def test_it_is_kept_through_the_next_deploy_of_another_build(self, world):
+        """The newest release when built, it ages out as any other: once KEEP newer exist."""
+        for sha in world.main:
+            assert_ok(world.run(sha))
+        world.push()
+        assert_ok(world.run("--build-only"))
+        built = world.build(world.main[-1])
+        world.push()
+        assert_ok(world.run())
+        assert built in release_names(world)
+
+    def test_the_rollback_target_outlives_any_number_of_build_only_builds(self, world):
+        """The prune counts by last build or deploy, so build-only releases are
+        newer than the one live replaced. The prune never takes that one: it is
+        what a rollback deploys."""
+        assert_ok(world.run(world.main[0]))
+        assert_ok(world.run(world.main[1]))
+        for _ in range(3):
+            world.push()
+            assert_ok(world.run("--build-only"))
+        newest_built = world.build(world.main[-1])
+        world.push()
+        assert_ok(world.run(BROKER_DEPLOY_KEEP="1"))
+        assert release_names(world) == {
+            world.build(world.main[-1]),  # live
+            newest_built,  # KEEP=1: the newest besides live
+            world.build(world.main[1]),  # what live replaced
+        }
 
 
 class TestInterruption:
