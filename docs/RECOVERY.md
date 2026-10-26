@@ -198,19 +198,24 @@ uv run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py
 uv sync --group dev
 ```
 
-Then the passwords file from the bucket. The newest digests are what you want,
-whichever snapshot step 3 stages: rolling data back is not rolling back who is
-admitted. The file is created 0400 and never overwritten:
+Then a release to run `restore` from, and the passwords file from the bucket.
+The newest digests are what you want, whichever snapshot step 3 stages: rolling
+data back is not rolling back who is admitted. The file is created 0400 and
+never overwritten:
 
 ```bash
+sudo install -d -o root -g root -m 755 /srv/broker
+~/broker/scripts/deploy.sh --build-only     # "built <sha12> (--build-only)"
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /home/exedev/broker/.venv/bin/python -I -B -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
+  /srv/broker/releases/<sha12>/.venv/bin/python -I -B -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
 ```
 
-**Steps 2 and 3 run the checkout as root** (#108): no release exists before
-step 6's deploy, whose forced backup run would ship this default-config
-`dump.rdb` as the newest snapshot, the one `--latest` takes. `-I -B`: no
-caller's `PYTHONPATH` or user site, no root-owned bytecode in the tree.
+**Steps 2 and 3 run that release as root, not `live`** (#122): `live` comes
+with step 6's deploy, whose forced backup run would ship this default-config
+`dump.rdb` as the newest snapshot, the one `--latest` takes. `--build-only`
+builds and checks a release as a deploy does and stops: nothing switched,
+installed, backed up or pruned, and no unit's user is asked for yet. Step 6
+reuses it. `-I -B`: no caller's `PYTHONPATH` or user site, no bytecode written.
 
 The prefix defaults to the hostname. On a VM not named `co-broker`, pass
 `--prefix co-broker` here and in step 3, and set `BROKER_BACKUP_PREFIX=co-broker`
@@ -232,9 +237,9 @@ started empty it would create the fresh base the trap above describes.
 
 ```bash
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /home/exedev/broker/.venv/bin/python -I -B -m src.broker.restore --list'          # newest first
+  /srv/broker/releases/<sha12>/.venv/bin/python -I -B -m src.broker.restore --list'          # newest first
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /home/exedev/broker/.venv/bin/python -I -B -m src.broker.restore --latest --into /var/lib/redis'
+  /srv/broker/releases/<sha12>/.venv/bin/python -I -B -m src.broker.restore --latest --into /var/lib/redis'
 ```
 
 `--object <name>` for a specific snapshot rather than the newest; `--file
@@ -318,9 +323,9 @@ Once they are back:
 
 ```bash
 sudo systemctl enable --now broker-bus-health.timer broker-backup.timer
-# No live link yet (#107): make the root, then deploy (deploy/README.md)
-readlink /srv/broker/live ||
-    { sudo install -d -o root -g root -m 755 /srv/broker && ~/broker/scripts/deploy.sh; }
+# No live link yet (#107): deploy, reusing step 2's release if main has not moved.
+# The timer first: a deploy refuses to wait on a probe whose timer is off (#122).
+readlink /srv/broker/live || ~/broker/scripts/deploy.sh
 sudo systemctl start broker-backup.service && journalctl -u broker-backup -n 3 -o cat --no-pager
 set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy -rs         # the only skips: test_redis_acl.py's unassigned-DLQ rows

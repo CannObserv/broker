@@ -324,11 +324,11 @@ sudo install -m 0644 -D deploy/redis-server.service.d/broker.conf \
 
 # The health timer. The unit runs /srv/broker/live (#107), which the first
 # deploy makes (Deploying, below): install and enable it BEFORE that deploy.
-# The deploy installs a unit it finds absent but never enables it, then waits
-# on the probe's next natural tick, which a timer not enabled never gives.
-# Ticks before live exists fail at chdir: a missed check-in, nothing worse.
-# Its user comes first: a User= that does not exist fails every tick, the one
-# that deploy waits on included, and it then switches back (#121).
+# The deploy verifies the probe by its next natural tick, which a timer not
+# active never gives, so it refuses before the switch while the timer is off
+# (#122). Ticks before live exists fail at chdir: a missed check-in, nothing
+# worse. Its user comes first: a User= that does not exist fails every tick,
+# and the deploy refuses it before the switch (#121, #122).
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin broker-bus-health
 id broker-bus-health                                 # its own group alone
 sudo install -m 0644 deploy/broker-bus-health.service \
@@ -340,7 +340,7 @@ sudo systemctl enable --now broker-bus-health.timer
 # see docs/RECOVERY.md, "Provisioning the bucket and the writer". The unit runs
 # /srv/broker/live (#108): a run before the first deploy fails at chdir. Its
 # user, env and key come BEFORE that deploy, which forces one backup run and
-# switches back if it fails; a User= that does not exist fails that run (#109).
+# switches back if it fails; it refuses a User= that does not exist (#122).
 # backup.env is the restore's, and the #108 unit's a switch back restores; this
 # unit names its bucket and takes the key as a credential.
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin broker-backup
@@ -425,7 +425,9 @@ sudo install -d -o root -g root -m 755 /srv/broker
 ~/broker/scripts/deploy.sh                 # origin/main
 ~/broker/scripts/deploy.sh <sha12>         # an older main commit: how a rollback is spelled
 ~/broker/scripts/deploy.sh --skip-ci ...   # GitHub cannot answer: an emergency, journaled
-journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> (was ...)
+~/broker/scripts/deploy.sh --build-only    # build and check releases/<sha12>, and stop (below)
+journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> (was ...), ...
+                                           # live is on <sha12>: the verified verdict (#122)
 ```
 
 **In order:**
@@ -440,6 +442,12 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
    - `audit.yml` is not gated.
 2. **Build** `releases/<sha12>` at its final path, or reuse it when it is
    complete, root's, and still imports. A release `live` links is never rebuilt.
+   Then two refusals before the switch, each journaled (#122):
+   - a release service whose `User=` does not exist (`getent passwd`), unless
+     it is `DynamicUser=yes`: every run of it would fail;
+   - a deploy the probe's tick will verify (step 5) while
+     `broker-bus-health.timer` is not active, as when the deploy would add the
+     probe's unit before Install enabled its timer. No tick would come.
 3. **Switch** `live` with a `sudo` rename.
 4. **Install** each `deploy/broker-*.{service,timer}` that differs from its
    installed copy, with one `daemon-reload`. A new unit is installed, never
@@ -454,6 +462,8 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
    - The drift check is not verified, on purpose: its hourly run and
      `co-broker-drift` are its check (#110). The deploy does import
      `src.broker.drift` from the release before it switches.
+   - Each proof is journaled, then `live is on <sha12>` (#122): a detached
+     deploy's outcome is in `journalctl -t broker-deploy`, not only its log.
    - On failure, `live` and the units switch back, and the old build is proved
      the same way.
    - A quiet deploy can take up to 15 minutes waiting for the probe's tick,
@@ -465,19 +475,27 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
    (`journalctl -u broker-drift -n 5`). A switched-back deploy never enables
    it, and one installed before is never enabled again, so an operator's
    `systemctl disable --now` sticks. A failed enable is a note.
-7. **Compare** the host configs, then **prune** to 5 releases plus `live`.
+7. **Compare** the host configs, then **prune** to 5 releases plus `live`,
+   newest first by last build or deploy. The release `live` replaced is never
+   pruned by the deploy that replaced it: it is the rollback target.
 
-**Accepted limits** (#111):
-- **The switch races `daemon-reload`**, about 0.25 s measured once (#107). A
-  tick in that gap runs the new `live` under the previous unit file.
-- **A success is not in the journal.** `broker-deploy` logs the CI gate,
-  `live -> <sha12>`, `units from ...`, and any switch back or failure; the
-  verified tick and "live is on <build>" go to stderr alone. So a detached
-  deploy's success is its log file, or the probe's tick logging the sha12.
-- **A probe unit added with its timer not enabled** is waited on for a tick
-  that never comes: 900 s, then a failure, after a note that the unit is new
-  and not enabled.
-  Install enables the timer before the first deploy.
+**Accepted limit** (#111): **the switch races `daemon-reload`**, about 0.25 s
+measured once (#107). A tick in that gap runs the new `live` under the previous
+unit file. Only a deploy that changes a unit has the gap. Reloading before the
+switch would reverse the race, not remove it, and would put unit changes ahead
+of the switch that today's switch back and signal handling assume (#122).
+
+**`--build-only`** (#122, #108's option (b)) runs steps 1 and 2's build and
+stops, journaling `built <sha12> (--build-only); live stays on ...`. Nothing is
+switched, installed, verified, backed up or pruned, and step 2's refusals are
+skipped: they guard a switch. It is how a rebuild gets a release to run
+`restore` from before Install makes the units' users (docs/RECOVERY.md, step 2).
+- **`live`, and so the drift check, are unchanged.** The drift check reports
+  the `REVISION` of the release its unit runs, which is `live`'s.
+- **Pruning.** The release counts as built at that moment, so it is the newest,
+  and is pruned only once 5 newer releases exist. A deploy of the same commit
+  reuses it. The release `live` replaced is spared whatever the count, so no
+  number of build-only builds pushes the rollback target out.
 
 **Run it detached when an agent runs it.** A deploy can outlast a 10-minute
 tool call: up to 600 s waiting for CI, then up to 900 s for a probe tick, and
