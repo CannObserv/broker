@@ -507,7 +507,7 @@ that twice when it switches back. Run it in the background and read
 
 **Exit codes:**
 
-- `0`: deployed and verified.
+- `0`: deployed and verified, or built with `--build-only`.
 - `1`: refused before anything switched, or switched back to a build that answers.
 - `4`: nothing answers. Read `journalctl -t broker-deploy` and each unit's own journal.
 
