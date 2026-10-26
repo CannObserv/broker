@@ -20,9 +20,9 @@ being applied correctly, just higher - and a standing WARN with the wrong cause
 trains an operator to ignore the LWW rows, which is the blindness
 CannObserv/broker#40 closed (CannObserv/broker#44).
 
-**The third term cannot be mirrored.** It is the size of Watcher's corpus, it
-changes with no edit anywhere, and that is precisely the failure a mirror cannot
-cover. So the probe reads it off the stream. The first reading,
+**The third term cannot be mirrored.** It is the size of the producer's corpus,
+it changes with no edit anywhere, and that is precisely the failure a mirror
+cannot cover. So the probe reads it off the stream. The first reading,
 `republished_set_size`, needs one `XINFO STREAM` reply - the one the length and
 age checks already make - and is `length / the republishes the span holds`.
 Three properties carry it:
@@ -33,8 +33,8 @@ Three properties carry it:
 - it **rounds up twice** - the oldest retained entries are a partial set, and
   the division charges that fragment to the whole ones before the remainder is
   ceilinged. Up delays a real breach by a tick or two; down would invent one;
-- it **never lowers the threshold**: `max(default, floor)` is Watcher's rule and
-  the probe's.
+- it **never lowers the threshold**: `max(default, floor)` is the producers' rule
+  and the probe's.
 
 **What it reads on this node.** Measured 2026-09-22, against the live broker as
 `brokeradmin` - `XINFO STREAM` is the read the length and age checks already
