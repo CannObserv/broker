@@ -45,7 +45,8 @@ LoadCredential=acl-passwords:/etc/redis/broker-acl-passwords
 SetCredential=acl-passwords:\n
 
 # /var/lib/broker-backup/state.json - one record per run, written 0644 because
-# the probe reads it as exedev for the freshness finding. systemd chowns the
+# the probe reads it as broker-bus-health (#121) for the freshness finding, and
+# deploy.sh's verify_backup as exedev. systemd chowns the
 # directory to User= at start whenever its owner differs: to root again under
 # the #108 unit, which a switch back needs.
 StateDirectory=broker-backup
