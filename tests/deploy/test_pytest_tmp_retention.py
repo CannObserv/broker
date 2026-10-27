@@ -96,6 +96,11 @@ def test_the_policy_is_failed() -> None:
     assert OPTIONS.get("tmp_path_retention_policy") == "failed"
 
 
+def test_the_count_is_one() -> None:
+    """#127: one session's tree, so the disk line is the baseline plus one run's."""
+    assert OPTIONS.get("tmp_path_retention_count") == 1
+
+
 def test_a_passing_test_keeps_nothing_but_its_read_only_release(work) -> None:
     work_dir, root = work
     _run(work_dir, root, "-k", "passes")

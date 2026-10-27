@@ -206,7 +206,7 @@ appending a context measurement - pull before pushing. Review/ship are the
 - [docs/LWW-CAP.md](docs/LWW-CAP.md) - the LWW length threshold, read off the stream
 - [docs/MEMORY-PROTECTION.md](docs/MEMORY-PROTECTION.md) - the `maxmemory` cap: that all three producers survive it, and why `noeviction` is load-bearing beyond refusing writes
 - [docs/UNDELIVERED-CONSUMERS.md](docs/UNDELIVERED-CONSUMERS.md) - a consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and what the probe compares instead
-- [docs/HOST-DISK.md](docs/HOST-DISK.md) - what else fills `/`, and its prune
+- [docs/HOST-DISK.md](docs/HOST-DISK.md) - what else fills `/`, and the disk GC that prunes it
 - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore
 - [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook and its symptom playbook
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first

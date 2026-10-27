@@ -48,7 +48,7 @@
     {
       "name": "host-disk",
       "path": "./docs/HOST-DISK.md",
-      "description": "What else fills the 20 GB root Redis shares: VS Code server builds and CLI binaries (the editor's leaky LRU, code tunnel prune's case bug), extension builds and the VSIX cache (pruned on a restart), pytest's tmp_path retention, and the by-hand scripts/prune_editor_builds.sh for the monthly patching run (#126)."
+      "description": "What else fills the 20 GB root Redis shares: VS Code server builds and CLI binaries (the editor's leaky LRU, code tunnel prune's case bug), extension builds and the VSIX cache (pruned on a restart), pytest's tmp_path retention, and the cohort disk GC that prunes the rest: its tiers, the headroom sensor's co-status monitor and its 85/80 lines (#127)."
     },
     {
       "name": "restart-runbook",
