@@ -88,6 +88,11 @@ def test_coordinating_epics_is_vendored() -> None:
     assert "coordinating-epics" in _links(SKILLS)
 
 
+def test_maintaining_host_disk_is_vendored() -> None:
+    """#127: the cohort disk GC's adoption, gregoryfoster/skills#425."""
+    assert "maintaining-host-disk" in _links(SKILLS)
+
+
 def _committable() -> list[Path]:
     """Tracked files plus untracked, unignored ones: what a ``git add -A`` takes.
 
