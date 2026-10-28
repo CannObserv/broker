@@ -6,9 +6,9 @@ pytest 9.1.0 and 9.1.1 bind a directory's conftest fixtures to the first
 A command line that puts a ``tests/`` module between two ``tests/deploy/`` modules
 re-collects ``tests`` and builds a second ``Dir deploy``, so every test under it
 fails with ``fixture '...' not found``. That is pytest-dev/pytest#14635 (bisected
-to pytest 46478fad), fixed by pytest-dev/pytest#14645 and backported to 9.1.x
-unreleased as of 2026-10-06. ``pyproject.toml`` excludes the two releases; this
-pins the behaviour, so it is the check that a later pytest really carries the fix.
+to pytest 46478fad), fixed by pytest-dev/pytest#14645 and first released in 9.2.0
+(9.1.2 never shipped). ``pyproject.toml`` floors pytest there (#83); this pins the
+behaviour, so it is the check that a later pytest really carries the fix.
 
 The tree mirrors this repo's: a package with a conftest, and a subpackage whose
 conftest holds the fixture. Its top-level package is not called ``tests`` because
