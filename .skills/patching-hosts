@@ -10,6 +10,10 @@ posture scheduled
 # PDT, 15:00-21:00 PST), set 2026-10-13. Every step's whole span must fit
 # inside it, clear of the quiet ranges below, or apply.sh refuses it.
 window Mon 23:00-05:00
+# One-off for #119 (Tailscale 1.104.1 -> 1.104.4, TS-2026-013 to -017), the
+# owner's call 2026-10-28: Wed 2026-10-28 19:00-23:00 (12:00-16:00 PDT). The
+# line recurs weekly, so #119's closing commit removes it; remove by 2026-11-03.
+window Wed 19:00-23:00
 
 # broker-backup.timer: OnCalendar=hourly, RandomizedDelaySec=5min,
 # AccuracySec=1min, so a run starts up to 6 min past the hour and takes about
