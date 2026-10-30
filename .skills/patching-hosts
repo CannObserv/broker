@@ -6,9 +6,12 @@ class production
 posture scheduled
 
 # --- when -----------------------------------------------------------------
-# The owner's monthly window: Monday 23:00 to Tuesday 05:00 (Mon 16:00-22:00
+# The owner's weekly window: Monday 23:00 to Tuesday 05:00 (Mon 16:00-22:00
 # PDT, 15:00-21:00 PST), set 2026-10-13. Every step's whole span must fit
 # inside it, clear of the quiet ranges below, or apply.sh refuses it.
+# Weekly from Mon 2026-11-02, monthly before (#128). The skill's `scheduled`
+# is monthly (gregoryfoster/skills#313, D4) and no knob directive states a
+# cadence, so this comment does until gregoryfoster/skills#529 answers.
 window Mon 23:00-05:00
 
 # broker-backup.timer: OnCalendar=hourly, RandomizedDelaySec=5min,

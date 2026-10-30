@@ -4,7 +4,7 @@
 learn what only this repo's owner knows: the window, the backup that stands in
 for a dump, who is told before a restart. **A malformed line makes the host
 report-only** until it is fixed, which reads as "nothing to do" at the next
-monthly run rather than as an error, so the skill's own reader is run here.
+weekly run rather than as an error, so the skill's own reader is run here.
 
 The reader ships in the submodule, which CI's checkout does not initialise: off
 the node that is a skip, on it a failure (``require_broker_node``).
