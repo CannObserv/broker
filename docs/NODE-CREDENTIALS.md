@@ -6,7 +6,7 @@ in plaintext at rest. Each is a `systemd-creds` credential in
 `/etc/credstore.encrypted/` (`0700 root`), named `broker-<user>` and encrypted
 with the host key `/var/lib/systemd/credential.secret` (created on first use;
 this VM has no TPM). The passwords file carries each one's digest, for the
-render. Root decrypts on demand - `cred` at the top of [RESTART-WINDOW.md](RESTART-WINDOW.md) - with
+render. Root decrypts on demand - `cred`, under *Loading the helpers* below - with
 no prompt; the probe's unit decrypts `broker-brokeradmin` into its own
 `$CREDENTIALS_DIRECTORY` for each tick.
 
@@ -23,7 +23,9 @@ read on its decrypted copy, in RAM, never on disk. Since #121 that is
 account's process can read it for that second ([deploy/broker-bus-health.service](../deploy/broker-bus-health.service)).
 
 **Rotate one** - on exposure, not on a schedule. Run it as a script (`bash
-rotate.sh`); it defines its own helpers. It adds before it retires, as #46's
+rotate.sh`); it defines its own helpers, and refuses any `u` but the two users
+before its first write. It is not where `cred`/`rcli` load from: that is
+*Loading the helpers*, below. It adds before it retires, as #46's
 rotation did, and checks each write before the next, so a failure at any step
 leaves the old password working. That matters most for `acladmin`, the only
 `+acl` user: losing its credential means editing `users.acl` and a cohort-wide
@@ -33,11 +35,16 @@ restart. Nothing puts the value on a command line (CannObserv/broker#47):
 set -euo pipefail
 u=acladmin                                 # or brokeradmin
 cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
+# Refuses rather than connecting with an empty password: a failed decrypt would
+# otherwise be a WRONGPASS naming the user in ACL LOG, the evidence log.
 rcli() { local u=$1 p; shift
          p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
          REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
 digest() { printf %s "$1" | sha256sum | cut -d' ' -f1; }
 mint() { (set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40); }
+# The target, checked here rather than beside u=: an extraction from cred() never
+# ran that line, and eval'd, this exit ends the caller's shell (broker#132).
+case "${u:-}" in acladmin|brokeradmin) ;; *) echo "rotate: set u to acladmin or brokeradmin" >&2; exit 1 ;; esac
 C=/etc/credstore.encrypted/broker-$u
 OLDH="$(digest "$(cred "$u")")"
 NEW="$(mint)"; [ "${#NEW}" -eq 40 ] || { echo "minted ${#NEW} chars, want 40"; exit 1; }
@@ -141,3 +148,37 @@ re-checks `MULTI` blocks against while loading; `deploy/redis-acl.conf`, the
 The rest of the cutover - the passwords, the dry run, each service onto its own
 user, and *What `CONFIG GET requirepass` does not tell you* - is
 [ACL-CUTOVER.md](ACL-CUTOVER.md).
+
+## Loading the helpers
+
+`cred` and `rcli`, for a read outside a runbook: the operator's, or an agent's.
+Each runbook that needs them carries its own copy - RESTART-WINDOW.md,
+RECOVERY.md step 4, deploy/README.md, and the rotation above - so each stays
+copy-paste whole on a rebuilt node. `tests/deploy/test_runbook_helpers.py` holds
+every copy byte-identical to the one below.
+
+Load them from here, in `~/broker`, by this recipe and no other. It prints what
+it will define before it defines it:
+
+```bash
+h="$(sed -n '/^# broker-helpers: begin$/,/^# broker-helpers: end$/{p;/^# broker-helpers: end$/q;}' docs/NODE-CREDENTIALS.md)"
+printf '%s\n' "$h"
+eval "$h"
+```
+
+Why here, and why last (broker#132). On 2026-10-30 (#128) an extraction of
+the rotation's copy ran past `rcli()`, and `eval` ran the rotation with `u`
+empty. This range starts on a line nothing else carries and quits on the
+sentinel, and past the sentinel is the end of the file. The rotation's guard is
+the second line of defence, not the first; the test runs this recipe as written.
+
+```bash
+# broker-helpers: begin
+cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
+# Refuses rather than connecting with an empty password: a failed decrypt would
+# otherwise be a WRONGPASS naming the user in ACL LOG, the evidence log.
+rcli() { local u=$1 p; shift
+         p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
+         REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+# broker-helpers: end
+```
