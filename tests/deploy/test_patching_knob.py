@@ -14,6 +14,9 @@ The rest are pure parses of the file, run everywhere:
 - **No knob command escalates.** ``health`` and ``inflight`` run as the invoking
   user by design; a ``sudo`` in one would hand root to whoever commits the knob.
   Pending counts and ``ACL LOG`` need ``acladmin``, i.e. root, so they stay out.
+- **The cadence is stated weekly** (#128, #133). Absent reads as ``weekly`` too,
+  so the reader's ``line`` is what tells a stated cadence from a default
+  (gregoryfoster/skills#529).
 - **The backup covers the data store**, so the recovery point is the hourly
   snapshot already off the node rather than a second copy of ``dump.rdb``.
 - **The backup's minutes are one quiet line**, ``*:00-*:07``: the same 24
@@ -83,6 +86,8 @@ def test_the_knob_reads_clean() -> None:
     assert knob["class"]["value"] == "production"
     assert knob["posture"]["value"] == "scheduled"
     assert knob["window"], "no window: apply.sh refuses every step"
+    assert knob["cadence"]["value"] == "weekly"
+    assert knob["cadence"]["line"] is not None, "weekly by default, not stated"
     quiet = knob["quiet"]
     assert [(q["start"], q["end"]) for q in quiet] == [
         (f"{hour:02d}:00", f"{hour:02d}:07") for hour in range(24)
@@ -100,6 +105,10 @@ def test_no_knob_command_escalates() -> None:
     for command in commands:
         for word in ("sudo", "systemd-creds", "rcli", "REDISCLI_AUTH", "runuser"):
             assert word not in command, f"{word!r} in a knob command: {command}"
+
+
+def test_the_cadence_is_stated_weekly() -> None:
+    assert _named("cadence") == [["weekly"]]
 
 
 def test_the_backup_covers_the_redis_datastore() -> None:
