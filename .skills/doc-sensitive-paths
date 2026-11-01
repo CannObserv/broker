@@ -1,0 +1,10 @@
+# What shipping-work's doc-check watches (#133). Replaces the skill's defaults.
+# broker has no fastapi dependency, so the skill detects no framework, and its
+# baseline list drops deploy/ and uv.lock, which the -python-fastapi variant
+# watched. One path per line; tests/deploy/test_skills_inventory.py holds both.
+AGENTS.md
+README.md
+pyproject.toml
+uv.lock
+deploy/
+skills/

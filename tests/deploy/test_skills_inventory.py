@@ -93,6 +93,32 @@ def test_maintaining_host_disk_is_vendored() -> None:
     assert "maintaining-host-disk" in _links(SKILLS)
 
 
+def test_shipping_work_is_the_unified_skill() -> None:
+    """#133: gregoryfoster/skills#537 folded the ``shipping-work-*`` variants into
+    one skill that detects the stack. Upstream's ``retired-skills`` map repoints
+    the old link, and a variant left linked dangles once release 2 deletes it."""
+    links = _links(SKILLS)
+    assert "shipping-work" in links
+    assert not {name for name in links if name.startswith("shipping-work-")}
+
+
+def _knob_lines(path: Path) -> list[str]:
+    """doc-check's list grammar: one entry a line, blank and ``#`` lines dropped."""
+    lines = (line.strip() for line in path.read_text().splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def test_the_ship_gates_doc_check_still_watches_deploy() -> None:
+    """#133: broker has no ``fastapi`` dependency, so ``shipping-work`` detects no
+    framework and doc-check falls back to its baseline list, which drops the
+    ``deploy/`` and ``uv.lock`` the fastapi variant watched. The knob puts them
+    back. It replaces the defaults, so it carries the rest of the list, and the
+    advice is tailored beside it: half a tailoring is a note on every hit."""
+    paths = _knob_lines(REPO_ROOT / ".skills" / "doc-sensitive-paths")
+    assert {"AGENTS.md", "README.md", "pyproject.toml", "uv.lock", "deploy/"} <= set(paths)
+    assert _knob_lines(REPO_ROOT / ".skills" / "doc-sections")
+
+
 def _committable() -> list[Path]:
     """Tracked files plus untracked, unignored ones: what a ``git add -A`` takes.
 

@@ -107,14 +107,23 @@ not this checkout: the skill's recipes write `read.json`, `post.json`,
 `listen.json` and the message body into the working directory, and a
 decrypted transcript left there is one `git add -A` from a commit.
 
-**Review and ship are the `-python-fastapi` variants, though broker is not a
-FastAPI service.** Their gate is this repo's gate - `pre-ship.sh` runs
-`ruff check`, `ruff format --check` and `pytest -m "not integration"`, and
-passed unmodified at vendoring. Their Alembic, OpenAPI and route steps key on
-paths broker does not have, and the review's `deploy/` checks (unit ordering,
-`OnFailure=`, bounded restarts) fit it well. The alternatives are worse: the
-stack-neutral `shipping-work`'s `pre-ship.sh` is a stub that exits 1 until
-forked, and Click is another stack.
+**Ship is the unified `shipping-work`; review is the `-python-fastapi`
+variant, though broker is not a FastAPI service.** Upstream folded the three
+shipping variants into one skill that detects the stack
+(gregoryfoster/skills#537), and the doctor moved the links onto it from its
+`retired-skills` map (#133). Here it prints `Detected: uv`, with no framework,
+since `fastapi` is not a dependency. So the gate runs every uv check:
+`ruff check`, `ruff format --check`, an import of `broker`, and `pytest`,
+integration tests deselected, serially, since the environment has no xdist.
+Why each differs from the old gate is a row in its
+`references/gate-topology.md`. Detecting no framework also drops `deploy/` and
+`uv.lock` from doc-check's defaults, so `.skills/doc-sensitive-paths` and
+`.skills/doc-sections` restore them. Like the old gate, it never syncs the
+wheelhouse: a fresh worktree runs `scripts/sync_wheelhouse.py` first, or the
+first `uv run` fails. The review's Alembic, OpenAPI and route steps key on
+paths broker does not have, and its `deploy/` checks (unit ordering,
+`OnFailure=`, bounded restarts) fit it well. Upstream retired only the
+shipping variants.
 
 **One step does not transfer.** The ship skill's post-merge table says a code
 change needs `systemctl restart <project>`. There is no `broker` unit; the probe
@@ -135,7 +144,8 @@ Left out:
 | `vendoring-openapi-client` | Broker calls no HTTP API |
 | `auditing-ci-cost` | One CI workflow; no sibling vendors it either |
 | `adopting-dependabot` | Adopted by hand before it shipped (#90): [CI.md](CI.md) |
-| `reviewing-code`, `shipping-work`, `-php`, `-python-click` | Other stack variants of the two above |
+| `reviewing-code`, `-php`, `-python-click` | Other stack variants of the review skill |
+| `shipping-work-php`, `-python-click` | Retired with this repo's variant: `shipping-work` replaces all three (#133) |
 
 **No `obra/superpowers`.** Every sibling also vendors it (`brainstorming`,
 `test-driven-development`, `systematic-debugging`, ...). None of the fourteen below
@@ -157,7 +167,7 @@ All plain symlinks - no local overrides.
 | `patching-hosts` | patch the host, OS updates, security updates, apply updates, needrestart |
 | `reviewing-architecture` | AR, architecture review |
 | `reviewing-code-python-fastapi` | CR, code review, perform a review |
-| `shipping-work-python-fastapi` | ship it, push GH, close GH, wrap up |
+| `shipping-work` | ship it, push GH, close GH, wrap up |
 | `using-git-worktrees` | create worktree, destroy worktree, merge worktree, wt |
 | `using-mayfly-chat` | mayfly, open a channel, join the channel, chat with <repo>, agent chat |
 | `writing-plans` | write a plan, plan this |

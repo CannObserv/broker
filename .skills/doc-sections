@@ -1,0 +1,6 @@
+# What doc-check advises on a hit (#133), beside .skills/doc-sensitive-paths:
+# tailoring one and not the other prints a note on every hit (skills#284).
+AGENTS.md: Environment & Tooling, Rules, Layout, Agent Skills, Detail Docs
+README.md: Provenance, Development
+deploy/README.md: the changed artifact's own section, and Deploying
+docs/SKILLS.md: Inventory, for a link under skills/
