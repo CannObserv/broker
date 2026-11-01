@@ -113,12 +113,14 @@ shipping variants into one skill that detects the stack
 (gregoryfoster/skills#537), and the doctor moved the links onto it from its
 `retired-skills` map (#133). Here it prints `Detected: uv`, with no framework,
 since `fastapi` is not a dependency. So the gate runs every uv check:
-`ruff check`, `ruff format --check`, an import of `broker`, and `pytest`,
+`ruff check`, `ruff format --check`, an import check, and `pytest`,
 integration tests deselected, serially, since the environment has no xdist.
 Why each differs from the old gate is a row in its
-`references/gate-topology.md`. Detecting no framework also drops `deploy/` and
-`uv.lock` from doc-check's defaults, so `.skills/doc-sensitive-paths` and
-`.skills/doc-sections` restore them. Like the old gate, it never syncs the
+`references/gate-topology.md`. The import check guesses the `[project]` name,
+`broker`, which does not import: hatch packages `src`, so
+`.skills/import-targets` names `src.broker`. Detecting no framework also drops
+`deploy/` and `uv.lock` from doc-check's defaults, so
+`.skills/doc-sensitive-paths` and `.skills/doc-sections` restore them. Like the old gate, it never syncs the
 wheelhouse: a fresh worktree runs `scripts/sync_wheelhouse.py` first, or the
 first `uv run` fails. The review's Alembic, OpenAPI and route steps key on
 paths broker does not have, and its `deploy/` checks (unit ordering,

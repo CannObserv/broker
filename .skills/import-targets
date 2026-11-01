@@ -1,0 +1,4 @@
+# What shipping-work's import check imports (#133). Without this file it guesses
+# the [project] name, `broker`; hatch packages `src`, so the code imports as
+# src.broker, the name the units run with `-m`.
+src.broker

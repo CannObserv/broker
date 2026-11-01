@@ -20,6 +20,7 @@ for this one, with the same pattern.
 
 from __future__ import annotations
 
+import importlib
 import os
 import re
 import subprocess
@@ -117,6 +118,16 @@ def test_the_ship_gates_doc_check_still_watches_deploy() -> None:
     paths = _knob_lines(REPO_ROOT / ".skills" / "doc-sensitive-paths")
     assert {"AGENTS.md", "README.md", "pyproject.toml", "uv.lock", "deploy/"} <= set(paths)
     assert _knob_lines(REPO_ROOT / ".skills" / "doc-sections")
+
+
+def test_the_ship_gates_import_targets_import() -> None:
+    """#133: the unified gate imports each target, and without the knob it guesses
+    the ``[project]`` name, ``broker``. Hatch packages ``src``, so the code imports
+    as ``src.broker``, the name the units run with ``-m``."""
+    targets = _knob_lines(REPO_ROOT / ".skills" / "import-targets")
+    assert targets == ["src.broker"]
+    for target in targets:
+        importlib.import_module(target)
 
 
 def _committable() -> list[Path]:
