@@ -920,11 +920,16 @@ def test_a_service_reads_exactly_what_its_owner_answered(users, user) -> None:
 #: `src/broker/bus_health.py` do.
 ARCHIVER_TRIMS = frozenset({INFO_CHANGES})
 
-#: The caller archiver's `+xdel` on the two queues it drains is held for: the
+#: The caller archiver's `+xdel` on the three queues it drains is held for: the
 #: triage tooling, `TRIAGE_DLQS` in archiver's `src/core/changes/dlq_triage.py`.
 #: It issues nothing until archiver v4.17.0 deploys; until then the grant names
 #: the issue that will issue it.
 ARCHIVER_DLQ_TRIAGE = "CannObserv/archiver#238"
+
+#: Archiver's half of the `+xdel` pin, renamed when archiver#369 made
+#: `TRIAGE_DLQS` three queues (CannObserv/broker#134). Cited by name in the
+#: stanza and below, under the archiver#262 cross-citation rule.
+ARCHIVER_DLQ_TRIAGE_PIN = "test_triage_dlqs_are_the_three_queues_broker_grants_xdel_on"
 
 
 def test_archiver_trim_grant_is_its_trim_allowlist(users) -> None:
@@ -960,7 +965,7 @@ def test_archiver_trim_grant_is_its_trim_allowlist(users) -> None:
 
 
 def test_archiver_dead_letter_disposals_name_their_caller(users) -> None:
-    """Archiver's `+xdel` on the two queues it drains, and who issues it.
+    """Archiver's `+xdel` on the three queues it drains, and who issues it.
 
     The grant stays (`test_a_dlq_writer_can_also_drain_it`,
     `test_the_drainer_can_delete_from_every_queue_it_drains_and_can_read`). What
@@ -970,10 +975,11 @@ def test_archiver_dead_letter_disposals_name_their_caller(users) -> None:
     until archiver v4.17.0 deploys.
 
     Archiver pins the other half: `TRIAGE_DLQS`, derived from the groups it
-    consumes, is held to these two queues by
-    `test_triage_dlqs_are_the_two_queues_broker_grants_xdel_on`
-    (CannObserv/archiver#238). A queue added there without the grant here is a
-    NOPERM on the discard route, which archiver returns as a 503. So this pin is
+    consumes, is held to these three queues by
+    `test_triage_dlqs_are_the_three_queues_broker_grants_xdel_on`
+    (CannObserv/archiver#238, renamed by archiver#369). A queue added there
+    without the grant here is a NOPERM on the discard route, which archiver
+    returns as a 503. So this pin is
     exact, like `test_archiver_trim_grant_is_its_trim_allowlist`: the queues
     archiver drains (`DLQ_DRAINERS`), no fewer and no more.
     """
@@ -993,6 +999,8 @@ def test_archiver_dead_letter_disposals_name_their_caller(users) -> None:
         f"archiver holds +xdel on {held}; the stanza in {ACL_FILE.name} must name each "
         f"queue and {ARCHIVER_DLQ_TRIAGE}, the caller it is held for (missing: {unexplained})"
     )
+    assert ARCHIVER_DLQ_TRIAGE_PIN in prose, f"the stanza must cite {ARCHIVER_DLQ_TRIAGE_PIN}"
+    assert "_two_queues_" not in ACL_FILE.read_text(), "a citation names archiver's retired pin"
 
 
 #: What each owner said, at its call sites, that it trims - nothing - and the
