@@ -1,0 +1,6 @@
+# shipping-work's deploy knob (CannObserv/broker#123, gregoryfoster/skills#345).
+# Grammar: the vendored skill's references/deploy-command.md. Read from ~/broker
+# (the primary checkout), run from its root with the pushed SHA appended, so
+# scripts/deploy.sh gets it as <ref>. setsid -w: its own session, its exit code.
+# Run the call in the background; the verdict is journalctl -t broker-deploy.
+setsid -w scripts/deploy.sh

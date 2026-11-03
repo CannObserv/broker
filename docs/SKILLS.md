@@ -127,14 +127,20 @@ paths broker does not have, and its `deploy/` checks (unit ordering,
 `OnFailure=`, bounded restarts) fit it well. Upstream retired only the
 shipping variants.
 
-**One step does not transfer.** The ship skill's post-merge table says a code
-change needs `systemctl restart <project>`. There is no `broker` unit; the probe
-and backup are timers. Both run `/srv/broker/live` (#107, #108), so a change to
-what either runs (`src/`, `uv.lock`, `pyproject.toml`, its unit or timer) reaches
-it only through `scripts/deploy.sh` after the merge and pull. The deploy installs a
-changed unit and verifies the probe's next natural tick and one forced backup
-run ([deploy/README.md](../deploy/README.md), *Deploying*). Any other `deploy/`
-change is installed by hand. The only long-running service is
+**The deploy step is the knob's** (#123, gregoryfoster/skills#345). Every unit
+runs `/srv/broker/live` (#107-#110), so the skill's default "migrate, then
+`systemctl restart`" would restart nothing new. `.skills/deploy_command` is
+`setsid -w scripts/deploy.sh`, and with it Step 8 runs before Step 6 and drops
+the migrate and restart rows. `run-deploy-command.sh` reads the knob in
+`~/broker`, but HEAD and `@{u}` in the caller's checkout: run it from `~/broker`
+after the merge and pull, never from a feature worktree (`deploy.sh` refuses a
+SHA not on `origin/main`). It appends the pushed SHA as `deploy.sh`'s `<ref>`,
+and `-w` keeps the deploy's exit code. The deploy can outlast a tool call, so
+run it in the background, with approval, and read `journalctl -t broker-deploy`
+for `live is on <sha12>` ([deploy/README.md](../deploy/README.md),
+*Deploying*). `--check` runs nothing. A change outside the drift check's
+runtime paths, such as `docs/` or `.skills/`, needs no deploy. Any other
+`deploy/` change is installed by hand. The only long-running service is
 `redis-server`, whose restart is a cohort-wide event -
 [RESTART-WINDOW.md](RESTART-WINDOW.md), never a ship step.
 

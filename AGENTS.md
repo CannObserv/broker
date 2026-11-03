@@ -176,8 +176,8 @@ Vendored from `gregoryfoster/skills` into `skills/` (agentskills.io) and
 initialised: `bash .skills/doctor.sh`. Unprompted commits land on `main`:
 a `SessionStart` hook bumping the submodule daily, and a Thursday workflow
 appending a context measurement - pull before pushing. Review is the
-`-python-fastapi` variant, ship the unified `shipping-work` (#133); the deploy
-step is `scripts/deploy.sh`: [docs/SKILLS.md](docs/SKILLS.md).
+`-python-fastapi` variant, ship the unified `shipping-work` (#133):
+[docs/SKILLS.md](docs/SKILLS.md).
 
 ## Related
 
