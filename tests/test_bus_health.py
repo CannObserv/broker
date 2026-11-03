@@ -1765,14 +1765,16 @@ def test_replay_republishing_more_often_than_the_period_is_named_not_absorbed(
     )
 
 
-# Two producers on content.fetch-policy from CannObserv/broker#93 until #95:
-# docs/LWW-CAP.md, "Two producers across F1", is this replay's output.
+# Two writers on one LWW stream: content.fetch-policy's F1 window
+# (CannObserv/broker#93 until #95), and since then a producer publishing twice.
+# docs/LWW-CAP.md, "Two writers on one stream", is this replay's output.
 _DUAL_RUN_FROM = 30 * _PERIOD_MS
 
 
 def _dual_run(watcher_set: int, archiver_set: int) -> list[tuple[int, list[str]]]:
-    """Each producer on its own `*/5`, Archiver's a minute behind Watcher's,
-    both writing from `_DUAL_RUN_FROM` - the D8 failure no ACL can refuse."""
+    """Each writer on its own `*/5`, the second a minute behind the first, both
+    writing from `_DUAL_RUN_FROM` - the D8 failure, which the ACL refuses to
+    Watcher since #95 but not to a second copy of Archiver's producer."""
     schedule = _cron(watcher_set, end_ms=_DAY_MS) + _cron(
         archiver_set, start_ms=_DUAL_RUN_FROM + 60_000, end_ms=_DAY_MS
     )
@@ -1795,7 +1797,7 @@ def test_replay_two_producers_above_the_floor_are_named(each: int) -> None:
     """Once each set is big enough for its floor to govern, the stream sits at a
     cap with too few periods in it for ten summed sets, the window is refused,
     and the mirrored default governs: a standing finding from 8.5 periods,
-    naming a faster republish or a second producer - the `R > 1` path."""
+    naming a faster republish or a producer publishing twice - the `R > 1` path."""
     ticks = _dual_run(each, each)
     flagged = [
         t
@@ -1804,9 +1806,9 @@ def test_replay_two_producers_above_the_floor_are_named(each: int) -> None:
     ]
     assert flagged
     assert (flagged[0] - _DUAL_RUN_FROM) / _PERIOD_MS == pytest.approx(8.5, abs=0.5)
-    # The suspect an operator should check first while both hold +xadd.
+    # One producer holds +xadd since #95, so the suspect is it, running twice.
     assert all(
-        "or a second producer is publishing it too" in f
+        "or a producer is publishing it twice" in f
         for _, fs in ticks
         for f in fs
         if f.startswith("stream-length")
@@ -1855,16 +1857,12 @@ def test_both_lww_floors_are_built_from_the_three_mirrors() -> None:
         assert floor.republish_period_seconds == LWW_REPUBLISH_PERIOD_SECONDS
 
 
-def test_the_lww_mirrors_name_each_owner_across_f1() -> None:
-    """`content.fetch-policy`'s producer moves from Watcher to Archiver at F1,
-    and `info.watch-status` stays Watcher's. Each of the three numbers names
-    both owners and Archiver's mover, in wording true either side of the flip,
-    under the names archiver's and watcher's docstrings point at
-    (CannObserv/broker#94)."""
-    f1 = (
-        "``content.fetch-policy``: Watcher until CannObserv/watcher#374 and "
-        "``ARCHIVER_FETCH_POLICY_PRODUCER``, Archiver after"
-    )
+def test_the_lww_mirrors_name_archiver_alone_on_content_fetch_policy() -> None:
+    """`content.fetch-policy`'s producer moved from Watcher to Archiver at F1,
+    and Watcher's code and grant are gone (CannObserv/watcher#374,
+    CannObserv/broker#95), so each of the three numbers cites Archiver alone for
+    it (CannObserv/broker#135). `info.watch-status` stays Watcher's. Under the
+    names archiver's and watcher's docstrings point at (CannObserv/broker#94)."""
     archiver_module = "(``src/core/changes/fetch_policy_snapshot.py``)"
     archivers = {
         "LWW_PRODUCER_MAXLEN": (
@@ -1876,10 +1874,20 @@ def test_the_lww_mirrors_name_each_owner_across_f1() -> None:
     }
     for name, (constant, mover) in archivers.items():
         docstring = " ".join(_constant_docstring(name).split())
-        assert f1 in docstring, name
-        assert f"archiver's {constant} {archiver_module}" in docstring, name
+        assert f"``content.fetch-policy``: Archiver's {constant} {archiver_module}" in docstring, (
+            name
+        )
         assert mover in docstring, name
         assert "``info.watch-status``: Watcher's" in docstring, name
+        assert "until CannObserv/watcher#374" not in docstring, name
+    # Watcher's fetch-policy paths and mover, removed by watcher#374 part 2.
+    for gone in (
+        "WATCHER_FETCH_POLICY_STREAM_MAXLEN",
+        "src/workers/fetch_policy.py",
+        "src/core/fetch_policy.py",
+        "Watcher's fetch-policy cron",
+    ):
+        assert gone not in Path(bus_health.__file__).read_text(), gone
     source = _as_prose(Path(bus_health.__file__).read_text())
     assert "watcher gives them one rule" not in source
     assert "If either owner moves one, the floor splits per stream" in source

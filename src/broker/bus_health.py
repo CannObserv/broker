@@ -185,17 +185,15 @@ LWW_REPUBLISH_PERIOD_SECONDS = 300.0
 """The period both LWW streams republish their full set on, five minutes
 (CannObserv/watcher#264, #265). Two owners hold it:
 
-- ``content.fetch-policy``: Watcher until CannObserv/watcher#374 and
-  ``ARCHIVER_FETCH_POLICY_PRODUCER``, Archiver after (F1). Watcher's
-  ``*/5 * * * *`` (``src/workers/fetch_policy.py``), then archiver's
-  ``REPUBLISH_PERIOD_SECONDS`` (``src/core/changes/fetch_policy_snapshot.py``).
+- ``content.fetch-policy``: Archiver's ``REPUBLISH_PERIOD_SECONDS``
+  (``src/core/changes/fetch_policy_snapshot.py``), since F1 and
+  CannObserv/broker#95 (CannObserv/broker#135).
 - ``info.watch-status``: Watcher's ``DEFAULT_REPUBLISH_CRON``
   (``src/workers/watch_status.py``).
 
 **Movers, which no commit records:** ``WATCHER_WATCH_STATUS_REPUBLISH_CRON``
-in watcher's environment, on ``info.watch-status`` only. Watcher's fetch-policy
-cron is a literal, and Archiver's has none, deliberately (its
-``docs/DOMAINS.md``).
+in watcher's environment, on ``info.watch-status``. Archiver's has none,
+deliberately (its ``docs/DOMAINS.md``).
 
 Spelled as a constant rather than folded into the age threshold below because
 ``read_set_size`` divides by it: the period is what turns a retained window
@@ -327,7 +325,7 @@ def with_margin(cap: int) -> int:
 # - info.registry is excluded from that loop and capped on every publish
 #   instead, because its retention floor is a consumer boot contract;
 # - the LWW streams are capped by their producer on every publish:
-#   Watcher, and Archiver on content.fetch-policy from F1.
+#   Archiver on content.fetch-policy, Watcher on info.watch-status.
 #
 # The seven content.* streams are capped by nothing, so they carry no length
 # threshold. Until CannObserv/broker#60 four of the then five borrowed the
@@ -365,16 +363,13 @@ LWW_PRODUCER_MAXLEN = 500
 """The default cap on both LWW streams, cut from 50k by CannObserv/watcher#292.
 Two owners hold it:
 
-- ``content.fetch-policy``: Watcher until CannObserv/watcher#374 and
-  ``ARCHIVER_FETCH_POLICY_PRODUCER``, Archiver after (F1). Watcher's
-  ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN`` (``src/core/fetch_policy.py``), then
-  archiver's ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN``
-  (``src/core/changes/fetch_policy_snapshot.py``).
+- ``content.fetch-policy``: Archiver's ``DEFAULT_FETCH_POLICY_STREAM_MAXLEN``
+  (``src/core/changes/fetch_policy_snapshot.py``), since F1 and
+  CannObserv/broker#95 (CannObserv/broker#135).
 - ``info.watch-status``: Watcher's ``DEFAULT_WATCH_STATUS_STREAM_MAXLEN``
   (``src/core/watch_status.py``).
 
 **Movers, which no commit records:** on ``content.fetch-policy``,
-``WATCHER_FETCH_POLICY_STREAM_MAXLEN`` in watcher's environment until F1, then
 ``ARCHIVER_FETCH_POLICY_STREAM_MAXLEN`` in ``/etc/archiver/.env``, the unit, or
 archiver's gitignored repo ``.env``, which loads last and wins; archiver's
 ``docs/ENVIRONMENT.md`` obliges a note here when it is set. On
@@ -396,11 +391,10 @@ LWW_RETAINED_FULL_SETS = 10
 """The floor's multiplier on both LWW streams (CannObserv/watcher#292). Two
 owners hold it:
 
-- ``content.fetch-policy``: Watcher until CannObserv/watcher#374 and
-  ``ARCHIVER_FETCH_POLICY_PRODUCER``, Archiver after (F1). Watcher's
-  ``RETAINED_FULL_SETS`` (``src/core/bus.py``), then archiver's
-  ``RETAINED_FULL_SETS`` (``src/core/changes/fetch_policy_snapshot.py``).
-- ``info.watch-status``: Watcher's, the same ``src/core/bus.py`` constant.
+- ``content.fetch-policy``: Archiver's ``RETAINED_FULL_SETS``
+  (``src/core/changes/fetch_policy_snapshot.py``), since F1 and
+  CannObserv/broker#95 (CannObserv/broker#135).
+- ``info.watch-status``: Watcher's ``RETAINED_FULL_SETS`` (``src/core/bus.py``).
 
 **No mover but a commit:** Watcher's is a constant, and Archiver's has none.
 
@@ -1635,9 +1629,9 @@ def evaluate_stream(
             diagnosis = (
                 "the retention cap for this stream is not being applied, or its producer "
                 f"republishes more often than every {floor.republish_period_seconds:.0f}s, "
-                # Two producers hold content.fetch-policy's +xadd from broker#93 until
-                # #95, and dual-run reads exactly like a faster republish.
-                "or a second producer is publishing it too: "
+                # One producer holds each LWW stream's +xadd since broker#95, but a
+                # copy of it running twice reads exactly like a faster republish.
+                "or a producer is publishing it twice: "
                 f"the trimmed window spans {set_reading.narrow_periods} republish periods "
                 f"where {floor.retained_full_sets} full sets need at least "
                 f"{floor.retained_full_sets - 1}, so no set size can be read off it and the "
