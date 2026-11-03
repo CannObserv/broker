@@ -804,7 +804,9 @@ REPLICATOR_CONSUMES = (CONTENT_FETCH, CONTENT_REPLICATE, CONTENT_PERSIST, CONTEN
 ANSWERED_READS: dict[str, dict[str, frozenset[str]]] = {
     "archiver": {
         "+xread": frozenset({INFO_WATCH_STATUS}),
-        "+xpending": frozenset({CONTENT_REVISIONS, CONTENT_ARTIFACTS}),
+        # The dashboard's lag read, one XPENDING per owned group: the third
+        # since archiver#369, asked for on CannObserv/archiver#459 (broker#136).
+        "+xpending": frozenset({CONTENT_REVISIONS, CONTENT_ARTIFACTS, INFO_WATCH_EVENTS}),
         # info.watch-events.dlq's pair is the drainer's audit, derived from the
         # role (CannObserv/broker#93) rather than answered: archiver#369 has
         # no call site yet, and watcher's two queues were derived the same way.
@@ -1429,15 +1431,17 @@ def test_archiver_issues_info_watch_check_and_can_neither_read_nor_cap_it(users)
     assert not admits(key_patterns(rules), dlq_name(INFO_WATCH_CHECK))
 
 
-def test_archivers_xpending_stays_on_the_two_streams_its_dashboard_reads(users) -> None:
-    """`info.watch-events` joins archiver's consume selector and `+xpending`
-    does not follow it: the dashboard's lag read names `content.revisions` and
-    `content.artifacts` (CannObserv/archiver#321), so the read moved into a
-    selector of its own rather than riding the group commands onto a third
-    stream nobody asked it on."""
+def test_archivers_xpending_is_the_three_groups_its_dashboard_reads(users) -> None:
+    """`+xpending` has a selector of its own (CannObserv/broker#93), so it
+    follows the group commands onto `info.watch-events` only because archiver
+    asked: its dashboard's lag read gained the group in archiver#369, and the
+    first home load was refused (2026-11-03T14:27:34Z, CannObserv/broker#136).
+    The selector stays its own, so the next consumed stream is asked again."""
     rules = users["archiver"]
-    assert reaches(rules, "+xreadgroup", INFO_WATCH_EVENTS)
-    assert not reaches(rules, "+xpending", INFO_WATCH_EVENTS)
+    for topic in (CONTENT_REVISIONS, CONTENT_ARTIFACTS, INFO_WATCH_EVENTS):
+        assert reaches(rules, "+xreadgroup", topic)
+        assert reaches(rules, "+xpending", topic)
+    assert not reaches(rules, "+xpending", INFO_WATCH_STATUS)
 
 
 def test_content_fetch_policy_has_two_producers_until_watchers_grant_is_withdrawn(
@@ -2727,12 +2731,21 @@ def test_archiver_issues_info_watch_check_and_is_refused_the_rest(tracked_acl_br
         lambda: client.xadd(dlq_name(INFO_WATCH_CHECK), {"k": "v"}),
         lambda: client.xadd(INFO_WATCH_EVENTS, {"k": "forged"}),
         lambda: client.xtrim(INFO_WATCH_EVENTS, maxlen=0),
-        lambda: client.xpending(INFO_WATCH_EVENTS, "archiver.watch-events"),
         lambda: client.xtrim(CONTENT_FETCH_POLICY, maxlen=0),
         lambda: client.xtrim(queue, maxlen=0),
     ):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
             refused()
+
+
+def test_archiver_reads_its_watch_events_lag(fresh_acl_broker) -> None:
+    """The dashboard's lag read on its third group is served: the `XPENDING`
+    refused at 2026-11-03T14:27:34Z, on archiver's own group
+    (CannObserv/broker#136, CannObserv/archiver#459)."""
+    client = fresh_acl_broker("archiver")
+    group = group_name(INFO_WATCH_EVENTS, "archiver")
+    client.xgroup_create(INFO_WATCH_EVENTS, group, id="0", mkstream=True)
+    assert client.xpending(INFO_WATCH_EVENTS, group)["pending"] == 0
 
 
 @pytest.mark.parametrize(

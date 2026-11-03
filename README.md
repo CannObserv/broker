@@ -135,6 +135,10 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   110k (#60), the processing pair (#62), `content.persist` (#64) and
   `content.capture` (#114) with no cap by contract. Grants live
   2026-10-20T15:06:05Z.
+- CannObserv/broker#136 - archiver's `+xpending` follows its consume selector
+  onto `info.watch-events`, at archiver's request (CannObserv/archiver#459):
+  archiver#369 put the group in the dashboard's lag read, and the first home
+  load was refused (2026-11-03T14:27:34Z). Grant live 2026-11-03T16:50:07Z.
 - CannObserv/archiver#251 - a broker credential in archiver's journald, from
   the application's start log and from one `sudo` command line. Both halves
   landed here on 2026-09-23: #47 (no runbook puts a credential in `argv`,
