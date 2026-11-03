@@ -115,39 +115,44 @@ producer is back, and the length finding then stood alone until the gap trimmed
 out, whatever its length. A period *lengthened* at home and not here reads the
 set low permanently, the same mirror failure as any other.
 
-## Two producers across F1
+## Two writers on one stream
 
-`content.fetch-policy` has two producers from CannObserv/broker#93 until
-Watcher's grant is withdrawn (CannObserv/broker#95): Watcher's, and Archiver's
-(CannObserv/archiver#366), which builds dark and takes over at F1 with a
-full-set republish and the same cap and floor. **Neither check changes while
-one publishes at a time**, which is the flip's rule (the design's D8, one hard
-flip, no dual-run). The set read off the stream follows whichever producer is
-writing, and the flip itself (a gap, then a full set) is the gap and the step
-the readings above already survive, with `stream-age` if the gap passes 15 min.
-The three mirrored numbers (the 500, the 10-set floor and the five-minute
-period) are Watcher's until F1 and Archiver's after, equal on both sides, so no
-threshold moves at the flip. Only the movers change: the 500's becomes
-`ARCHIVER_FETCH_POLICY_STREAM_MAXLEN`, and the other two have none on
-Archiver's side. If either owner moves one, `LWW_FULL_SET_FLOOR` splits per
-stream (CannObserv/broker#94).
+`content.fetch-policy` had two producers from CannObserv/broker#93 until
+Watcher's grant was withdrawn (CannObserv/broker#95): Watcher's, and Archiver's
+(CannObserv/archiver#366), which built dark and took over at F1
+(2026-10-26T21:42:27Z) with a full-set republish and the same cap and floor.
+**Neither check changed while one published at a time**, which was the flip's
+rule (the design's D8, one hard flip, no dual-run). The set read off the stream
+followed whichever producer was writing, and the flip itself (a gap, then a
+full set) was the gap and the step the readings above already survive: its
+only finding was `stream-age` over the 2 h 47 min gap (#95's read-back). The
+three mirrored numbers (the 500, the 10-set floor and the five-minute period)
+were Watcher's until F1 and are Archiver's after, equal on both sides, so no
+threshold moved at the flip, and since CannObserv/broker#135 they cite Archiver
+alone for this stream. The 500's mover is `ARCHIVER_FETCH_POLICY_STREAM_MAXLEN`,
+and the other two have none on Archiver's side. If either owner moves one,
+`LWW_FULL_SET_FLOOR` splits per stream (CannObserv/broker#94).
+
+Since #95 the ACL refuses Watcher a second write, but not a producer running
+twice - two copies of Archiver's republish, or one doubled by a regression -
+and that reads the same here as two producers did.
 
 **Both at once is invisible while the sets are small.** Replayed as above,
-each producer on its own `*/5`, offset a minute
+each writer on its own `*/5`, offset a minute
 (`test_replay_two_producers_below_the_floor_are_silent`,
 `test_replay_two_producers_above_the_floor_are_named`):
 
-| Sets (Watcher + Archiver) | `stream-length` after dual-run starts |
+| Sets (first + second writer) | `stream-length` after dual-run starts |
 |---|---|
 | 3 + 4, 4 + 4, 30 + 30 | never |
-| 60 + 60, 100 + 100 | standing from 8.5 periods, naming a faster republish or a second producer |
+| 60 + 60, 100 + 100 | standing from 8.5 periods, naming a faster republish or a producer publishing twice |
 
 Below the floor each producer caps at its own `MAXLEN ~500`, and the
 threshold never falls under 550, so the length cannot breach: the summed set
 read off the stream can only raise the threshold. Once each floor governs, the
 stream sits at a cap holding too few periods for ten summed sets, the window is
 refused, and the mirrored default governs - the `R > 1` path. At today's
-sizes dual-run shows in Replicator's journal instead: one `ignoring a fetch
-policy without a generation` line per Watcher frame once a host holds an
-Archiver frame (CannObserv/replicator#135, stated on
+sizes F1's dual-run would have shown in Replicator's journal instead: one
+`ignoring a fetch policy without a generation` line per Watcher frame once a
+host held an Archiver frame (CannObserv/replicator#135, stated on
 CannObserv/archiver#366).

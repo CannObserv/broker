@@ -480,10 +480,10 @@ def documented_producers() -> dict[str, frozenset[str]]:
     separated, with markdown emphasis stripped - ``**Archiver** → Watcher
     *(consumer live)*`` names Archiver.
 
-    A set since CannObserv/broker#93: `content.fetch-policy` is granted to
+    A set since CannObserv/broker#93: `content.fetch-policy` was granted to
     Watcher and Archiver both from Archiver's dark build until Watcher's grant
-    is withdrawn at the jump (CannObserv/broker#95). Every other stream names
-    one.
+    was withdrawn at the jump (CannObserv/broker#95). Every stream names one
+    today; the set stays for the next handover.
     """
     found: dict[str, frozenset[str]] = {}
     for topic, cells in inventory_rows().items():
@@ -1452,21 +1452,22 @@ def test_archivers_xpending_is_the_three_groups_its_dashboard_reads(users) -> No
     assert not reaches(rules, "+xpending", INFO_WATCH_STATUS)
 
 
-def test_content_fetch_policy_has_two_producers_until_watchers_grant_is_withdrawn(
+def test_content_fetch_policy_has_archiver_alone_since_watchers_grant_was_withdrawn(
     users,
 ) -> None:
-    """The second producer arrives before the first leaves (CannObserv/broker#93):
-    Archiver's producer builds dark and starts at F1 with a full-set republish,
-    Watcher's stops first, and its grant is withdrawn at the jump
-    (CannObserv/broker#95). Two writers at once is the design's named failure
-    (D8, "two fetch-policy producers fight LWW"), which no ACL can refuse -
-    both must hold `+xadd` across the flip - so this pins the window's shape and
-    names the issue that closes it. Neither can trim it: the cap rides each
-    publish's MAXLEN."""
-    assert documented_producers()[CONTENT_FETCH_POLICY] == {"watcher", "archiver"}
-    for user in ("watcher", "archiver"):
-        assert admits(selector_patterns(users[user], "+xadd"), CONTENT_FETCH_POLICY)
-        assert not admits(selector_patterns(users[user], "+xtrim"), CONTENT_FETCH_POLICY)
+    """The second producer arrived before the first left (CannObserv/broker#93):
+    Archiver's producer built dark and started at F1 with a full-set republish,
+    Watcher's stopped first, and its grant was withdrawn at the jump
+    (CannObserv/broker#95), once CannObserv/watcher#374 had removed the code.
+    Two writers at once was the design's named failure (D8, "two fetch-policy
+    producers fight LWW"), which no ACL could refuse while both held `+xadd`
+    across the flip. Now one can: watcher reaches the stream by no command, so a
+    regression there is a NOPERM rather than a second LWW writer. Archiver cannot
+    trim it either: the cap rides each publish's MAXLEN."""
+    assert documented_producers()[CONTENT_FETCH_POLICY] == {"archiver"}
+    assert admits(selector_patterns(users["archiver"], "+xadd"), CONTENT_FETCH_POLICY)
+    assert not admits(selector_patterns(users["archiver"], "+xtrim"), CONTENT_FETCH_POLICY)
+    assert not admits(key_patterns(users["watcher"]), CONTENT_FETCH_POLICY)
     assert "CannObserv/broker#95" in stanza("watcher")
 
 
@@ -2227,20 +2228,27 @@ def test_archiver_caps_the_registry_by_publishing_and_info_changes_by_trimming(
     assert client.xtrim(INFO_CHANGES, maxlen=CHANGES_PRODUCER_MAXLEN, approximate=True) == 0
 
 
-def test_watcher_caps_its_republished_streams_by_publishing(tracked_acl_broker) -> None:
-    """The two capped streams watcher publishes, under the grant broker#41 left it.
+def test_watcher_caps_its_republished_stream_by_publishing(tracked_acl_broker) -> None:
+    """The capped stream watcher publishes, under the grant broker#41 left it.
 
-    `content.fetch-policy` and `info.watch-status` are capped by
-    `BusPublish.maxlen`: the `MAXLEN` rides the `XADD`, which an ACL checks as
-    `XADD`. So the cap survives a watcher holding no `+xtrim` at all - the
-    shape `test_archiver_caps_the_registry_by_publishing_and_info_changes_by_trimming`
-    proved for the registry - and a separate trim is refused.
+    `info.watch-status` is capped by `BusPublish.maxlen`: the `MAXLEN` rides the
+    `XADD`, which an ACL checks as `XADD`. So the cap survives a watcher holding
+    no `+xtrim` at all - the shape
+    `test_archiver_caps_the_registry_by_publishing_and_info_changes_by_trimming`
+    proved for the registry - and a separate trim is refused. `content.fetch-policy`
+    was the other until the jump: its `XADD` is refused since CannObserv/broker#95,
+    so a regressed producer there is a NOPERM, not a second LWW writer.
     """
     client = tracked_acl_broker("watcher")
-    for topic in (CONTENT_FETCH_POLICY, INFO_WATCH_STATUS):
-        assert client.xadd(topic, {"k": "v"}, maxlen=LWW_PRODUCER_MAXLEN, approximate=True)
+    assert client.xadd(INFO_WATCH_STATUS, {"k": "v"}, maxlen=LWW_PRODUCER_MAXLEN, approximate=True)
+    for refused in (
+        lambda: client.xtrim(INFO_WATCH_STATUS, maxlen=LWW_PRODUCER_MAXLEN, approximate=True),
+        lambda: client.xadd(
+            CONTENT_FETCH_POLICY, {"k": "v"}, maxlen=LWW_PRODUCER_MAXLEN, approximate=True
+        ),
+    ):
         with pytest.raises(redis_pkg.exceptions.NoPermissionError):
-            client.xtrim(topic, maxlen=LWW_PRODUCER_MAXLEN, approximate=True)
+            refused()
 
 
 def test_replicator_cannot_replace_a_stream_with_a_string(tracked_acl_broker) -> None:

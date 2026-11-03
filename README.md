@@ -118,9 +118,10 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   cannobserv#563, #564), registered 2026-10-19 before either end shipped:
   `info.watch-events` (watcher -> archiver, `archiver.watch-events`, dormant
   until seen, created by archiver at `0`) and `info.watch-check` (archiver ->
-  watcher, `watcher.watch-check`, never trimmed). Archiver is
-  `content.fetch-policy`'s second producer until #95 withdraws watcher's
-  grant. Grants live 2026-10-19T17:46:17Z. co-core was held `<0.37.1` until
+  watcher, `watcher.watch-check`, never trimmed). Archiver was
+  `content.fetch-policy`'s second producer until #95 withdrew watcher's
+  grant at the jump, after CannObserv/watcher#374 removed its producer;
+  #135 pointed the probe's mirrors at Archiver alone. Grants live 2026-10-19T17:46:17Z. co-core was held `<0.37.1` until
   #114 registered 0.37.1's `content.capture`.
 - CannObserv/broker#114 - `content.capture` (archiver -> replicator,
   cannobserv#571, co-core `>=0.37.1,<0.38`), registered 2026-10-20 before
