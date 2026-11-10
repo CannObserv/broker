@@ -154,16 +154,29 @@ def test_local_settings_are_ignored_by_the_tracked_gitignore() -> None:
     Qdrant on ``co-index`` has a single global api key: every VM holds the same
     one, so a leak here is a rotation everywhere, with no overlap window.
     notifier's ``install_qdrant_key.sh`` writes this file and does not check that
-    it is ignored.
-
-    Asserted against ``.gitignore`` by the source ``check-ignore -v`` names: a
-    global excludesfile or ``.git/info/exclude`` passes on the one machine that
-    has it and protects no other clone. A tracked file is never reported as
-    ignored, so a committed key fails here too.
+    it is ignored. A tracked file is never reported as ignored, so a committed
+    key fails here too.
     """
+    _assert_ignored_by_the_tracked_gitignore(str(SETTINGS_LOCAL.relative_to(REPO_ROOT)))
+
+
+def test_the_worktree_root_is_ignored_by_the_tracked_gitignore() -> None:
+    """using-git-worktrees' default root, ``.worktrees/``, sits inside this tree.
+
+    Its ``worktree-create.sh`` refuses a root git does not ignore, and exits 2
+    (gregoryfoster/skills#567). An unignored worktree is also one ``git add -A``
+    away from being committed as an embedded repository. ``~/broker`` passed on
+    its ``.git/info/exclude`` alone, so a fresh clone failed (CannObserv/broker#138).
+    """
+    _assert_ignored_by_the_tracked_gitignore(".worktrees/x/")
+
+
+def _assert_ignored_by_the_tracked_gitignore(target: str) -> None:
+    """Asserted by the source ``check-ignore -v`` names: a global excludesfile or
+    ``.git/info/exclude`` passes on the one machine that has it and protects no
+    other clone. A tracked path is never reported as ignored."""
     if not shutil.which("git"):
         pytest.skip("git not installed")
-    target = str(SETTINGS_LOCAL.relative_to(REPO_ROOT))
     result = subprocess.run(
         ["git", "check-ignore", "-v", target],
         cwd=REPO_ROOT,
