@@ -10,6 +10,10 @@ The namespace guards mirror notifier's ``tests/deploy/test_socraticode_config.py
 The key and project-id guards are broker's own, because what they pin is sharper
 here: this repo is public, and this checkout's path is the one the stale broker
 index was built from.
+
+Two paths are pinned to the tracked ``.gitignore``: ``settings.local.json``,
+which will hold the Qdrant key, and the worktree root (#138), which sits here
+beside ``NESTED_CHECKOUTS``, the index's view of the same directory.
 """
 
 from __future__ import annotations
