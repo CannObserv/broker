@@ -263,3 +263,8 @@ docs/RECOVERY.md :: retarget :: on every test run, and by hand against a real ob
 docs/RECOVERY.md :: retarget :: bottom.
 docs/RECOVERY.md :: retarget :: - **16:34 UTC, a second run.** `unchanged`: the 412 that *Why create-only*
 docs/RECOVERY.md :: retarget :: predicts, observed - not a 403 from the missing `delete`.
+# #139 curation (2026-11-10): BUS-HEALTH's DLQ probe bullets moved to DLQ-DRAINING.md,
+# *What the probe reports on a queue*. The SCAN bullet's pointer now names that section,
+# and the moved disposal paragraph ends a paragraph, not a list item (`;` -> `.`).
+docs/BUS-HEALTH.md :: retarget :: named and the entries captured; see [DLQ-DRAINING.md](DLQ-DRAINING.md).
+docs/BUS-HEALTH.md :: tighten :: nobody did. `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table;

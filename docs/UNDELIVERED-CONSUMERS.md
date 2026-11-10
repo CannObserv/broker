@@ -163,3 +163,14 @@ service's messages, which is the rule it exists on the other side of.
 to check next when this finding fires on a group holding nothing. It is not the
 check itself: a connection count is not what a consumer promises, and a
 connected process that has stopped reading looks identical to a healthy one.
+
+## Who owns the threshold
+
+The `content.*` and `info.watch-*` streams carry no retention row
+(AGENTS.md, *Rules*: nothing trims them, and this repo owns no cap). Their
+groups *are* probed - the old unqualified "never `content.blobs`" was
+archiver's role boundary, retired by broker#1 Phase 5 because a neutral node
+has no role to be out of bounds of. A group's `warn_undelivered_age_seconds`
+is not the exception it looks like: an undelivered age is a statement about
+the consumer's read loop, which this node measures directly and therefore
+owns, not about how long entries are kept.

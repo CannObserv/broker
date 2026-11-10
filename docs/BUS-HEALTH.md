@@ -170,31 +170,15 @@ Per tick it probes:
   one the 2026-09-16 event asked for; see
   [UNDELIVERED-CONSUMERS.md](UNDELIVERED-CONSUMERS.md);
 - every `*.dlq` key via `SCAN` - WARN on any non-zero depth, with the drainer
-  named and the entries captured; see [DLQ-DRAINING.md](DLQ-DRAINING.md).
-  The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
-  `XTRIM MAXLEN 0`, which was the only tool the broker had before
-  CannObserv/broker#12 and which takes every *other* entry with it - on a queue
-  that reached 110, emptying it to remove one triaged frame destroys 109 audits
-  nobody did. `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table;
+  named and the entries captured; see [DLQ-DRAINING.md](DLQ-DRAINING.md), whose
+  *What the probe reports on a queue* holds the disposal primitive;
 - **`entries-added` going backwards on any stream** - the one check here that is
   not an upper bound. See *Detecting loss* below. On a **dead-letter queue** it
   means the queue was deleted rather than drained, so any evidence dump still on
   disk describes a stream that no longer exists;
-- **a `*.dlq` key that a tick's `SCAN` no longer returns**, after a tick that
-  recorded it (`stream-reset`, the same name and the same meaning - this queue's
-  identity is gone). `entries-added` cannot report its own stream's deletion, and
-  every legitimate disposal leaves the key: `XDEL` per entry, and the
-  `XTRIM MAXLEN 0` it replaced. Fires once, because the baseline is not carried
-  into the tick that reports it;
-- **`entries-added` climbing past what the depth accounts for, on a dead-letter
-  queue** (`dlq-unobserved`, CannObserv/broker#13) - entries arrived and were
-  removed between two ticks, so evidence capture never saw them and those
-  payloads are gone. Reported as a floor, `added - <last tick's added> - depth`,
-  because depth can include entries captured on an earlier tick. Depth and
-  `entries-added` are read from one `XINFO STREAM` rather than an `XLEN` and an
-  `XINFO`, so an `XADD` cannot land between them and push the floor above the
-  truth. It makes the *existence* of a drained failure undeniable, which is what
-  the per-queue drain grants (CannObserv/broker#12) made worth having;
+- **a `*.dlq` key a tick's `SCAN` no longer returns** (`stream-reset`), and
+  **entries a queue gained and lost between ticks** (`dlq-unobserved`): the same
+  section of [DLQ-DRAINING.md](DLQ-DRAINING.md);
 - `/` disk headroom (WARN at 90% used or under 2 GiB free) - which on this node
   is the AOF's headroom, and is the check whose meaning the move restored.
   What else shares `/`: [HOST-DISK.md](HOST-DISK.md).

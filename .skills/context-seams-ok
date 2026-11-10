@@ -193,3 +193,6 @@ docs/BUS-HEALTH.md :: `backup` and `persistence` findings are [RECOVERY.md](RECO
 docs/NETWORK-PATHS.md :: or a node restore (`docs/RECOVERY.md`) may not. And a bound is not a guarantee.
 docs/INCIDENT-2026-09-10.md :: Step 1a-bis of [RESTART-WINDOW.md](RESTART-WINDOW.md), before `databases 1` went back on.
 docs/NETWORK-PATHS.md :: A planned restart window ([RESTART-WINDOW.md](RESTART-WINDOW.md)) is minutes and
+# #139 curation (2026-11-10): the groups-are-probed narrative moved out of AGENTS.md's
+# first rule; the rule it cites still says this, so the back-reference holds.
+docs/UNDELIVERED-CONSUMERS.md :: (AGENTS.md, *Rules*: nothing trims them, and this repo owns no cap). Their

@@ -113,3 +113,30 @@ Worked example, the CannObserv/archiver#162 drain (2026-08-19): 110 entries, eve
 2026-08-13, zero non-residue payloads, zero consumer groups on the key.
 `XTRIM content.fetch.dlq MINID 1786635782730-0` removed exactly those 110 and
 left the key at depth 0.
+
+## What the probe reports on a queue
+
+Beside the depth finding above, every tick of
+[BUS-HEALTH.md](BUS-HEALTH.md)'s probe reports:
+
+- **a `*.dlq` key that a tick's `SCAN` no longer returns**, after a tick that
+  recorded it (`stream-reset`, the same name and the same meaning - this queue's
+  identity is gone). `entries-added` cannot report its own stream's deletion, and
+  every legitimate disposal leaves the key: `XDEL` per entry, and the
+  `XTRIM MAXLEN 0` it replaced. Fires once, because the baseline is not carried
+  into the tick that reports it;
+- **`entries-added` climbing past what the depth accounts for, on a dead-letter
+  queue** (`dlq-unobserved`, CannObserv/broker#13) - entries arrived and were
+  removed between two ticks, so evidence capture never saw them and those
+  payloads are gone. Reported as a floor, `added - <last tick's added> - depth`,
+  because depth can include entries captured on an earlier tick. Depth and
+  `entries-added` are read from one `XINFO STREAM` rather than an `XLEN` and an
+  `XINFO`, so an `XADD` cannot land between them and push the floor above the
+  truth. It makes the *existence* of a drained failure undeniable, which is what
+  the per-queue drain grants (CannObserv/broker#12) made worth having;
+
+The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
+`XTRIM MAXLEN 0`, which was the only tool the broker had before
+CannObserv/broker#12 and which takes every *other* entry with it - on a queue
+that reached 110, emptying it to remove one triaged frame destroys 109 audits
+nobody did. `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table.

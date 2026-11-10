@@ -62,12 +62,8 @@ nothing. The ACL declares no CI identity (#53).
   returns only as a producer's named request. `docs/STREAMS.md`'s **No
   retention cap** is pinned to the probe's
   unthresholded rows; a cap comes back only with a producer that owns one. Their
-  groups *are* probed - the old unqualified "never `content.blobs`" was
-  archiver's role boundary, retired by broker#1 Phase 5 because a neutral node
-  has no role to be out of bounds of. A group's `warn_undelivered_age_seconds`
-  is not the exception it looks like: an undelivered age is a statement about
-  the consumer's read loop, which this node measures directly and therefore
-  owns, not about how long entries are kept.
+  groups *are* probed:
+  [docs/UNDELIVERED-CONSUMERS.md](docs/UNDELIVERED-CONSUMERS.md), *Who owns the threshold*.
 - **DLQs: the broker detects, captures and escalates; the consumer triages.**
   Splitting the old single "drainer" role is broker#1 Phase 5. Anything
   mechanical and suffix-keyed belongs here; reading a payload to tell residue
@@ -189,10 +185,7 @@ appending a context measurement - pull before pushing. Review is the
 - CannObserv/broker#52 - operator credentials off disk, no prompt,
   2026-09-29; what it leaves open: `docs/NODE-CREDENTIALS.md`. #72 (the ACL
   digests shipped with each backup) closed the same day.
-- CannObserv/watcher#319 - the notice for the other end of #44's mirror:
-  `RETAINED_FULL_SETS` and the `*/5` republish period are copied into
-  `src/broker/bus_health.py`, and the period moves from watcher's *environment*
-  (`WATCHER_WATCH_STATUS_REPUBLISH_CRON`) with no commit anywhere.
+- CannObserv/watcher#319 - the other end of #44's mirror: [docs/LWW-CAP.md](docs/LWW-CAP.md).
 - CannObserv/archiver#193 - D6 (why this repo exists), R5 (the OOM seam)
 
 ## Detail Docs

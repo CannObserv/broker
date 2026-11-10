@@ -8,7 +8,6 @@
 # missed republish and not two" went with broker#45, which closed the gap it
 # described.
 
-# 2026-09-29 re-judged: the rule names all eight streams in the same sentence;
-# the four are that list less content.blobs, the processing pair and content.persist.
-AGENTS.md :: enumerated :: No retention opinion on the eight `content.*` streams
-AGENTS.md :: enumerated :: four joined it when they lost
+# 2026-11-10 re-judged (#139 curation): the rule names all nine streams in the
+# sentence after it; "four joined it" left the file, so its entry went with it.
+AGENTS.md :: enumerated :: No retention opinion on the nine `content.*` streams
