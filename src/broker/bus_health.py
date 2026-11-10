@@ -216,9 +216,11 @@ REGISTRY_REPUBLISH_PERIOD_SECONDS = 3600.0
 loads last and wins.
 
 Two consumers here: the age threshold below, and ``read_set_size``, which
-divides the retained window by it (CannObserv/broker#139). Shortened at home and
-not here, the set reads high by the same factor and the length check goes quiet
-by it; lengthened, the age check false-WARNs every tick."""
+divides the retained window by it (CannObserv/broker#139). Lengthened at home and
+not here, the age check false-WARNs every tick. Shortened, the trimmed window
+narrows under nine of these periods and, once the floor governs, the length
+check says so by name (CannObserv/broker#51); while the default governs, the
+set it misreads changes nothing."""
 
 # info.registry guarantees >=1 entry/hour on a non-empty corpus via archiver's
 # periodic snapshot; 2x that interval of silence means the producer is down. An
