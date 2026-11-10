@@ -33,3 +33,9 @@ __pycache__/
 # passwords and all; tests/deploy/test_redis_acl.py now refuses any tracked ACL
 # line outside deploy/redis-acl.conf.
 /tmp*/
+
+# using-git-worktrees' default root (no .skills/worktree_root here). Its
+# worktree-create.sh refuses a root git does not ignore (gregoryfoster/skills#567),
+# and .git/info/exclude reaches no other clone (#138). Pinned by
+# tests/deploy/test_socraticode_config.py.
+/.worktrees/
