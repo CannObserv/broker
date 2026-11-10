@@ -3764,7 +3764,9 @@ def test_the_registry_mirrors_name_archivers_constants_and_movers() -> None:
         assert constant in docstring, name
         assert module in docstring, name
         assert mover in docstring, name
-    assert "raise" in " ".join(_constant_docstring("REGISTRY_PRODUCER_MAXLEN").split())
+    assert "it can raise the cap, never drop it" in " ".join(
+        _constant_docstring("REGISTRY_PRODUCER_MAXLEN").split()
+    )
 
 
 def test_the_registry_age_threshold_is_two_periods() -> None:
