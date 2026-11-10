@@ -170,7 +170,12 @@ def test_the_worktree_root_is_ignored_by_the_tracked_gitignore() -> None:
     Its ``worktree-create.sh`` refuses a root git does not ignore, and exits 2
     (gregoryfoster/skills#567). An unignored worktree is also one ``git add -A``
     away from being committed as an embedded repository. ``~/broker`` passed on
-    its ``.git/info/exclude`` alone, so a fresh clone failed (CannObserv/broker#138).
+    its ``.git/info/exclude`` alone, so a fresh clone's first create would have
+    exited 2 (CannObserv/broker#138).
+
+    ``NESTED_CHECKOUTS``' other entry, ``.claude/worktrees/``, is the harness's
+    own root: Claude Code writes its ignore into ``.git/info/exclude`` in each
+    clone it runs in, and no skill script refuses it.
     """
     _assert_ignored_by_the_tracked_gitignore(".worktrees/x/")
 
