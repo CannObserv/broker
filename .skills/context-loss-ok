@@ -269,3 +269,5 @@ docs/RECOVERY.md :: retarget :: predicts, observed - not a 403 from the missing 
 docs/BUS-HEALTH.md :: retarget :: named and the entries captured; see [DLQ-DRAINING.md](DLQ-DRAINING.md).
 docs/BUS-HEALTH.md :: tighten :: nobody did. `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table;
 docs/BUS-HEALTH.md :: tighten :: the per-queue drain grants (CannObserv/broker#12) made worth having;
+# CR 12: the index line lost a clause the Rules line still carries (`requirepass` nobody's).
+AGENTS.md :: tighten :: - [docs/NODE-CREDENTIALS.md](docs/NODE-CREDENTIALS.md) - `acladmin`/`brokeradmin` as encrypted credentials: mint, rotate, what it does not protect; `requirepass` nobody's; *Loading the helpers*, the one recipe for `cred`/`rcli` (#132)
