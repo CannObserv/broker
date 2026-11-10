@@ -1,7 +1,9 @@
 # The LWW cap
 
 How the probe sets the length threshold for `content.fetch-policy` and
-`info.watch-status`, whose cap is partly a corpus size. The rest of the probe,
+`info.watch-status`, whose cap is partly a corpus size - and, since
+CannObserv/broker#139, `info.registry`'s, under the same rule
+([below](#inforegistry-the-same-rule-hourly)). The rest of the probe,
 and the caps that are mirrored whole, are [BUS-HEALTH.md](BUS-HEALTH.md).
 
 Moved out of BUS-HEALTH.md on 2026-10-07, when it ran past the per-doc
@@ -156,3 +158,41 @@ sizes F1's dual-run would have shown in Replicator's journal instead: one
 `ignoring a fetch policy without a generation` line per Watcher frame once a
 host held an Archiver frame (CannObserv/replicator#135, stated on
 CannObserv/archiver#366).
+
+## `info.registry`, the same rule hourly
+
+CannObserv/archiver#373 item 4 moved `info.registry` off a flat 50k onto this
+rule (CannObserv/broker#139): `max(1_000, 10 x set)`, the floor computed by the
+hourly snapshot alone, deltas carrying the last snapshot's cap. At 50k
+Watcher's groupless `0-0` boot replay read about 100 days of history; at 1,000,
+about two. Its three numbers are mirrored under their own names -
+`REGISTRY_PRODUCER_MAXLEN`, `REGISTRY_RETAINED_FULL_SETS`,
+`REGISTRY_REPUBLISH_PERIOD_SECONDS` - into `REGISTRY_FULL_SET_FLOOR`, not
+`LWW_FULL_SET_FLOOR`: equal values today, separate constants in Archiver.
+`ARCHIVER_REGISTRY_STREAM_MAXLEN` survives under the floor, raising the cap only.
+
+**Read high, which is the safe side for the ceiling.** The deltas and each
+deploy's republished set land between snapshots, so the span counts more than
+one set a period - `R > 1` above, small: the 24 h to 2026-11-10T13:51Z held 507
+entries for a 21-item set, about 22 an hour. A high set raises the threshold
+only once `10 x set` passes 1,000, from about 100 items.
+
+**`entries-removed` stays scoped by the default.** The cap in force is never
+under 1,000, so a removal leaving fewer is a fault whatever the set. Scoped by
+the floored cap instead, the high reading would put every hourly trim under it
+once the floor governs. Between 1,000 and the floored cap a removal goes
+unreported; the ceiling still catches a cap that stops being applied.
+
+**The narrow-window refusal, once the floor governs.** Ten snapshots plus the
+deltas and deploy sets between them have to span nine periods, or the window is
+refused and the mirrored 1,100 governs - a false length finding. That needs
+deltas past about a ninth of the set every hour; on 2026-11-10 they were under
+one in twenty-one.
+
+**The one-time trim.** Read 2026-11-10T13:51Z: `XLEN` 7,596, `entries-added`
+10,201, first entry 2026-09-08T22:35:16Z. Broker's mirror deploys first, so
+until Archiver's first publish under 1,000 the probe reports `stream-length`
+every tick (7,596 over 1,100; the span reads a set of about 5). The trim leaves
+1,000 to about 1,100 (`stream-node-max-entries` 100) and no `entries-removed`,
+since the stream ends at or over the scope. Archiver first would have reported
+`entries-removed` every hour against the 50k mirror instead.

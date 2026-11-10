@@ -66,6 +66,9 @@ from src.broker.bus_health import (
     LWW_RETAINED_FULL_SETS,
     LWW_WARN_LAST_ENTRY_AGE_SECONDS,
     REGISTRY_PRODUCER_MAXLEN,
+    REGISTRY_REPUBLISH_PERIOD_SECONDS,
+    REGISTRY_RETAINED_FULL_SETS,
+    REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS,
     STREAM_CHECKS,
     FullSetFloor,
     GroupCheck,
@@ -3584,12 +3587,15 @@ def _registry_continuity(**kw) -> list[bus_health.Finding]:
 
 
 def test_the_registry_row_carries_its_publish_cap() -> None:
-    """One cap, one spelling: the ceiling's `warn_length` and the floor's scope
-    are both `REGISTRY_PRODUCER_MAXLEN`. The only row: `info.changes` is
-    XTRIMmed by archiver, and once the LWW floor governs their cap is read as
-    an upper bound, so a stream at its true cap would read as under it."""
+    """One cap, one spelling: the ceiling's `warn_length`, the floor's default
+    and the scope of `entries-removed` are all `REGISTRY_PRODUCER_MAXLEN`. The
+    only row: `info.changes` is XTRIMmed by archiver, and the LWW streams are
+    not barred from an XDEL by anything this repo pins."""
+    check = _check_for(INFO_REGISTRY)
     assert {c.topic for c in STREAM_CHECKS if c.publish_maxlen is not None} == {INFO_REGISTRY}
-    assert _check_for(INFO_REGISTRY).publish_maxlen == REGISTRY_PRODUCER_MAXLEN
+    assert check.publish_maxlen == REGISTRY_PRODUCER_MAXLEN
+    assert check.full_set_floor is not None
+    assert check.full_set_floor.default_maxlen == check.publish_maxlen
 
 
 def test_the_live_registry_gap_is_quiet() -> None:
@@ -3625,8 +3631,8 @@ def test_a_registry_trim_hidden_by_growth_is_a_finding() -> None:
     findings = _registry_continuity(
         entries_added=5541,
         entries_added_prev=5441,
-        length=2836,
-        length_prev=2836,
+        length=836,
+        length_prev=836,
         max_deleted_entry_id="0-0",
     )
     assert [f.check for f in findings] == ["entries-removed"]
@@ -3639,8 +3645,8 @@ def test_an_xdel_is_named_as_one() -> None:
     findings = _registry_continuity(
         entries_added=5441,
         entries_added_prev=5441,
-        length=2835,
-        length_prev=2836,
+        length=835,
+        length_prev=836,
         max_deleted_entry_id="1788906916516-0",
     )
     assert [f.check for f in findings] == ["entries-removed"]
@@ -3673,8 +3679,23 @@ def test_a_publish_cap_must_agree_with_its_row() -> None:
             "t",
             warn_length=with_margin(LWW_PRODUCER_MAXLEN),
             full_set_floor=bus_health.LWW_FULL_SET_FLOOR,
-            publish_maxlen=LWW_PRODUCER_MAXLEN,
+            publish_maxlen=LWW_PRODUCER_MAXLEN + 1,
         )
+
+
+def test_a_publish_cap_beside_a_floor_is_the_floors_default() -> None:
+    """The cap in force is `max(default, 10 x set)`, never under the default,
+    so a removal that leaves fewer than the default is never the cap - whatever
+    the set. That is the one number `entries-removed` may be scoped by on a
+    floored row; the floored cap is read high and would fire at every trim
+    (CannObserv/broker#139)."""
+    check = StreamCheck(
+        "t",
+        warn_length=with_margin(LWW_PRODUCER_MAXLEN),
+        full_set_floor=bus_health.LWW_FULL_SET_FLOOR,
+        publish_maxlen=LWW_PRODUCER_MAXLEN,
+    )
+    assert check.publish_maxlen == LWW_PRODUCER_MAXLEN
 
 
 async def test_collect_reports_a_registry_trim_across_ticks(fake_redis) -> None:
@@ -3692,6 +3713,119 @@ async def test_collect_reports_a_registry_trim_across_ticks(fake_redis) -> None:
     await fake_redis.xadd(INFO_REGISTRY, {"k": "v"})
     findings, _ = await collect_broker_findings(fake_redis, previous_state=state)
     assert [f.check for f in findings if f.subject == INFO_REGISTRY] == ["entries-removed"]
+
+
+# --- info.registry: the full-set floor (CannObserv/broker#139, archiver#373) ---
+#
+# Archiver's cap moved from a flat 50k to the LWW rule, `max(1_000, 10 x set)`,
+# republished hourly. Read off the node 2026-11-10T13:51Z: XLEN 7,596,
+# entries-added 10,201, first entry 2026-09-08T22:35:16Z (1,503 h retained),
+# 507 entries in the last 24 h for a 21-item set.
+
+_REGISTRY_PERIOD_MS = int(REGISTRY_REPUBLISH_PERIOD_SECONDS * 1000)
+
+
+def _registry_spanning(periods: int) -> dict[str, int]:
+    return {"first_entry_ms": _NOW_MS - periods * _REGISTRY_PERIOD_MS, "last_entry_ms": _NOW_MS}
+
+
+def test_the_registry_floor_is_built_from_its_three_mirrors() -> None:
+    """Archiver's numbers for this stream, each with its own constant there
+    (`registry_snapshot.py`), so its own mirror here: the LWW floor's equal
+    values are a coincidence two owners can break apart."""
+    assert REGISTRY_PRODUCER_MAXLEN == 1_000
+    assert REGISTRY_RETAINED_FULL_SETS == 10
+    assert REGISTRY_REPUBLISH_PERIOD_SECONDS == 3600.0
+    floor = _check_for(INFO_REGISTRY).full_set_floor
+    assert floor is bus_health.REGISTRY_FULL_SET_FLOOR
+    assert floor.default_maxlen == REGISTRY_PRODUCER_MAXLEN
+    assert floor.retained_full_sets == REGISTRY_RETAINED_FULL_SETS
+    assert floor.republish_period_seconds == REGISTRY_REPUBLISH_PERIOD_SECONDS
+    assert floor is not bus_health.LWW_FULL_SET_FLOOR
+
+
+def test_the_registry_mirrors_name_archivers_constants_and_movers() -> None:
+    """A named source is not enough: name its movers (CannObserv/broker#42).
+    The override survives under the floor, where it can raise the cap only."""
+    module = "``src/core/changes/registry_snapshot.py``"
+    expected = {
+        "REGISTRY_PRODUCER_MAXLEN": (
+            "``DEFAULT_REGISTRY_STREAM_MAXLEN``",
+            "``ARCHIVER_REGISTRY_STREAM_MAXLEN``",
+        ),
+        "REGISTRY_RETAINED_FULL_SETS": ("``RETAINED_FULL_SETS``", "No mover but a commit"),
+        "REGISTRY_REPUBLISH_PERIOD_SECONDS": (
+            "``DEFAULT_SNAPSHOT_INTERVAL_SECONDS``",
+            "``ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL``",
+        ),
+    }
+    for name, (constant, mover) in expected.items():
+        docstring = " ".join(_constant_docstring(name).split())
+        assert constant in docstring, name
+        assert module in docstring, name
+        assert mover in docstring, name
+    assert "raise" in " ".join(_constant_docstring("REGISTRY_PRODUCER_MAXLEN").split())
+
+
+def test_the_registry_age_threshold_is_two_periods() -> None:
+    """One hourly snapshot named once; 2x its silence is a producer down."""
+    assert REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS == 2 * REGISTRY_REPUBLISH_PERIOD_SECONDS
+
+
+def test_the_registry_before_archivers_first_trim_is_a_length_finding() -> None:
+    """Broker deploys first, so until Archiver's first publish under the new
+    cap the 50k-era stream sits over the 1,100 ceiling. The span reads a set
+    of about 5 (older, smaller sets), so the default governs: the change
+    landing, reported every tick until the trim."""
+    (finding,) = evaluate_stream(
+        _check_for(INFO_REGISTRY), length=7_596, now_ms=_NOW_MS, **_registry_spanning(1_503)
+    )
+    assert finding.check == "stream-length"
+    assert "exceeds 1100" in finding.message
+
+
+def test_the_registry_after_archivers_one_time_trim_is_quiet() -> None:
+    """`MAXLEN ~ 1000` with 100-entry nodes leaves 1,000 to about 1,100, about
+    48 hourly periods at ~21 an hour. Neither the ceiling nor `entries-removed`
+    speaks: the stream ends at or over the default it is scoped by."""
+    check = _check_for(INFO_REGISTRY)
+    assert evaluate_stream(check, length=1_050, now_ms=_NOW_MS, **_registry_spanning(48)) == []
+    assert (
+        _registry_continuity(
+            entries_added=10_222,
+            entries_added_prev=10_201,
+            length=1_050,
+            length_prev=7_596,
+            max_deleted_entry_id="0-0",
+        )
+        == []
+    )
+
+
+def test_a_registry_set_past_100_raises_its_threshold() -> None:
+    """From 100 entries a set the floor governs: a 150-item set is capped at
+    1,500, and `MAXLEN ~` overshoots by under a node. A ceiling left at 1,100
+    would call that broken every tick (CannObserv/broker#44)."""
+    check = _check_for(INFO_REGISTRY)
+    assert evaluate_stream(check, length=1_560, now_ms=_NOW_MS, **_registry_spanning(10)) == []
+    (finding,) = evaluate_stream(check, length=41 * 150, now_ms=_NOW_MS, **_registry_spanning(40))
+    assert "full-set floor" in finding.message
+
+
+def test_a_registry_trim_at_its_floored_cap_is_not_entries_removed() -> None:
+    """Scoped by the default, not the floored cap: the set read off this
+    stream counts deltas and per-deploy sets, so it reads high, and a scope
+    raised by it would put every hourly trim under it."""
+    assert (
+        _registry_continuity(
+            entries_added=90_150,
+            entries_added_prev=90_000,
+            length=1_500,
+            length_prev=1_590,
+            max_deleted_entry_id="0-0",
+        )
+        == []
+    )
 
 
 def test_entries_added_going_backwards_is_a_reset() -> None:

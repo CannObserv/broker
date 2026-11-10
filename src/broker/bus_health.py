@@ -206,11 +206,25 @@ producer's pins can reach."""
 
 # 3x the period of silence means the producer is down, not slow.
 LWW_WARN_LAST_ENTRY_AGE_SECONDS = 3 * LWW_REPUBLISH_PERIOD_SECONDS
+REGISTRY_REPUBLISH_PERIOD_SECONDS = 3600.0
+"""Mirrors ``DEFAULT_SNAPSHOT_INTERVAL_SECONDS`` in archiver's
+``src/core/changes/registry_snapshot.py``: the hourly full snapshot of
+``info.registry``.
+
+**Movers, which no commit records:** ``ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL`` in
+``/etc/archiver/.env``, the unit, or archiver's gitignored repo ``.env``, which
+loads last and wins.
+
+Two consumers here: the age threshold below, and ``read_set_size``, which
+divides the retained window by it (CannObserv/broker#139). Shortened at home and
+not here, the set reads high by the same factor and the length check goes quiet
+by it; lengthened, the age check false-WARNs every tick."""
+
 # info.registry guarantees >=1 entry/hour on a non-empty corpus via archiver's
 # periodic snapshot; 2x that interval of silence means the producer is down. An
 # empty stream skips the age check entirely - the corpus-size guard
 # (CannObserv/archiver#147).
-REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 7200.0
+REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS = 2 * REGISTRY_REPUBLISH_PERIOD_SECONDS
 
 # How long the oldest entry a consumer group has NOT been delivered may sit
 # there before the consumer is judged gone (CannObserv/broker#20).
@@ -344,20 +358,33 @@ got it applied to four ``content.*`` streams it never trims
 loads last and wins. All unset 2026-09-23 (CannObserv/broker#42); archiver's
 ``docs/ENVIRONMENT.md`` obliges a note here when one is set."""
 
-REGISTRY_PRODUCER_MAXLEN = 50_000
+REGISTRY_PRODUCER_MAXLEN = 1_000
 """Mirrors ``DEFAULT_REGISTRY_STREAM_MAXLEN`` in archiver's
-``src/core/changes/registry_snapshot.py``.
+``src/core/changes/registry_snapshot.py``. 50k until CannObserv/archiver#373
+item 4 (CannObserv/broker#139): at 50k Watcher's boot replay from ``0-0`` read
+about 100 days of history.
 
 **Movers, which no commit records:** ``ARCHIVER_REGISTRY_STREAM_MAXLEN`` in
 ``/etc/archiver/.env``, the unit, or archiver's gitignored repo ``.env``, which
-loads last and wins. All unset 2026-09-23.
+loads last and wins. All unset 2026-09-23. Since archiver#373 it sits under the
+floor: it can raise the cap, never drop it below ``REGISTRY_RETAINED_FULL_SETS``
+copies of the set.
+
+**The default, not the whole rule**, as ``LWW_PRODUCER_MAXLEN`` is: the cap in
+force is ``max(1_000, 10 x set)``, set by the hourly snapshot alone, and this
+number governs while the set is under 100 entries - 21 on 2026-11-10.
+``REGISTRY_FULL_SET_FLOOR`` is the other half.
 
 Feeds the ceiling (``REGISTRY_WARN_LENGTH``) and bounds the scope of the
 ``entries-removed`` floor, whose trigger carries no threshold: a removal under
-this cap cannot be the cap (CannObserv/broker#42). The ceiling alone cannot
-report the cap reached, since ``MAXLEN ~`` holds the stream under cap + 10%.
-Moved down underneath this mirror, the floor fires at the real cap; moved up
-past the 10% margin, the ceiling does. Within the margin, neither."""
+this cap cannot be the cap (CannObserv/broker#42), whatever the set, since the
+floor only ever raises it. The ceiling alone cannot report the cap reached,
+since ``MAXLEN ~`` holds the stream under cap + 10%. Moved down underneath this
+mirror, the floor fires at the real cap; moved up past the 10% margin, the
+ceiling does. Within the margin, neither. The scope stays here once the floor
+governs rather than following the floored cap: the set read off this stream
+counts the deltas and each deploy's set, so it reads high, and a scope raised by
+it would put every hourly trim under it."""
 
 LWW_PRODUCER_MAXLEN = 500
 """The default cap on both LWW streams, cut from 50k by CannObserv/watcher#292.
@@ -404,6 +431,16 @@ warns early, lowered it goes stale-high. Unlike ``LWW_PRODUCER_MAXLEN`` it is a
 multiplier rather than a bound, so it is also what decides *when* the mirrored
 default stops governing at all.
 """
+
+REGISTRY_RETAINED_FULL_SETS = 10
+"""Mirrors archiver's ``RETAINED_FULL_SETS`` for ``info.registry``
+(``src/core/changes/registry_snapshot.py``, CannObserv/archiver#373 item 4): the
+floor's multiplier, the counterpart of ``LWW_RETAINED_FULL_SETS``. The same value
+as fetch-policy's, under its own constant on both sides, so either can move
+alone.
+
+**No mover but a commit.** Raised at home and not here, the threshold goes
+stale-low and warns early; lowered, stale-high (CannObserv/broker#139)."""
 
 CHANGES_WARN_LENGTH = with_margin(CHANGES_PRODUCER_MAXLEN)
 REGISTRY_WARN_LENGTH = with_margin(REGISTRY_PRODUCER_MAXLEN)
@@ -622,7 +659,8 @@ class FullSetFloor:
     stream's cap at ``retained_full_sets`` copies of it.
 
     The rule is the producer's - watcher's ``resolve_stream_maxlen``, archiver's
-    ``resolve_fetch_policy_maxlen`` - ``max(default, floor)``, where the caller
+    ``resolve_fetch_policy_maxlen`` and, since CannObserv/archiver#373, its
+    registry snapshot - ``max(default, floor)``, where the caller
     passes ``len(set) * RETAINED_FULL_SETS`` as the floor
     (CannObserv/watcher#292). Both halves have to be here, because mirroring
     only the first is what CannObserv/broker#44 was - a cap that is correct
@@ -751,8 +789,10 @@ class StreamCheck:
         ``warn_length`` on a never-trimmed row, and a ``full_set_floor`` that either sits on a
         never-trimmed row or disagrees with ``warn_length`` about the mirrored
         cap. A ``publish_maxlen`` is refused on the same three grounds as a
-        floor: a never-trimmed row, a row whose cap is read off the stream, and
-        a ``warn_length`` stating the cap a second way.
+        floor: a never-trimmed row, a floor whose default it is not, and a
+        ``warn_length`` stating the cap a second way. Beside a floor it is the
+        default: the cap in force is never under it, while the floored cap is
+        read off the stream and reads high (CannObserv/broker#139).
 
         A never-trimmed row with a ``warn_length`` is a threshold mirroring a
         cap that does not exist, which is CannObserv/broker#60: a breach could
@@ -824,10 +864,15 @@ class StreamCheck:
                 raise ValueError(
                     f"{self.topic} is never trimmed by design and carries a publish_maxlen"
                 )
-            if self.full_set_floor is not None:
+            if (
+                self.full_set_floor is not None
+                and self.publish_maxlen != self.full_set_floor.default_maxlen
+            ):
                 raise ValueError(
-                    f"{self.topic} carries a full-set floor, so the cap in force is read "
-                    "off the stream and a publish_maxlen would misstate it"
+                    f"{self.topic} carries a full-set floor over default_maxlen "
+                    f"{self.full_set_floor.default_maxlen} and a publish_maxlen of "
+                    f"{self.publish_maxlen} - the cap in force is never under the "
+                    "default, so the default is the one number the scope may name"
                 )
             if self.warn_length != with_margin(self.publish_maxlen):
                 raise ValueError(
@@ -861,6 +906,16 @@ LWW_FULL_SET_FLOOR = FullSetFloor(
     republish_period_seconds=LWW_REPUBLISH_PERIOD_SECONDS,
 )
 
+# info.registry's, since CannObserv/archiver#373 item 4 (CannObserv/broker#139).
+# Its own three mirrors: the hourly snapshot alone sets the floor, and the
+# deltas and per-deploy sets between snapshots make the span read the set high,
+# the safe direction for a ceiling.
+REGISTRY_FULL_SET_FLOOR = FullSetFloor(
+    default_maxlen=REGISTRY_PRODUCER_MAXLEN,
+    retained_full_sets=REGISTRY_RETAINED_FULL_SETS,
+    republish_period_seconds=REGISTRY_REPUBLISH_PERIOD_SECONDS,
+)
+
 
 STREAM_CHECKS: tuple[StreamCheck, ...] = (
     StreamCheck(INFO_CHANGES, warn_length=CHANGES_WARN_LENGTH),
@@ -868,6 +923,7 @@ STREAM_CHECKS: tuple[StreamCheck, ...] = (
         INFO_REGISTRY,
         warn_length=REGISTRY_WARN_LENGTH,
         warn_last_entry_age_seconds=REGISTRY_WARN_LAST_ENTRY_AGE_SECONDS,
+        full_set_floor=REGISTRY_FULL_SET_FLOOR,
         publish_maxlen=REGISTRY_PRODUCER_MAXLEN,
     ),
     # The four content.* rows below and content.blobs further down carry no
@@ -1629,8 +1685,9 @@ def evaluate_stream(
             diagnosis = (
                 "the retention cap for this stream is not being applied, or its producer "
                 f"republishes more often than every {floor.republish_period_seconds:.0f}s, "
-                # One producer holds each LWW stream's +xadd since broker#95, but a
-                # copy of it running twice reads exactly like a faster republish.
+                # One producer holds each full-set stream's +xadd since broker#95,
+                # but a copy of it running twice reads exactly like a faster
+                # republish.
                 "or a producer is publishing it twice: "
                 f"the trimmed window spans {set_reading.narrow_periods} republish periods "
                 f"where {floor.retained_full_sets} full sets need at least "

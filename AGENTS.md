@@ -130,9 +130,9 @@ nothing. The ACL declares no CI identity (#53).
 - **Mirrored constants.** The retention caps in `src/broker/bus_health.py`
   copy numbers owned elsewhere, each naming its source **and its movers**: an
   env var or gitignored `.env` moves one with no commit (broker#42,
-  watcher#319). The LWW set size is **read off the stream**, a corpus size
-  being the one mover no mirror covers (broker#44, #45, #51). Group names are
-  **derived** via co-core's `group_name()`, never spelled - the point of
+  watcher#319). A full set's size (LWW; `info.registry` since #139) is
+  **read off the stream**, a corpus size being the one mover no mirror covers
+  (broker#44, #45, #51). Group names are **derived** via co-core's `group_name()`, never spelled - the point of
   cannobserv#384 and why this repo depends on co-core. See
   `docs/BUS-HEALTH.md`, "Mirrored constants".
 - **No em dashes.** ASCII `-`.
@@ -204,7 +204,7 @@ appending a context measurement - pull before pushing. Review is the
 - [docs/NETWORK-PATHS.md](docs/NETWORK-PATHS.md) - where each participant runs, its measured latency and path, the accepted DERP risk, reconnects
 - [docs/CONSUMER-REGISTRATIONS.md](docs/CONSUMER-REGISTRATIONS.md) - the one-time reap of orphaned consumer registrations, and why it cannot recur
 - [docs/BUS-HEALTH.md](docs/BUS-HEALTH.md) - changing the probe or reading a finding: its stream, memory, DLQ, loss and disk checks, and why
-- [docs/LWW-CAP.md](docs/LWW-CAP.md) - the LWW length threshold, read off the stream
+- [docs/LWW-CAP.md](docs/LWW-CAP.md) - the full-set length threshold (LWW, `info.registry`), read off the stream
 - [docs/MEMORY-PROTECTION.md](docs/MEMORY-PROTECTION.md) - the `maxmemory` cap: that all three producers survive it, and why `noeviction` is load-bearing beyond refusing writes
 - [docs/UNDELIVERED-CONSUMERS.md](docs/UNDELIVERED-CONSUMERS.md) - a consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and what the probe compares instead
 - [docs/HOST-DISK.md](docs/HOST-DISK.md) - what else fills `/`, and the disk GC that prunes it
