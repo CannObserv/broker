@@ -177,8 +177,8 @@ Per tick it probes:
   means the queue was deleted rather than drained, so any evidence dump still on
   disk describes a stream that no longer exists;
 - **a `*.dlq` key a tick's `SCAN` no longer returns** (`stream-reset`), and
-  **entries a queue gained and lost between ticks** (`dlq-unobserved`): the same
-  section of [DLQ-DRAINING.md](DLQ-DRAINING.md);
+  **entries a queue gained and lost between ticks** (`dlq-unobserved`):
+  [DLQ-DRAINING.md](DLQ-DRAINING.md), *What the probe reports on a queue*;
 - `/` disk headroom (WARN at 90% used or under 2 GiB free) - which on this node
   is the AOF's headroom, and is the check whose meaning the move restored.
   What else shares `/`: [HOST-DISK.md](HOST-DISK.md).
