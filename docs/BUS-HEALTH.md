@@ -49,10 +49,8 @@ blast radius, which `maxmemory` bounds and the probe watches.
 **`info.registry` retention is different in kind** (CannObserv/archiver#141): consumers
 boot by replaying from `0-0`, so the floor is "at least one full snapshot plus
 the deltas since" - a consumer contract, not operator housekeeping. It is
-capped on every publish via `BusPublish.maxlen`: `max(1_000, 10 x the full set)`
-since CannObserv/archiver#373 (50k before; CannObserv/broker#139), with
-`ARCHIVER_REGISTRY_STREAM_MAXLEN` able to raise it only - never the
-`info.changes` number - and **`XTRIM`med by nobody** - not archiver's drain loop,
+capped on every publish via `BusPublish.maxlen` at `max(1_000, 10 x set)`
+(CannObserv/archiver#373; `ARCHIVER_REGISTRY_STREAM_MAXLEN` raises it only) and **`XTRIM`med by nobody** - not archiver's drain loop,
 and not a person at a `redis-cli`: the operator's `acladmin` trims `*.dlq`
 keys only (CannObserv/broker#34, #52), and the probe's `brokeradmin` trims
 nothing. Snapshot period: `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL`,
@@ -92,9 +90,8 @@ Per tick it probes:
   cap + 10%** - so a breach means the retention mechanism broke, not that
   traffic grew. Three caps apply and they are not interchangeable: 110k for
   `info.changes` on archiver's operator-side `XTRIM`
-  (`ARCHIVER_REDIS_STREAM_MAXLEN`), for `info.registry` (capped on publish
-  instead) `max(1_000, 10 x the hourly set)` + 10% - 1,100 until a set passes
-  ~100 items (CannObserv/broker#139) - and for the two LWW streams
+  (`ARCHIVER_REDIS_STREAM_MAXLEN`), `max(1_000, 10 x set)` + 10% for
+  `info.registry` (capped on publish instead), and for the two LWW streams
   `max(500, 10 x the set republished)` + 10% - the 550 while the sets are small,
   which is the state the node is in today, and the floor past ~50 entries per
   set. See [LWW-CAP.md](LWW-CAP.md) and *Mirrored constants*
@@ -310,12 +307,9 @@ a hand-run trim took on 2026-09-08 (CannObserv/archiver#247) is a constant
 baseline. `max-deleted-entry-id` names the removal: `XTRIM` leaves it `0-0`
 and `XDEL` moves it (7.0.15). The cap bounds the scope because the ceiling
 cannot: cap + 10% sits above where `MAXLEN ~` holds the stream, so unbounded,
-every trim at the cap would be a finding. Since CannObserv/broker#139 the
-registry carries a full-set floor too, and the scope stays the mirrored
-default, not the floored cap: the cap in force is never under the default,
-while the floored cap is read as an upper bound ([LWW-CAP.md](LWW-CAP.md)), so
-at the true cap the stream would read as under it and every trim would be a
-finding. The LWW streams get no scope for the same reason.
+every trim at the cap would be a finding. A floored cap is read as an upper
+bound, so it is never the scope: the LWW streams get none, and the registry's
+stays its default ([LWW-CAP.md](LWW-CAP.md), CannObserv/broker#139).
 
 Both baselines are carried between oneshot runs in the same `StateDirectory`
 file as the pending counters, under `@`-prefixed keys, and an unreachable broker
@@ -328,15 +322,15 @@ against nothing and a wipe *during* the outage would go unseen.
 retention cap that stream is *supposed* to be held at, plus 10%. Before
 CannObserv/archiver#193 D6 two of those caps were **imported**; across a repo boundary
 they cannot be, so all three are mirrored here with their owner named - and,
-since CannObserv/broker#44, the two further numbers the LWW cap's floor is made
-of, and `info.registry`'s own pair since CannObserv/broker#139:
+since CannObserv/broker#44 (#139), the two further numbers each floor is made
+of:
 
 | Constant in `src/broker/bus_health.py` | Source of truth |
 |---|---|
 | `CHANGES_PRODUCER_MAXLEN` (100k) | `DEFAULT_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/publisher.py` - **reaches `info.changes` only**, the one stream in archiver's `trim_topics` allowlist; `FACT_PRODUCER_MAXLEN` until CannObserv/broker#60, a name that got it lent to four `content.*` streams it never trims |
-| `REGISTRY_PRODUCER_MAXLEN` (1,000; 50k until CannObserv/broker#139) | `DEFAULT_REGISTRY_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/registry_snapshot.py` - the *default* under `info.registry`'s floor, as the LWW 500 is |
-| `REGISTRY_RETAINED_FULL_SETS` (10) | Archiver's `RETAINED_FULL_SETS` for `info.registry`, same module (CannObserv/archiver#373 item 4) - its own constant, not the LWW one |
-| `REGISTRY_REPUBLISH_PERIOD_SECONDS` (3600) | `DEFAULT_SNAPSHOT_INTERVAL_SECONDS`, same module; mover `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL` - half the registry's 7,200 s age threshold |
+| `REGISTRY_PRODUCER_MAXLEN` (1,000; 50k until #139) | `DEFAULT_REGISTRY_STREAM_MAXLEN`, `CannObserv/archiver:src/core/changes/registry_snapshot.py` - the floor's default |
+| `REGISTRY_RETAINED_FULL_SETS` (10) | Archiver's `RETAINED_FULL_SETS`, same module - not the LWW one |
+| `REGISTRY_REPUBLISH_PERIOD_SECONDS` (3600) | `DEFAULT_SNAPSHOT_INTERVAL_SECONDS`, same module; mover `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL` - half the 7,200 s age threshold |
 | `LWW_PRODUCER_MAXLEN` (500) | Archiver's `DEFAULT_FETCH_POLICY_STREAM_MAXLEN` on `content.fetch-policy`, mover `ARCHIVER_FETCH_POLICY_STREAM_MAXLEN` (since F1 and CannObserv/broker#95, #135); Watcher's `DEFAULT_WATCH_STATUS_STREAM_MAXLEN` on `info.watch-status` (CannObserv/watcher#292) |
 | `LWW_RETAINED_FULL_SETS` (10) | Archiver's `RETAINED_FULL_SETS` on `content.fetch-policy`, Watcher's on `info.watch-status` - the multiplier on the floor the line above is only the *default* of |
 | `LWW_REPUBLISH_PERIOD_SECONDS` (300) | Archiver's `REPUBLISH_PERIOD_SECONDS` on `content.fetch-policy`; Watcher's `*/5` on `info.watch-status` (CannObserv/watcher#264, #265; mover `WATCHER_WATCH_STATUS_REPUBLISH_CRON`) - already load-bearing as 3x the LWW age threshold before it was spelled out |
