@@ -174,7 +174,7 @@ about two. Its three numbers are mirrored under their own names -
 **Read high, which is the safe side for the ceiling.** The deltas and each
 deploy's republished set land between snapshots, so the span counts more than
 one set a period - `R > 1` above, small: the 24 h to 2026-11-10T13:51Z held 507
-entries for a 21-item set, about 22 an hour. A high set raises the threshold
+entries for a 21-item set, 21.1 an hour, which the span rounds up to 22. A high set raises the threshold
 only once `10 x set` passes 1,000, from about 100 items.
 
 **`entries-removed` stays scoped by the default.** The cap in force is never
@@ -186,13 +186,14 @@ unreported; the ceiling still catches a cap that stops being applied.
 **The narrow-window refusal, once the floor governs.** Ten snapshots plus the
 deltas and deploy sets between them have to span nine periods, or the window is
 refused and the mirrored 1,100 governs - a false length finding. That needs
-deltas past about a ninth of the set every hour; on 2026-11-10 they were under
-one in twenty-one.
+deltas past about a ninth of the set every hour; on 2026-11-10 they were about
+3 a day against a 21-item set.
 
 **The one-time trim.** Read 2026-11-10T13:51Z: `XLEN` 7,596, `entries-added`
 10,201, first entry 2026-09-08T22:35:16Z. Broker's mirror deploys first, so
 until Archiver's first publish under 1,000 the probe reports `stream-length`
-every tick (7,596 over 1,100; the span reads a set of about 5). The trim leaves
+every tick (7,596 over 1,100; the span reads a set of 6, 7,596 over 1,503
+periods rounded up). The trim leaves
 1,000 to about 1,100 (`stream-node-max-entries` 100) and no `entries-removed`,
 since the stream ends at or over the scope. Archiver first would have reported
 `entries-removed` every hour against the 50k mirror instead.
