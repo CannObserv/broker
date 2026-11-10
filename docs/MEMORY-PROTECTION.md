@@ -66,7 +66,7 @@ or the headless-Watcher pair, `info.watch-events` and `info.watch-check`:
 no producer passes a `maxlen` (CannObserv/watcher#317, CannObserv/replicator#106;
 the processing pair has none by contract, CannObserv/broker#62, nor have
 `content.persist` and `content.capture`, CannObserv/broker#64, #114, nor a fact Watcher publishes,
-CannObserv/watcher#327) and archiver's
+CannObserv/watcher#327, nor `info.watch-check`'s issuer, CannObserv/archiver#370) and archiver's
 trim allowlist is `info.changes` alone (CannObserv/archiver#239).
 `maxmemory` is their only bound, so the probe gives them no `XLEN` threshold -
 `test_the_probe_and_the_inventory_agree_on_which_streams_have_no_cap`, in
