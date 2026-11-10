@@ -268,3 +268,4 @@ docs/RECOVERY.md :: retarget :: predicts, observed - not a 403 from the missing 
 # and the moved disposal paragraph ends a paragraph, not a list item (`;` -> `.`).
 docs/BUS-HEALTH.md :: retarget :: named and the entries captured; see [DLQ-DRAINING.md](DLQ-DRAINING.md).
 docs/BUS-HEALTH.md :: tighten :: nobody did. `XTRIM` stays granted for the retention trims in the [STREAMS.md](STREAMS.md) table;
+docs/BUS-HEALTH.md :: tighten :: the per-queue drain grants (CannObserv/broker#12) made worth having;

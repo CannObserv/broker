@@ -116,7 +116,7 @@ left the key at depth 0.
 
 ## What the probe reports on a queue
 
-Beside the depth finding above, every tick of
+Beside the depth finding (*Who drains a DLQ*, the Broker role), every tick of
 [BUS-HEALTH.md](BUS-HEALTH.md)'s probe reports:
 
 - **a `*.dlq` key that a tick's `SCAN` no longer returns**, after a tick that
@@ -133,7 +133,7 @@ Beside the depth finding above, every tick of
   `entries-added` are read from one `XINFO STREAM` rather than an `XLEN` and an
   `XINFO`, so an `XADD` cannot land between them and push the floor above the
   truth. It makes the *existence* of a drained failure undeniable, which is what
-  the per-queue drain grants (CannObserv/broker#12) made worth having;
+  the per-queue drain grants (CannObserv/broker#12) made worth having.
 
 The disposal primitive is `XDEL <queue> <id>`, per entry. It is deliberately not
 `XTRIM MAXLEN 0`, which was the only tool the broker had before
