@@ -167,7 +167,7 @@ connected process that has stopped reading looks identical to a healthy one.
 ## Who owns the threshold
 
 The `content.*` and `info.watch-*` streams carry no retention row
-(AGENTS.md, *Rules*: nothing trims them, and this repo owns no cap). Their
+([AGENTS.md](../AGENTS.md), *Rules*: nothing trims them, and this repo owns no cap). Their
 groups *are* probed - the old unqualified "never `content.blobs`" was
 archiver's role boundary, retired by broker#1 Phase 5 because a neutral node
 has no role to be out of bounds of. A group's `warn_undelivered_age_seconds`
