@@ -51,6 +51,8 @@ One over the true set in both rows, which is the rounding working: the reading
 is an upper bound on the set and therefore on the cap, and at these sizes it
 changes nothing at all - `10 x 5` is far under 500.
 
+The producer's end of the mirror is on notice:
+
 - CannObserv/watcher#319 - the notice for the other end of #44's mirror:
   `RETAINED_FULL_SETS` and the `*/5` republish period are copied into
   `src/broker/bus_health.py`, and the period moves from watcher's *environment*
