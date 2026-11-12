@@ -88,7 +88,7 @@
     {
       "name": "project-config",
       "path": "./pyproject.toml",
-      "description": "Dependency and tool contract: Python floor, the co-core wheelhouse find-links, ruff rule set including the no-inline-imports convention, and pytest config."
+      "description": "Dependency and tool contract: Python floor, the co-core co-pypi index pin, ruff rule set including the no-inline-imports convention, and pytest config."
     }
   ]
 }

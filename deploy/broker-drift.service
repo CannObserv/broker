@@ -28,8 +28,8 @@ Environment=BROKER_DRIFT_MONITOR_ID=01M5CVMEFPKRGP2Y48F7QTPP7D
 # monitor's grace absorbs one missed run.
 TimeoutStartSec=90
 
-# No EnvironmentFile=: /etc/broker/.env names the probe's Redis user and carries
-# the operator's wheelhouse key, and status.env is the probe's copy of the
+# No EnvironmentFile=: /etc/broker/.env names the probe's Redis user, and
+# status.env is the probe's copy of the
 # co-status key. Only that key, root 0400 in a file of its own, handed over at
 # start. SetCredential= is the fallback when the file is missing: the check then
 # runs, logs that it has no key, and exits 1. No Redis credential of any kind.

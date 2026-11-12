@@ -418,8 +418,8 @@ once its `WorkingDirectory=` is `/srv/broker/live`.
 sudo install -d -o root -g root -m 755 /srv/broker
 
 # From the checkout, as exedev. Never as root, and never from a release, which
-# has no .git. It syncs the wheelhouse itself, with the key path in /etc/broker/.env.
-# The script and that sync run from the checkout's working tree; the release is
+# has no .git. Its uv sync takes the co-pypi token from scripts/co-pypi.sh (#144).
+# The script and that wrapper run from the checkout's working tree; the release is
 # `git archive` of the commit. So ~/broker stays on a clean main: a branch or an
 # edit there changes the deploy's logic, never what it deploys (#111).
 ~/broker/scripts/deploy.sh                 # origin/main
@@ -705,32 +705,41 @@ rewrite time, which `maxmemory` also caps.
   (CannObserv/archiver#195). `localhost` rather than `broker`, because this
   probe runs *on* the broker and `redis.conf` binds loopback as well as the
   tailnet address, deliberately.
-- `GOOGLE_APPLICATION_CREDENTIALS` - the read-only `co-pypi-reader` key. **It
-  is the operator's and the deploy's, not the probe's:** it authenticates the
-  wheelhouse sync in AGENTS.md and `scripts/deploy.sh`'s, and it is here so
-  either is one `source` away. The unit unsets it. The probe runs a release
-  whose venv was resolved at build, so nothing resolves at start
+- `GOOGLE_APPLICATION_CREDENTIALS` - the `co-pypi-reader` key's path, for the
+  wheelhouse sync #144 retired. **Nothing in a current commit reads it:**
+  `scripts/co-pypi.sh` names its own key. It stays while a pre-#144 commit may
+  need building (below); the unit unsets it either way, and the probe runs a
+  release whose venv was resolved at build, so nothing resolves at start
   (CannObserv/broker#37, #107).
 
-**The deploy syncs the wheelhouse; no unit does.** CI syncs on every run.
-`scripts/deploy.sh` syncs before each build and copies into the release only the
-wheels `uv.lock` names. In the checkout the sync is manual, and it is due before any `uv sync`
-or `uv run` there that follows a `co-core` pin change. Miss it and that command
-fails with a resolution error.
+**co-core comes from the co-pypi index; no unit resolves anything** (#144).
+co-core is pinned to cannobserv's Artifact Registry index, `explicit`, in
+`pyproject.toml`. Each build's `uv sync --locked` runs through the checkout's
+`scripts/co-pypi.sh`, which mints a one-hour access token from
+`/etc/broker/co-pypi-reader.json` (`root:exedev`, `0640`; `BROKER_CO_PYPI_KEY`
+overrides the path) and hands it to that one uv. In the checkout, the same
+wrapper runs any sync that downloads and any `uv lock` (AGENTS.md). A key that
+mints nothing fails the build before anything switched.
 
-**A locked wheel is held to a committed sha256** (CannObserv/broker#125).
-uv records no digest for a wheelhouse file, so `uv sync --locked` installs any
-file with that name. `pyproject.toml`'s `[tool.broker.wheelhouse-sha256]` pins
-one per file `uv.lock` names, and a pin change moves it in the same diff. The
-sync fetches a file again when it misses its pin, and refuses a download that
-misses too. The deploy refuses a release whose copy misses its pin, journaled
-(`refused <sha12>: <file> has sha256 ...`), before `uv sync`, and journals a
-pass as `wheelhouse for <sha12>: <files> match their pinned sha256`. Each digest is of
-a file fetched over GCS's TLS: it stops a later swap, local or in transit, not
-one made at pin time.
+**A locked file is held to the sha256 the index served** (CannObserv/broker#125,
+#144). `uv.lock` records one per co-core file and `uv sync --locked` refuses a
+download that misses it, which retired #125's hand-kept
+`[tool.broker.wheelhouse-sha256]` table; 0.37.1's index digests equalled the
+table's, read 2026-11-12. #125's limit stands: a digest is what the index served
+at lock time, so it stops a later swap, local or in transit, not one made before
+the lock. cannobserv's publish reads each upload back under its local sha256
+(cannobserv#554).
 
-**GCS's TLS trust is certifi's bundle, not the system store** (CannObserv/broker#124).
-The backup, the restore and the wheelhouse sync reach GCS over `requests`, which
+**A pre-#144 commit is refused, and built only by its own `deploy.sh`.** Its
+lock names `.wheelhouse`, which this deploy no longer syncs:
+`refused <sha12>: its uv.lock resolves co-core from ./.wheelhouse (before #144)`,
+journaled, before any sync. A kept release is reused and never rebuilt, so a
+rollback to one needs nothing. One no longer kept is built from a worktree of
+its own commit, by that commit's `scripts/deploy.sh`, which syncs the wheelhouse
+with the key path in `/etc/broker/.env` - the reason that line is still there.
+
+**Google's TLS trust is certifi's bundle, not the system store** (CannObserv/broker#124).
+The backup, the restore and the co-pypi token mint reach Google over `requests`, which
 verifies against the venv's `certifi`, so a system-store remediation such as
 exe.dev's for eMudhra never reaches them. A CA distrust there is
 `uv lock --upgrade-package certifi` and a deploy; `pyproject.toml`'s

@@ -60,7 +60,7 @@ RuntimeDirectoryMode=0700
 # (systemd adds both to the writable set) and a private /tmp; no new privileges
 # and no capability. /home is not visible at all: the release reaches nothing
 # under it, and the checkout's .env holds the cohort's tokens. /etc/broker holds
-# other identities' keys - the probe's env, the wheelhouse reader, the co-status
+# other identities' keys - the probe's env, the co-pypi reader, the co-status
 # check-in - and is hidden whole, as are the node users' encrypted credentials
 # ('-': absent is no failure). Defence in depth: no file under either is
 # readable by this user anyway. The writer key still loads: the manager reads a

@@ -202,17 +202,17 @@ under OOM` column in [`docs/STREAMS.md`](docs/STREAMS.md).
 
 Python >= 3.12, uv, pytest, ruff.
 
-`co-core` resolves from a local wheelhouse (`./.wheelhouse`, gitignored), not
-PyPI. Populate it before `uv sync`/`uv run` or resolution fails:
+`co-core` resolves from cannobserv's private co-pypi index (Artifact Registry),
+never PyPI (#144). A sync that downloads, or a re-lock, needs the reader's token,
+which `scripts/co-pypi.sh` mints from `/etc/broker/co-pypi-reader.json`:
 
 ```bash
-set -a; . /etc/broker/.env; set +a   # GOOGLE_APPLICATION_CREDENTIALS=co-pypi-reader key
-uv run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py
-uv sync --group dev
+bash scripts/co-pypi.sh uv sync --locked --group dev
 uv run pytest
 uv run ruff check .
 ```
 
 CI authenticates keyless via Workload Identity Federation instead - the
-read-scoped `github-ci` provider impersonating the `objectViewer`-only
-`co-pypi-reader` service account.
+read-scoped `github-ci` provider impersonating the same `co-pypi-reader`
+service account, whose access token only the `uv sync` step gets
+([docs/CI.md](docs/CI.md), *The co-pypi index*).

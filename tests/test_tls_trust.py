@@ -1,7 +1,8 @@
 """The GCS clients' TLS trust is certifi's bundle; it must not trust emSign ECC G3 (#124).
 
-The backup, the restore and the wheelhouse sync reach GCS through ``google-auth`` /
-``google-cloud-storage`` over ``requests``, which verify against ``certifi.where()``,
+The backup, the restore and the co-pypi token mint (#144) reach Google through
+``google-auth`` / ``google-cloud-storage`` over ``requests``, which verify against
+``certifi.where()``,
 not the system store, so exe.dev's system-store remediation of the eMudhra
 compromise doesn't reach them (https://exe.dev/security/emudhra-compromise).
 certifi 2026.10.19 drops ``emSign ECC Root CA - G3``, the revoked intermediates'

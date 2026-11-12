@@ -21,15 +21,15 @@ TDD required. Red -> Green -> Refactor.
 
 ## Environment & Tooling
 
-Python >=3.12, uv, pytest, ruff. **`co-core` resolves from a local wheelhouse**
-(`./.wheelhouse`, gitignored), not PyPI. Populate it before `uv sync`/`uv run`
-or resolution fails. The deploy syncs it for each release; the dev tree syncs
-by hand, again after any `co-core` pin change (broker#37):
+Python >=3.12, uv, pytest, ruff. **`co-core` resolves from the private co-pypi
+index** (cannobserv's Artifact Registry), never PyPI (#144). Any uv command that
+downloads or re-locks needs the reader's token: run it through
+`scripts/co-pypi.sh`, which mints one from `/etc/broker/co-pypi-reader.json`
+and hands it to that uv alone. Once synced, `uv run` needs none:
 
 ```bash
-set -a; . /etc/broker/.env; set +a   # GOOGLE_APPLICATION_CREDENTIALS
-uv run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py
-uv sync --group dev
+bash scripts/co-pypi.sh uv sync --locked --group dev   # again after a pin change
+bash scripts/co-pypi.sh uv lock                        # a pin change itself
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
 ```
@@ -149,8 +149,8 @@ Types: feat, fix, refactor, docs, test, chore.
 deploy/          the node's artifacts + the probe, backup and drift units;
                  see deploy/README.md
 docs/            one reference doc per topic - see Detail Docs below
-scripts/         deploy.sh (#106); wheelhouse sync (runs before `uv sync`, must not
-                 import the project); audit_lock.sh (#86)
+scripts/         deploy.sh (#106); co-pypi.sh + co_pypi_token.py (the index token,
+                 #144; must not import the project); audit_lock.sh (#86)
 src/broker/      bus_health.py (the probe), backup.py, restore.py,
                  revision.py (the build id, #105), drift.py (#110), checkin.py
                  (co-status), logging.py (service-local, not a mirror)
@@ -205,7 +205,7 @@ appending a context measurement - pull before pushing. Review is the
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
 - [docs/NODE-CREDENTIALS.md](docs/NODE-CREDENTIALS.md) - `acladmin`/`brokeradmin` as encrypted credentials: mint, rotate, limits; *Loading the helpers*, the one `cred`/`rcli` recipe (#132)
 - [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, [deploy/README.md](deploy/README.md)
-- [docs/CI.md](docs/CI.md) - the shellcheck hook, action pins, Dependabot and how its PRs land
+- [docs/CI.md](docs/CI.md) - the shellcheck hook, action pins, Dependabot and how its PRs land; the co-pypi index and who holds its token (#144)
 - [docs/SKILLS.md](docs/SKILLS.md) - the vendored agent skills, their refresh hook, the context cadence
 - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) - semantic search over this repo and its four siblings: the tool table, the prefetch, graph health, index scope
 

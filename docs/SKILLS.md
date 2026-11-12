@@ -120,9 +120,9 @@ Why each differs from the old gate is a row in its
 `broker`, which does not import: hatch packages `src`, so
 `.skills/import-targets` names `src.broker`. Detecting no framework also drops
 `deploy/` and `uv.lock` from doc-check's defaults, so
-`.skills/doc-sensitive-paths` and `.skills/doc-sections` restore them. Like the old gate, it never syncs the
-wheelhouse: a fresh worktree runs `scripts/sync_wheelhouse.py` first, or the
-first `uv run` fails. The review's Alembic, OpenAPI and route steps key on
+`.skills/doc-sensitive-paths` and `.skills/doc-sections` restore them. Like the old gate, it never syncs from the
+co-pypi index: a fresh worktree runs `bash scripts/co-pypi.sh uv sync --locked
+--group dev` first, or the first `uv run` fails for want of a token (#144). The review's Alembic, OpenAPI and route steps key on
 paths broker does not have, and its `deploy/` checks (unit ordering,
 `OnFailure=`, bounded restarts) fit it well. Upstream retired only the
 shipping variants.

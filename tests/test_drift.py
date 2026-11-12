@@ -129,7 +129,8 @@ class TestCounts:
             "skills-vendor/gregoryfoster-skills",
             ".skills/context-loss-ok",
             # deploy.sh runs the checkout's copy, never the release's.
-            "scripts/sync_wheelhouse.py",
+            "scripts/co-pypi.sh",
+            "scripts/co_pypi_token.py",
             "scripts/audit_lock.sh",
             ".gitmodules",
             "srcery/x.py",

@@ -45,7 +45,9 @@ STATE_DIRECTORY = Path("/var/lib/broker-bus-health")
 # The file the probe shares with the operator: 0640 root:exedev, so readable by
 # the account these tests run as, by design.
 SHARED_ENV = Path("/etc/broker/.env")
-WHEELHOUSE_KEY = "GOOGLE_APPLICATION_CREDENTIALS"
+# The retired wheelhouse sync's key variable (#144): unset whether or not
+# /etc/broker/.env still assigns it.
+READER_KEY = "GOOGLE_APPLICATION_CREDENTIALS"
 # systemd's own search path for encrypted credentials, 0700 root. The probe's
 # password is here, encrypted to this host (CannObserv/broker#52).
 CREDSTORE = Path("/etc/credstore.encrypted")
@@ -305,16 +307,15 @@ def test_the_units_name_only_reads_the_probe_issues() -> None:
         )
 
 
-def test_no_unit_runs_the_wheelhouse_sync() -> None:
-    """The node's wheelhouse is refreshed by hand, and the docs say so
-    (CannObserv/broker#37).
+def test_no_unit_resolves_dependencies() -> None:
+    """A release's venv is resolved at build, by ``scripts/deploy.sh``; no unit
+    resolves anything at start (CannObserv/broker#37, #144).
 
-    ``scripts/sync_wheelhouse.py`` came from archiver, whose service does run
-    it as an ``ExecStartPre``; no broker unit ever has, and the docstring that
-    said otherwise was archiver's. Adding one would put a GCS call in front of
-    every probe tick, for an input only a pin change moves, in a probe that
-    exists to report while other things are down. Whoever wants it anyway
-    arrives here, and the docs that say "manual" change with it.
+    The retired ``scripts/sync_wheelhouse.py`` came from archiver, whose service
+    ran it as an ``ExecStartPre``; no broker unit ever did. Its successor,
+    ``scripts/co-pypi.sh``, is the same: in a unit it would put a token mint and
+    an index read in front of every probe tick, for an input only a pin change
+    moves, in a probe that exists to report while other things are down.
     """
     units = sorted(_DEPLOY.glob("*.service"))
     assert units, "the glob found no units - the guard would pass by finding nothing"
@@ -322,9 +323,15 @@ def test_no_unit_runs_the_wheelhouse_sync() -> None:
     # deploy/ already ships them.
     dropins = sorted(_DEPLOY.glob("*.service.d/*.conf"))
     running = [
-        str(u.relative_to(_DEPLOY)) for u in units + dropins if "sync_wheelhouse" in u.read_text()
+        str(u.relative_to(_DEPLOY))
+        for u in units + dropins
+        if re.search(
+            r"^[^#\n]*(sync_wheelhouse|co-pypi\.sh|co_pypi_token|uv (sync|lock))",
+            u.read_text(),
+            re.MULTILINE,
+        )
     ]
-    assert not running, f"units running the wheelhouse sync: {running}"
+    assert not running, f"units resolving dependencies: {running}"
 
 
 def test_the_unit_loads_environment_only_from_etc_broker() -> None:
@@ -342,19 +349,19 @@ def test_the_unit_loads_environment_only_from_etc_broker() -> None:
     assert not stray, f"environment files outside /etc/broker/: {stray}"
 
 
-def test_the_unit_unsets_the_wheelhouse_key() -> None:
-    """``GOOGLE_APPLICATION_CREDENTIALS`` is the operator's, not the probe's
+def test_the_unit_unsets_the_reader_key() -> None:
+    """``GOOGLE_APPLICATION_CREDENTIALS`` is never the probe's
     (CannObserv/broker#37).
 
-    It shares ``/etc/broker/.env`` with ``BROKER_REDIS_URL`` so the manual sync,
-    and ``scripts/deploy.sh``'s, is one ``source`` away. The unit has no use for
-    it: the release's venv was resolved at build, nothing resolves at start
-    (#107), and the probe imports no storage SDK. Unset rather than split into a
-    second file, so the operator's command stays what AGENTS.md says it is.
+    ``/etc/broker/.env`` carried it for the wheelhouse sync, retired by #144;
+    ``scripts/co-pypi.sh`` names its own key. Until the line is gone from the
+    node, and after, the unit has no use for it: the release's venv was resolved
+    at build, nothing resolves at start (#107), and the probe imports no storage
+    SDK.
     """
     unset = " ".join(_directive(REPO_SERVICE.read_text(), "UnsetEnvironment")).split()
-    assert WHEELHOUSE_KEY in unset
-    assert WHEELHOUSE_KEY not in _variables_the_probe_reads(), (
+    assert READER_KEY in unset
+    assert READER_KEY not in _variables_the_probe_reads(), (
         "the probe now reads the key it unsets - it would start without it"
     )
 

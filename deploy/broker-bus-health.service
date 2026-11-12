@@ -27,13 +27,13 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 
 # BROKER_REDIS_URL, which names the user and never the password
 # (CannObserv/broker#52; tests/deploy/test_bus_health_units.py reads the live
-# file for one). The file also carries GOOGLE_APPLICATION_CREDENTIALS, the
-# read-only co-pypi-reader key, and that one is the OPERATOR'S: it is what the
-# manual wheelhouse sync in AGENTS.md and scripts/deploy.sh's sync authenticate
-# with, and it shares this file so either is one `source` away. No unit runs
-# the sync. This one has no use for the key - the release's venv was resolved
-# at build, nothing resolves at start, and the probe imports no storage SDK -
-# so it is unset rather than inherited (CannObserv/broker#37).
+# file for one). The file may also carry GOOGLE_APPLICATION_CREDENTIALS, the
+# read-only co-pypi-reader key's path: the retired wheelhouse sync's, which
+# nothing reads since #144 (scripts/co-pypi.sh names its own key). This unit
+# has no use for it - the release's venv was resolved at build, nothing
+# resolves at start, and the probe imports no storage SDK - so it is unset
+# rather than inherited, whether or not the line is still there
+# (CannObserv/broker#37).
 #
 # Nothing from the dev tree's .env either. It carries the cohort's GitHub
 # tokens and an Anthropic key, none of which the probe reads.

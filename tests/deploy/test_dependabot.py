@@ -6,8 +6,12 @@ A mistyped Dependabot config stops producing PRs without erroring anywhere a
 person looks, so each property is pinned here. CannObserv/watcher's
 ``tests/ci/test_dependabot.py`` is the template, cut to what broker runs.
 
-* **``github-actions`` only.** ``uv`` is out for #86's reason: co-core resolves
-  from the private wheelhouse, which Dependabot's updater cannot sync.
+* **``github-actions`` only.** No ``uv`` version updates: co-core's pin moves
+  as a registration (#104, #114), never a weekly PR. Security updates need no
+  entry and move ``uv.lock`` regardless; they resolve co-core from the co-pypi
+  index over OIDC once an org owner admits broker (#144, ``docs/CI.md``). No
+  ``registries:`` key either way: the org registry is supplied to an admitted
+  repository's jobs (cannobserv ``docs/DEPENDABOT.md``).
 * **The generated cadence workflow is excluded.** ``install-cadence.sh``
   renders ``context-cadence.yml``, and a re-render reverts any bump made in it
   (gregoryfoster/skills#373). ``exclude-paths`` documents no ecosystem limit,
@@ -80,9 +84,16 @@ def test_config_is_version_2():
 def test_only_github_actions_is_configured():
     ecosystems = re.findall(r"package-ecosystem: \"?([\w-]+)", _config())
     assert ecosystems == ["github-actions"], (
-        f"{ecosystems}: a `uv` block needs the private wheelhouse reachable from "
-        "Dependabot's updater (#86) - its own issue, not this file's"
+        f"{ecosystems}: a `uv` block is an operator's call (#144), with an `ignore:` "
+        "for co-core, whose pin moves as a registration (#104)"
     )
+
+
+def test_no_registries_key():
+    """The org registry reaches an admitted repository's jobs by itself, and
+    matches pyproject.toml's index URL byte for byte (#144). A ``registries:``
+    entry would be a second, hand-kept copy of it."""
+    assert not re.search(r"^registries:", _config(), re.MULTILINE)
 
 
 def test_it_scans_the_workflows_directory():

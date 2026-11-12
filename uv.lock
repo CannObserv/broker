@@ -30,6 +30,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+co-pypi = [
+    { name = "google-auth", extra = ["requests"] },
+]
 dev = [
     { name = "fakeredis" },
     { name = "pytest" },
@@ -41,19 +44,17 @@ lint = [
     { name = "ruff" },
     { name = "shellcheck-py" },
 ]
-wheelhouse = [
-    { name = "google-cloud-storage" },
-]
 
 [package.metadata]
 requires-dist = [
-    { name = "co-core", specifier = ">=0.37.1,<0.38" },
+    { name = "co-core", specifier = ">=0.37.1,<0.38", index = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" },
     { name = "google-cloud-storage", specifier = ">=2,<4" },
     { name = "python-json-logger", specifier = ">=4.0.0,<5" },
     { name = "redis", extras = ["hiredis"], specifier = ">=5" },
 ]
 
 [package.metadata.requires-dev]
+co-pypi = [{ name = "google-auth", extras = ["requests"], specifier = ">=2,<3" }]
 dev = [
     { name = "fakeredis", specifier = ">=2.20" },
     { name = "pytest", specifier = ">=9.2.0,<10" },
@@ -65,7 +66,6 @@ lint = [
     { name = "ruff", specifier = ">=0.16.8,<0.17" },
     { name = "shellcheck-py", specifier = ">=0.11.0.1,<0.12" },
 ]
-wheelhouse = [{ name = "google-cloud-storage", specifier = ">=2,<4" }]
 
 [[package]]
 name = "certifi"
@@ -295,14 +295,14 @@ wheels = [
 [[package]]
 name = "co-core"
 version = "0.37.1"
-source = { registry = ".wheelhouse" }
+source = { registry = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" }
 dependencies = [
     { name = "dateparser" },
     { name = "pydantic" },
 ]
-sdist = { path = "co_core-0.37.1.tar.gz" }
+sdist = { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core/co_core-0.37.1.tar.gz", hash = "sha256:df068bc7b2226295f8087a65bed7c5f586c605581462e073c1080ce90ad2543b" }
 wheels = [
-    { path = "co_core-0.37.1-py3-none-any.whl" },
+    { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core/co_core-0.37.1-py3-none-any.whl", hash = "sha256:7a8b4c0c3f8fa00cf7f9c5e7b2b86e89d847118b6024c303c7efe5063db9aae5" },
 ]
 
 [[package]]
@@ -420,6 +420,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ac/ca/f398a483ce5aad18ca2f735646e45ccee2439bd94a41a4ad0cfa646bd495/google_auth-2.58.0.tar.gz", hash = "sha256:55e30cf15e737de92c5323d78cda8a83fcd57e7ffbaf900c4600039fd60a80fd", size = 380018, upload-time = "2026-09-09T20:49:38.043Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/59/13/477d90d09591b3938b45c4e11f4d8a51291682112cb5efcac961e815d562/google_auth-2.58.0-py3-none-any.whl", hash = "sha256:8a9c4645bb4c8e91668fb1934b95ae6a8687084232753639220ba9bf04a1610d", size = 262404, upload-time = "2026-09-09T20:49:33.951Z" },
+]
+
+[package.optional-dependencies]
+requests = [
+    { name = "requests" },
 ]
 
 [[package]]

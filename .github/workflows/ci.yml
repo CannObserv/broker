@@ -20,9 +20,9 @@ jobs:
     # The node's image, not ubuntu-latest (#88): tests/deploy/test_workflow_pins.py.
     runs-on: ubuntu-24.04
     # WIF: mint an OIDC token for google-github-actions/auth to impersonate the
-    # read-only co-pypi-reader SA and pull the cannobserv wheelhouse. Same
-    # arrangement as CannObserv/archiver (archiver#72, #75); the provider's
-    # attribute condition has to admit this repository.
+    # read-only co-pypi-reader SA, whose access token reads co-core from the
+    # co-pypi index (#144; processor#121, watcher#358). The provider's attribute
+    # condition has to admit this repository.
     permissions:
       contents: read
       id-token: write
@@ -35,23 +35,30 @@ jobs:
         with:
           enable-cache: true
           # Not the default since v9. Unpruned, the saved cache holds co-core
-          # unpacked from the private wheelhouse, in a public repo's cache.
+          # unpacked from the private co-pypi index, in a public repo's cache.
           prune-cache: true
 
       - name: Install Python
         run: uv python install 3.12
 
       - name: Authenticate to Google Cloud (WIF, read-only)
+        id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
-
-      - name: Sync cannobserv wheelhouse
-        run: uv run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py
+          # For the co-pypi index's basic auth (#144); a masked step output.
+          token_format: access_token
 
       - name: uv sync
-        run: uv sync --group dev
+        # The co-pypi pair, on this step alone (#144, as processor#121): co-core
+        # comes from the index, and every later `uv run` finds the venv synced
+        # and downloads nothing. --locked: the lock as committed, each file held
+        # to its sha256. A masked output; never echo it.
+        env:
+          UV_INDEX_CO_PYPI_USERNAME: oauth2accesstoken
+          UV_INDEX_CO_PYPI_PASSWORD: ${{ steps.auth.outputs.access_token }}
+        run: uv sync --locked --group dev
 
       - name: ruff check
         run: uv run ruff check .

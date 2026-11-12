@@ -11,7 +11,7 @@ needs the network, so it is checked by hand when a pin moves:
 ``gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq .object.sha``.
 
 **The cache.** setup-uv v9 flipped ``prune-cache`` to false. Unpruned, the uv
-cache that ci.yml saves holds co-core unpacked from the private wheelhouse,
+cache that ci.yml saves holds co-core unpacked from the private co-pypi index,
 and broker is public: a fork's pull request can restore a cache saved on
 ``main``. ``uv cache prune --ci`` drops every pre-built wheel, co-core's
 included, so ci.yml sets it back. It keeps a wheel *built from source*, so
@@ -39,6 +39,7 @@ WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 AUDIT = WORKFLOWS / "audit.yml"
 LOCK = WORKFLOWS.parents[1] / "uv.lock"
+CO_PYPI = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/"
 OS_RELEASE = Path("/etc/os-release")
 
 PINNED = ("astral-sh/setup-uv", "google-github-actions/auth")
@@ -84,28 +85,48 @@ def test_ci_prunes_the_cache_it_saves():
     assert with_.get("prune-cache") == "true"
 
 
-def _wheelhouse_packages_without_a_wheel(lock: Path) -> list[str]:
+def _private_packages_without_a_wheel(lock: Path) -> list[str]:
     packages = tomllib.loads(lock.read_text())["package"]
     return [
         p["name"]
         for p in packages
-        if p.get("source", {}).get("registry") == ".wheelhouse" and not p.get("wheels")
+        if p.get("source", {}).get("registry") == CO_PYPI and not p.get("wheels")
     ]
 
 
-def test_every_wheelhouse_package_is_locked_to_a_wheel():
+def test_every_private_package_is_locked_to_a_wheel():
     """The prune's premise: a package installed from its wheel is pruned."""
-    assert _wheelhouse_packages_without_a_wheel(LOCK) == []
+    assert _private_packages_without_a_wheel(LOCK) == []
 
 
 def test_wheel_check_fails_on_an_sdist_only_lock(tmp_path):
     lock = tmp_path / "uv.lock"
     lock.write_text(
         '[[package]]\nname = "co-core"\nversion = "9.9.9"\n'
-        'source = { registry = ".wheelhouse" }\n'
-        'sdist = { path = "co_core-9.9.9.tar.gz" }\n'
+        f'source = {{ registry = "{CO_PYPI}" }}\n'
+        f'sdist = {{ url = "{CO_PYPI}co_core-9.9.9.tar.gz", hash = "sha256:00" }}\n'
     )
-    assert _wheelhouse_packages_without_a_wheel(lock) == ["co-core"]
+    assert _private_packages_without_a_wheel(lock) == ["co-core"]
+
+
+def test_the_index_token_reaches_the_uv_sync_step_alone():
+    """#144: the WIF step mints an access token for co-pypi's basic auth, and
+    only the step that downloads takes it. ``uv lock --locked`` and every later
+    ``uv run`` resolve from the lock and the synced venv, so need none."""
+    assert _step_with(CI, "google-github-actions/auth").get("token_format") == "access_token"
+    text = CI.read_text()
+    assert len(re.findall(r"^[ \t]+id: auth$", text, re.MULTILINE)) == 1
+    uses = re.findall(r"steps\.auth\.outputs\.access_token", text)
+    assert len(uses) == 1, "the token goes to one step"
+    steps = re.split(r"^      - ", text, flags=re.MULTILINE)
+    (step,) = [s for s in steps if "steps.auth.outputs.access_token" in s]
+    assert step.startswith("name: uv sync\n")
+    assert "UV_INDEX_CO_PYPI_USERNAME: oauth2accesstoken" in step
+    assert re.search(r"^        run: uv sync --locked --group dev$", step, re.MULTILINE)
+
+
+def test_ci_no_longer_syncs_a_wheelhouse():
+    assert "wheelhouse" not in CI.read_text().lower()
 
 
 def test_audit_touches_no_cache():

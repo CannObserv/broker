@@ -62,8 +62,8 @@ def test_service_is_a_oneshot_running_the_backup_module() -> None:
 
 def test_service_holds_no_redis_credential() -> None:
     """The job reads a file. It has no reason to hold a Redis URL, and the file
-    that carries one (/etc/broker/.env) also carries the operator's read-only
-    wheelhouse key - two things this unit must not inherit.
+    that carries one (/etc/broker/.env) may also carry the retired wheelhouse
+    sync's key path (#144) - two things this unit must not inherit.
 
     It ships the ACL digests since CannObserv/broker#72, and this still holds:
     a digest is not a credential, because ``AUTH`` takes the plaintext. That
@@ -103,7 +103,7 @@ def test_service_ships_the_acl_digests_from_the_passwords_credential() -> None:
 
 
 def test_service_sees_nothing_under_etc_broker() -> None:
-    """/etc/broker holds other identities' keys - the probe's env, the wheelhouse
+    """/etc/broker holds other identities' keys - the probe's env, the co-pypi
     reader, the co-status check-in - so it is hidden whole: an empty read-only
     tmpfs, nothing bound back in. The writer key arrives as a credential: the
     manager reads it past the tmpfs, which #110 could not find documented and

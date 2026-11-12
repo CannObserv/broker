@@ -5,7 +5,7 @@
 #
 # It lints the working-tree copy of each staged path, so a partly staged file is
 # read as it stands on disk. The tools come from uv.lock's lint group, without
-# the project, so a clone needs no wheelhouse to commit.
+# the project, so a clone needs no co-pypi token to commit.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

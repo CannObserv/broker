@@ -81,7 +81,7 @@ def test_service_reads_the_key_as_a_credential_with_an_empty_fallback() -> None:
 
 def test_service_holds_no_redis_credential_and_no_env_file() -> None:
     """D6, B8: the drift check holds no Redis credential. /etc/broker/.env carries
-    the probe's Redis user and the operator's wheelhouse key; status.env the probe's
+    the probe's Redis user; status.env the probe's
     copy of the co-status key. None of them is this unit's."""
     text = REPO_SERVICE.read_text()
     assert _directive(text, "EnvironmentFile") == []

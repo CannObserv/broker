@@ -45,7 +45,7 @@ CI_DOC = REPO_ROOT / "docs" / "CI.md"
 VENV_BIN = Path(sys.executable).parent
 
 #: How both callers reach the locked tools: no project, so no co-core and no
-#: wheelhouse, and the lock as committed.
+#: co-pypi token, and the lock as committed.
 UV_RUN = ["run", "--frozen", "--only-group", "lint"]
 
 
@@ -253,7 +253,7 @@ class TestTheWiring:
         (job,) = [b for b in blocks if re.search(r"^    name: lint \+ test$", b, re.M)]
         runs = re.findall(r"^        run: (.+)$", job, re.M)
         assert "bash scripts/shellcheck.sh" in runs
-        assert runs.index("uv sync --group dev") < runs.index("bash scripts/shellcheck.sh")
+        assert runs.index("uv sync --locked --group dev") < runs.index("bash scripts/shellcheck.sh")
 
     def test_the_hook_runs_the_selector_and_ruff_on_whats_staged(self):
         text = HOOK.read_text()

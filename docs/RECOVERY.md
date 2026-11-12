@@ -155,8 +155,8 @@ anywhere.
 
 | Secret | Path on the node | Mode | Why the value matters |
 |---|---|---|---|
-| the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`redis://brokeradmin@...`, the user alone); `GOOGLE_APPLICATION_CREDENTIALS` (the wheelhouse reader) is the operator's, for the sync, and the probe's unit unsets it |
-| the wheelhouse reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | the wheelhouse sync needs it; `uv sync` needs the wheelhouse |
+| the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`redis://brokeradmin@...`, the user alone); `GOOGLE_APPLICATION_CREDENTIALS`, if present, is the retired wheelhouse sync's (#144), and the probe's unit unsets it |
+| the co-pypi reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | `scripts/co-pypi.sh` mints the index token from it; every build's `uv sync` needs that token (#144) |
 | the co-status check-in | `/etc/broker/status.env` | 0400 root | the monitor id is node-agnostic; the same monitor continues |
 | the drift check's key | `/etc/broker/status-checkin.key` | 0400 root | the same key as `status.env`, copied from it (`deploy/README.md`, *The drift check*); not a second secret to keep |
 | the backup writer | `/etc/broker/backup.env` + `/etc/broker/co-broker-backup.json` | 0400 root | also what the **restore** reads with - `objectViewer` lists and downloads |
@@ -193,9 +193,7 @@ also makes the `broker-backup` user (#109), before step 6's deploy, whose
 forced backup run fails without it:
 
 ```bash
-set -a; . /etc/broker/.env; set +a
-uv run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py
-uv sync --group dev
+bash scripts/co-pypi.sh uv sync --locked --group dev
 ```
 
 Then a release to run `restore` from, and the passwords file from the bucket.

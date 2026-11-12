@@ -3,9 +3,9 @@
 ``scripts/audit_lock.sh`` runs ``uv audit --frozen`` against ``uv.lock`` and
 ``.github/workflows/audit.yml`` runs it on every push, every PR and once a week.
 It is the update mechanism patching-hosts' record cites (run.md section 7).
-Dependabot's ``uv`` ecosystem and Renovate are out: neither updater can sync
-the private wheelhouse ``co-core`` resolves from. Dependabot moves the action
-pins alone (``.github/dependabot.yml``, #90).
+Dependabot moves the action pins alone (``.github/dependabot.yml``, #90); its
+``uv`` security updates need broker admitted to the org's co-pypi registry
+(#144, ``docs/CI.md``).
 
 **Report-only is the contract.** A gate that failed on a finding would turn
 ``main`` red on someone else's disclosure date, and every later check-in would
@@ -96,7 +96,7 @@ def test_every_exit_is_zero(tmp_path, uv_exit):
 
 def test_audits_the_lock_without_relocking(tmp_path):
     """``--frozen`` reads ``uv.lock`` as committed. A relock would need the
-    private wheelhouse, which this job has no credential to fetch. ``uv audit``
+    private co-pypi index, which this job has no credential to read. ``uv audit``
     is a preview command, so the flag goes first and a uv that knows it runs
     once."""
     _, calls, _ = _run(tmp_path, 0)
@@ -209,7 +209,7 @@ def test_runs_off_actions_without_a_summary(tmp_path):
 def test_workflow_runs_the_script_on_a_schedule_with_no_secret():
     """Disclosures arrive without commits, so the job runs weekly as well as on
     push and PR. It holds no secret and no OIDC token: ``--frozen`` needs no
-    wheelhouse, so it needs no WIF."""
+    co-pypi index, so it needs no WIF."""
     text = WORKFLOW.read_text()
     on_block = re.search(r"^on:\n((?:[ #].*\n|\n)+)", text, re.MULTILINE)
     assert on_block, "no top-level on: block"

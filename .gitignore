@@ -12,15 +12,10 @@ __pycache__/
 # from a rotation on every cohort VM. Pinned by tests/deploy/test_socraticode_config.py.
 .claude/settings.local.json
 
-# cannobserv package index mirror - populated by scripts/sync_wheelhouse.py.
-# Track an empty .gitkeep so the `[tool.uv] find-links` dir always exists at
-# checkout: uv reads that config on *every* invocation and errors if the dir is
-# missing (before the sync that would create it can run).
-# NB: `.wheelhouse/*`, not `.wheelhouse/` - git cannot re-include a file whose
-# parent directory is excluded, so a directory-level ignore makes the negation
-# below a no-op and leaves .gitkeep untracked (CannObserv/archiver#116).
-.wheelhouse/*
-!.wheelhouse/.gitkeep
+# The retired GCS wheelhouse mirror (#144: co-core comes from the co-pypi index
+# now). A checkout from before it keeps the synced files until removed by hand;
+# ignored, they are no change for scripts/deploy.sh's clean-tree check.
+/.wheelhouse/
 
 # A release's build id, written by scripts/deploy.sh at the release root (#106).
 # A copy in a checkout would make it claim to be a release instead of `dev`

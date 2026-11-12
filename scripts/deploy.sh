@@ -15,15 +15,15 @@
 # adapted from CannObserv/processor's deploy.sh (no HTTP surface, a CI gate, a
 # unit install) with CannObserv/status's root-owned releases (status#14). The
 # units run /srv/broker/live, a symlink into releases/<sha12>: a read-only
-# `git archive` of one commit on origin/main, its locked wheels and its own
-# venv, owned by root. Nothing done in a checkout reaches a unit that runs live
+# `git archive` of one commit on origin/main and its own venv, owned by root. Nothing done in a checkout reaches a unit that runs live
 # until this script puts it there.
 #
 # In this order:
 #   0. ask GitHub whether the commit's CI passed (unless --skip-ci)
-#   1. build releases/<sha12> at its final path (or reuse it): archive, the
-#      wheelhouse, each locked file held to its pinned sha256 (#125), uv sync,
-#      read-only, root's, REVISION last. --build-only stops here (#122)
+#   1. build releases/<sha12> at its final path (or reuse it): archive, uv sync
+#      through the checkout's scripts/co-pypi.sh (co-core from the co-pypi
+#      index, each file held to the lock's sha256; #144), read-only, root's,
+#      REVISION last. --build-only stops here (#122)
 #   1a. refuse a unit whose User= does not exist, and a deploy that would wait
 #      on a tick of a probe whose timer is not active (#122)
 #   2. switch live (rename(2), atomic), then install each deploy/broker-* unit
@@ -48,9 +48,6 @@ set -euo pipefail
 ROOT="${BROKER_DEPLOY_ROOT:-/srv/broker}"
 # Prefixed to every installed path: a test's tree, nothing on the node.
 HOST="${BROKER_DEPLOY_HOST:-}"
-# GOOGLE_APPLICATION_CREDENTIALS for the wheelhouse sync: the read-only
-# co-pypi-reader key's path, which exedev reads (B4).
-ENV_FILE="${BROKER_DEPLOY_ENV_FILE:-/etc/broker/.env}"
 BACKUP_STATE="${BROKER_DEPLOY_BACKUP_STATE:-/var/lib/broker-backup/state.json}"
 KEEP="${BROKER_DEPLOY_KEEP:-5}"
 # The system interpreter: the backup cannot see /home (ProtectHome=yes, #108),
@@ -159,6 +156,12 @@ git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1 ||
 
 [[ -d "$ROOT" ]] || die "$ROOT does not exist. Once: sudo install -d -o root -g root -m 755 $ROOT"
 
+# co-core is private: the release's uv sync reads the co-pypi index through this
+# checkout's wrapper, which mints the reader's token for that one uv (#144). The
+# key is /etc/broker/co-pypi-reader.json, or BROKER_CO_PYPI_KEY.
+CO_PYPI="$SRC/scripts/co-pypi.sh"
+[[ -f "$CO_PYPI" ]] || die "$CO_PYPI is missing; run from a checkout of #144 or later"
+
 # Root's, and writable by root alone: a link is only as safe as its directory,
 # and exedev could otherwise repoint live with ln (status#14).
 roots_alone() { # <dir>
@@ -181,8 +184,7 @@ flock -n 9 || die "another deploy is running (it holds the lock on $ROOT)"
 # The path seams are the tests'; left set in a shell, one retargets a real
 # deploy, so each that is not the node's default is said, and journaled (CR 19).
 seams=""
-for seam in ROOT=/srv/broker HOST= ENV_FILE=/etc/broker/.env \
-  BACKUP_STATE=/var/lib/broker-backup/state.json; do
+for seam in ROOT=/srv/broker HOST= BACKUP_STATE=/var/lib/broker-backup/state.json; do
   name="${seam%%=*}"
   [[ "${!name}" == "${seam#*=}" ]] || seams+=" BROKER_DEPLOY_$name=${!name}"
 done
@@ -367,83 +369,13 @@ reports() {
 }
 probe_error() { tr '\n' ' ' <"$backup/probe.err" 2>/dev/null | sed 's/ *$//'; }
 
-# The wheelhouse files uv.lock names: the sdist and wheel paths of each package
-# whose source is registry = ".wheelhouse" (co-core), relative to that directory.
-# "./.wheelhouse" too: pyproject.toml spells it so, and uv normalises it today.
-locked_wheels() {
-  awk '
-    /^\[/ { wheelhouse = 0 }
-    /^source = \{ registry = "(\.\/)?\.wheelhouse" \}$/ { wheelhouse = 1 }
-    wheelhouse && match($0, /path = "[^"]*"/) { print substr($0, RSTART + 8, RLENGTH - 9) }
-  ' "$release/uv.lock"
-}
-
-# The digest the release's pyproject.toml pins for each wheelhouse file, as
-# "<file> <sha256>" lines (#125): its [tool.broker.wheelhouse-sha256] table, one
-# "file" = "hex" line each, the form tests/deploy/test_sync_wheelhouse.py holds.
-pinned_digests() {
-  awk '
-    /^\[/ { table = ($0 == "[tool.broker.wheelhouse-sha256]"); next }
-    table && /^"[^"]+" = "[^"]*"$/ { split($0, field, "\""); print field[2], field[4] }
-  ' "$release/pyproject.toml"
-}
-
-# D4/B3: the checkout's sync, then only what the lock names into the release.
-# The checkout's copy of sync_wheelhouse.py writes its own ../.wheelhouse, the
-# whole bucket (652 files, 89 MB in 2026-10); the release's would take the
-# bucket into the release. Copied with cp, never linked: a link shares an inode
-# with the checkout, and the chown below would reach it. The sync's own deps are
-# uv.lock's wheelhouse group, in the checkout's venv, never the project (#113).
-# Each copy is held to the release's own pinned digest (#125): uv.lock records
-# none, so `uv sync --locked` would install any file of that name. The check is
-# on the copy, the bytes uv sync reads, and comes before it.
-wheelhouse() {
-  local key name digest got missing=() checked=()
-  local -A pinned=()
-  [[ -r "$ENV_FILE" ]] ||
-    die "$ENV_FILE is missing or unreadable; the wheelhouse sync's key path is there. Nothing switched."
-  # The file's value or nothing: the unit reads only the file, and so does this.
-  key="$(
-    unset GOOGLE_APPLICATION_CREDENTIALS
-    set -a
-    # shellcheck disable=SC1090
-    . "$ENV_FILE" || exit 1 # set -e does not reach into a command substitution
-    printf '%s' "${GOOGLE_APPLICATION_CREDENTIALS:-}"
-  )" || die "cannot read $ENV_FILE as shell (set -a; . $ENV_FILE); nothing switched"
-  [[ -n "$key" ]] || die "no GOOGLE_APPLICATION_CREDENTIALS in $ENV_FILE for the wheelhouse sync; nothing switched"
-  (cd "$SRC" && GOOGLE_APPLICATION_CREDENTIALS="$key" uv run --frozen \
-    --only-group wheelhouse python scripts/sync_wheelhouse.py >&2) ||
-    die "syncing the wheelhouse into $SRC/.wheelhouse failed for $build; nothing switched"
-  while read -r name digest; do
-    pinned[$name]="$digest"
-  done < <(pinned_digests)
-  mkdir -p "$release/.wheelhouse"
-  while read -r name; do
-    [[ -n "$name" && "$name" != */* ]] ||
-      die "uv.lock names the wheelhouse file '$name', not a file name; nothing switched"
-    digest="${pinned[$name]:-}"
-    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] ||
-      die "uv.lock names $name, which $build's pyproject.toml [tool.broker.wheelhouse-sha256] pins no sha256 for; nothing switched"
-    if [[ -f "$SRC/.wheelhouse/$name" ]]; then
-      cp -- "$SRC/.wheelhouse/$name" "$release/.wheelhouse/$name" ||
-        die "copying $name into $build's wheelhouse failed; nothing switched"
-      got="$(sha256sum -- "$release/.wheelhouse/$name")" ||
-        die "cannot hash $name in $build's wheelhouse; nothing switched"
-      got="${got%% *}"
-      if [[ "$got" != "$digest" ]]; then
-        logger -t broker-deploy "refused $build: $name has sha256 $got, not the $digest it pins" || true
-        die "$name in $SRC/.wheelhouse has sha256 $got, not the $digest $build's pyproject.toml pins; nothing switched. Remove it and deploy again: the sync fetches a file that is not there, and this checks it again"
-      fi
-      checked+=("$name")
-    else
-      missing+=("$name")
-    fi
-  done < <(locked_wheels)
-  ((${#missing[@]} == 0)) ||
-    die "uv.lock names ${missing[*]}, which the sync left out of $SRC/.wheelhouse; nothing switched"
-  # Journaled when it passes too: otherwise a deploy that checked reads like
-  # one from a deploy.sh that never did.
-  logger -t broker-deploy "wheelhouse for $build: ${checked[*]} match their pinned sha256" || true
+# A lock from before #144 resolves co-core from ./.wheelhouse, which this script
+# no longer syncs or checks (#125's digest table went with it). Said, so
+# journaled: before the switch a plain die is stderr only (#122).
+refuse_a_wheelhouse_lock() {
+  grep -Eq '^source = \{ registry = "(\./)?\.wheelhouse" \}$' "$release/uv.lock" || return 0
+  say "refused $build: its uv.lock resolves co-core from ./.wheelhouse (before #144), which this deploy.sh does not build; nothing switched"
+  die "Roll back to a kept release, or build this one with its own commit's scripts/deploy.sh (deploy/README.md, Environment)"
 }
 
 # Each step says why it stopped: under set -e alone the deploy would exit
@@ -461,13 +393,16 @@ build_release() {
     die "cannot make releases/$build for $(id -un) to build in; nothing switched"
   git -C "$SRC" archive "$sha" | tar -x -C "$release" ||
     die "git archive failed for $build; nothing switched"
-  wheelhouse
+  refuse_a_wheelhouse_lock
   # Copied, never hardlinked from ~/.cache/uv: a hardlink is the cache's inode
   # and every dev venv's, so the chown below would reach them (status#14).
   # Editable, as the design chose (Q5): its .pth names this release itself.
   # The venv is the release's own .venv, whatever the caller's shell names.
+  # Through the checkout's wrapper (#144): it mints the co-pypi reader's token
+  # for this uv alone, and --locked holds every file uv installs to the lock's
+  # sha256, the check #125's table made before.
   (cd "$release" && env -u UV_PROJECT_ENVIRONMENT -u VIRTUAL_ENV UV_PYTHON_DOWNLOADS=never \
-    uv sync --locked --no-dev --compile-bytecode --link-mode copy --python "$PYTHON" --quiet) ||
+    bash "$CO_PYPI" uv sync --locked --no-dev --compile-bytecode --link-mode copy --python "$PYTHON" --quiet) ||
     die "uv sync failed for $build; nothing switched"
   home="$(sed -n 's/^home *= *//p' "$release/.venv/pyvenv.cfg" 2>/dev/null)" || home=""
   [[ -n "$home" && "$home" != /home/* ]] ||
@@ -477,7 +412,7 @@ build_release() {
     die "compileall failed for $build's src/; nothing switched"
   reports >/dev/null || die "$build's venv does not import ($(probe_error)); nothing switched"
   # Readable by every user under any umask, writable by none: the probe runs as
-  # exedev, and the synced wheels are 0600.
+  # exedev, under any umask.
   chmod -R a-w,a+rX "$release" || die "cannot make $build read-only; nothing switched"
   sudo -n chown -R root:root "$release" || die "cannot hand $build to root; nothing switched"
   # REVISION last, by root: a release without one is an interrupted build.
@@ -841,7 +776,7 @@ verify_all() { # each service in $verify, against what its own unit runs
 # --- before the switch (#122) ------------------------------------------------
 #
 # Failures the verify would find only after the switch, then switch back from:
-# refused with nothing switched, and journaled, as the wheelhouse pin check is.
+# refused with nothing switched, and journaled, as a pre-#144 lock is.
 
 # A User= that does not exist fails every run of its unit (#121's review,
 # finding 5). Each of the release's services is asked about as it will run:

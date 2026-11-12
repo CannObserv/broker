@@ -13,9 +13,9 @@
 # between stop-commands and a random resume token: it is OSV's text, and a line
 # of it starting `::` would otherwise be read as a workflow command.
 #
-# --frozen reads uv.lock as committed. A relock would need the private
-# wheelhouse (CLAUDE.md, Environment & Tooling), which this job has no
-# credential to fetch. `uv audit` is a preview command, hence the flag. uv
+# --frozen reads uv.lock as committed. A relock would need the private co-pypi
+# index (CLAUDE.md, Environment & Tooling), which this job has no credential
+# to read. `uv audit` is a preview command, hence the flag. uv
 # before 0.11.19 (astral-sh/uv#19645) has the command but not the name
 # `audit-command`, and rejects it with exit 2 and "Unknown feature flag", so
 # that one rejection retries without the flag (#103). It needs no uv floor.
@@ -51,7 +51,7 @@ fi
 
 case $rc in
 0) ;;
-1) echo "::warning title=uv.lock advisories::uv audit found advisories in uv.lock; the job summary lists them. Sync the wheelhouse, then uv lock --upgrade-package <name> (CLAUDE.md, Environment & Tooling)." ;;
+1) echo "::warning title=uv.lock advisories::uv audit found advisories in uv.lock; the job summary lists them. Re-lock through the co-pypi wrapper: bash scripts/co-pypi.sh uv lock --upgrade-package <name> (CLAUDE.md, Environment & Tooling)." ;;
 *) echo "::warning title=uv audit did not run::uv audit exited $rc; the lock was not audited. The job summary has its output." ;;
 esac
 exit 0

@@ -5,8 +5,9 @@ Ported from CannObserv/status's harness (``tests/deploy/test_deploy.py`` at
 (``tests/test_deploy.py`` at ``4b3a500``, no HTTP and a CI gate). Real git, a
 temporary origin and clone; stubs for ``uv``, ``sudo``, ``systemctl``,
 ``journalctl``, ``stat``, ``curl``, ``getent`` and ``logger`` on ``PATH`` that
-record every call. ``FAKE_*`` variables make them play a failing sync, a venv that no longer
-runs, a backup run that fails, or a probe tick on the wrong build.
+record every call, and the checkout's ``scripts/co-pypi.sh`` stubbed the same way.
+``FAKE_*`` variables make them play a key that mints nothing, a failing sync, a
+venv that no longer runs, a backup run that fails, or a probe tick on the wrong build.
 
 What the script must hold (the design's Q1-5, Q8, Q12, D1, D4, D7-D9):
 
@@ -21,8 +22,10 @@ What the script must hold (the design's Q1-5, Q8, Q12, D1, D4, D7-D9):
 - **One immutable release per commit,** built at its final path, read-only and
   readable, ``REVISION`` written last by root. A directory without one is an
   interrupted build. A release ``live`` links is never rebuilt.
-- **The wheelhouse in a release is what ``uv.lock`` names,** copied, never
-  linked, from the checkout's synced one.
+- **co-core comes from the co-pypi index** (#144): the release's ``uv sync
+  --locked`` runs through the checkout's ``scripts/co-pypi.sh``, which hands the
+  reader's token to that one uv. The lock's sha256 per file is the content
+  check #125's table was. A lock from before #144 is refused.
 - **Units:** ``deploy/broker-*.{service,timer}`` installed from the release when
   they differ, one ``daemon-reload``; host configs compared, never installed;
   ``redis-server`` never touched.
@@ -34,7 +37,6 @@ What the script must hold (the design's Q1-5, Q8, Q12, D1, D4, D7-D9):
 
 import fcntl
 import grp
-import hashlib
 import json
 import os
 import pwd
@@ -55,13 +57,13 @@ README = REPO_ROOT / "deploy" / "README.md"
 
 PROBE = "broker-bus-health.service"
 BACKUP = "broker-backup.service"
-CO_CORE_WHEEL = "co_core-0.36.0-py3-none-any.whl"
-CO_CORE_SDIST = "co_core-0.36.0.tar.gz"
 # ci.yml's one job, by its name.
 JOB = "lint + test"
 
-# A uv.lock with one wheelhouse package, as broker's has (co-core), between two
-# that are not.
+# The world's lock (#144): co-core from the co-pypi index, with a sha256 per file,
+# which `uv sync --locked` holds each download to; between two that are not.
+INDEX = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/"
+FILES = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core"
 UV_LOCK = f"""version = 1
 requires-python = ">=3.12"
 
@@ -76,13 +78,13 @@ dependencies = [
 [[package]]
 name = "co-core"
 version = "0.36.0"
-source = {{ registry = ".wheelhouse" }}
+source = {{ registry = "{INDEX}" }}
 dependencies = [
     {{ name = "pydantic" }},
 ]
-sdist = {{ path = "{CO_CORE_SDIST}" }}
+sdist = {{ url = "{FILES}/co_core-0.36.0.tar.gz", hash = "sha256:00" }}
 wheels = [
-    {{ path = "{CO_CORE_WHEEL}" }},
+    {{ url = "{FILES}/co_core-0.36.0-py3-none-any.whl", hash = "sha256:00" }},
 ]
 
 [[package]]
@@ -94,28 +96,28 @@ wheels = [
     {{ url = "https://files.example/pydantic-2.12.0-py3-none-any.whl", hash = "sha256:00" }},
 ]
 """
+# A lock from before #144: co-core from ./.wheelhouse, which this deploy.sh no
+# longer syncs.
+LEGACY_LOCK = UV_LOCK.replace(f'registry = "{INDEX}"', 'registry = ".wheelhouse"')
+PYPROJECT = (
+    '[project]\nname = "broker"\n\n[tool.uv]\n\n[[tool.uv.index]]\nname = "co-pypi"\n'
+    f'url = "{INDEX}"\nexplicit = true\n'
+)
 
-
-def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-# What the world's wheelhouse holds: the synced bytes of each file uv.lock names.
-WHEEL_BYTES = b"wheel"
-SDIST_BYTES = b"sdist"
-
-
-# The digests a release holds its wheelhouse to (#125), one line each, as the
-# real pyproject.toml carries them.
-def pyproject(digests: dict[str, str]) -> str:
-    rows = "".join(f'"{name}" = "{value}"\n' for name, value in digests.items())
-    return f'[project]\nname = "broker"\n\n[tool.broker.wheelhouse-sha256]\n{rows}\n[tool.uv]\n'
-
-
-PYPROJECT = pyproject({CO_CORE_WHEEL: sha256(WHEEL_BYTES), CO_CORE_SDIST: sha256(SDIST_BYTES)})
+# The checkout's scripts/co-pypi.sh: logs the call, then runs the wrapped uv with
+# a stand-in for the token pair, as the real one execs it. FAKE_MINT_FAIL is a key
+# that does not mint.
+STUB_CO_PYPI = r"""#!/usr/bin/env bash
+echo "co-pypi${FAKE_CO_PYPI_TAG:-} $PWD $*" >> "$FAKE_LOG"
+if [[ -n "${FAKE_MINT_FAIL:-}" ]]; then
+  echo "error: could not mint a co-pypi access token" >&2
+  exit 1
+fi
+UV_INDEX_CO_PYPI_USERNAME=oauth2accesstoken UV_INDEX_CO_PYPI_PASSWORD=stand-in exec "$@"
+"""
 
 STUB_UV = r"""#!/usr/bin/env bash
-echo "uv $PWD GAC=${GOOGLE_APPLICATION_CREDENTIALS:-} PYDL=${UV_PYTHON_DOWNLOADS:-}" \
+echo "uv $PWD pair=${UV_INDEX_CO_PYPI_USERNAME:+set} PYDL=${UV_PYTHON_DOWNLOADS:-}" \
   "UPE=${UV_PROJECT_ENVIRONMENT:-} VENV=${VIRTUAL_ENV:-} $*" >> "$FAKE_LOG"
 case "$1" in
   sync)
@@ -123,8 +125,6 @@ case "$1" in
     mkdir -p .venv/bin
     printf 'home = %s\n' "${FAKE_PYTHON_HOME:-/usr/bin}" > .venv/pyvenv.cfg
     cp "$FAKE_PYTHON" .venv/bin/python ;;
-  run)
-    [[ "$*" == *sync_wheelhouse.py* && -n "${FAKE_WHEELHOUSE_FAIL:-}" ]] && exit 1 ;;
 esac
 exit 0
 """
@@ -415,7 +415,6 @@ class World:
         self.root = tmp / "srv"
         self.host = tmp / "host"  # / for units and host configs
         self.units = self.host / "etc" / "systemd" / "system"
-        self.env_file = tmp / "broker.env"
         self.backup_state = tmp / "backup-state.json"
         self.log = tmp / "calls.log"
         self.stubs = tmp / "stubs"
@@ -428,10 +427,6 @@ class World:
         # As the runbook makes it: root's, so only sudo writes in it.
         self.owned.write_text(f"D {self.root}\n")
         self.root.chmod(0o555)
-        self.env_file.write_text(
-            "BROKER_REDIS_URL=redis://brokeradmin@localhost:6379/0\n"
-            "GOOGLE_APPLICATION_CREDENTIALS=/etc/broker/co-pypi-reader.json\n"
-        )
 
         git(tmp, "init", "-q", "--bare", "-b", "main", str(self.origin))
         git(tmp, "clone", "-q", str(self.origin), str(self.checkout))
@@ -442,8 +437,6 @@ class World:
         self.write_tree(self.checkout, self.dev_units)
         (self.checkout / "uv.lock").write_text(UV_LOCK)
         (self.checkout / "pyproject.toml").write_text(PYPROJECT)
-        (self.checkout / ".wheelhouse").mkdir()
-        (self.checkout / ".wheelhouse" / ".gitkeep").touch()
         git(self.checkout, "add", "-A")
         self.main = [self.commit(f"main-{i}") for i in range(3)]
         git(self.checkout, "push", "-q", "origin", "main")
@@ -454,18 +447,11 @@ class World:
         self.unpushed = self.commit("unpushed")
         self.install(self.dev_units)
 
-        # The synced wheelhouse: what uv.lock names, and one wheel it does not.
-        # The wheel is a hardlink, as `uv sync` and the dev venvs leave them.
-        wheelhouse = self.checkout / ".wheelhouse"
-        (self.tmp / "cache-wheel").write_bytes(WHEEL_BYTES)
-        os.link(self.tmp / "cache-wheel", wheelhouse / CO_CORE_WHEEL)
-        (wheelhouse / CO_CORE_SDIST).write_bytes(SDIST_BYTES)
-        (wheelhouse / CO_CORE_SDIST).chmod(0o600)  # as the sync leaves them
-        (wheelhouse / "other-9.9.9-py3-none-any.whl").write_bytes(b"other")
-
         scripts = self.checkout / "scripts"
         scripts.mkdir()
         shutil.copy(DEPLOY, scripts / "deploy.sh")
+        (scripts / "co-pypi.sh").write_text(STUB_CO_PYPI)
+        (scripts / "co-pypi.sh").chmod(0o755)
 
         for name, body in (
             ("uv", STUB_UV),
@@ -550,7 +536,6 @@ class World:
             "HOME": str(self.tmp),
             "BROKER_DEPLOY_ROOT": str(self.root),
             "BROKER_DEPLOY_HOST": str(self.host),
-            "BROKER_DEPLOY_ENV_FILE": str(self.env_file),
             "BROKER_DEPLOY_BACKUP_STATE": str(self.backup_state),
             "BROKER_DEPLOY_PROBE_WAIT_SECONDS": "10",
             "BROKER_DEPLOY_BACKUP_WAIT_SECONDS": "10",
@@ -748,7 +733,7 @@ class TestADeploy:
 
     def test_the_release_is_readable_by_every_user_under_any_umask(self, world):
         """The probe runs as its own user, not root (#121): under umask 077 the archive and
-        the venv come out 0600/0700, and the synced wheels are 0600 anyway."""
+        the venv come out 0600/0700."""
         assert_ok(world.run(umask=0o077))
         release = world.release(world.main[-1])
         for path in [release, *release.rglob("*")]:
@@ -781,8 +766,8 @@ class TestADeploy:
         calls = world.calls()
         steps = [
             calls.index(f"sudo install -d -m 755 -o {me} -g {group} {release}"),
-            index_of(calls, "sync_wheelhouse.py"),
-            index_of(calls, " sync --locked "),
+            index_of(calls, "co-pypi "),
+            index_of(calls, "uv " + str(release) + " "),
             index_of(calls, " -m compileall -q src"),
             index_of(calls, f"python {release} -I -B -c "),
             calls.index(f"sudo chown -R root:root {release}"),
@@ -876,187 +861,76 @@ class TestTheC2Shape:
         assert not [c for c in world.calls() if "redis-server" in c]
 
 
-class TestWheelhouse:
-    """D4/B3: synced at deploy time in the checkout, and only what uv.lock
-    names enters a release, as copies."""
+class TestTheIndex:
+    """#144: co-core comes from the co-pypi index, so the release's ``uv sync``
+    runs through the checkout's ``scripts/co-pypi.sh``, which hands the reader's
+    token to that one uv. The lock's sha256 per file is the content check
+    #125's table was, and ``--locked`` is what holds uv to it."""
 
-    def test_the_checkouts_sync_runs_with_the_env_files_key(self, world):
-        result = world.run(GOOGLE_APPLICATION_CREDENTIALS="/from/the/shell.json")
-        assert_ok(result)
-        (sync,) = [c for c in world.calls() if "sync_wheelhouse.py" in c]
-        assert sync.startswith(f"uv {world.checkout} ")
-        assert "GAC=/etc/broker/co-pypi-reader.json " in sync, "the file's, never the shell's"
-        assert "run --frozen --only-group wheelhouse python scripts/sync_wheelhouse.py" in sync
-
-    def test_every_spelling_of_the_sync_runs_from_the_lock(self):
-        """#113: `--no-project --with` resolved the sync's env afresh on every
-        run, under the reader key, outside uv.lock and the audit. The group is
-        locked, and `--only-group` skips the project, so an empty wheelhouse
-        (CI's, a rebuilt node's) is no obstacle. Every site moves together."""
-        tracked = subprocess.run(
-            ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
-        ).stdout.split()
-        spellings = {}
-        for name in tracked:
-            path = REPO_ROOT / name
-            if name.startswith("tests/") or path.is_symlink() or not path.is_file():
-                continue
-            try:
-                text = re.sub(r"\s*\\\n\s*", " ", path.read_text())
-            except UnicodeDecodeError:
-                continue
-            for flags in re.findall(r"uv run (.*?) python scripts/sync_wheelhouse\.py", text):
-                spellings.setdefault(name, set()).add(flags)
-        assert set(spellings) >= {
-            ".github/workflows/ci.yml",
-            "scripts/deploy.sh",
-            "scripts/sync_wheelhouse.py",
-            "AGENTS.md",
-            "README.md",
-            "docs/RECOVERY.md",
-        }
-        locked = {"--frozen --only-group wheelhouse"}
-        assert {n: s for n, s in spellings.items() if s != locked} == {}
-
-    def test_a_key_missing_from_the_env_file_is_refused(self, world):
-        world.env_file.write_text("BROKER_REDIS_URL=redis://brokeradmin@localhost:6379/0\n")
-        result = world.run(GOOGLE_APPLICATION_CREDENTIALS="/from/the/shell.json")
-        assert result.returncode == 1
-        assert "GOOGLE_APPLICATION_CREDENTIALS" in result.stderr
-        assert str(world.env_file) in result.stderr
-        assert world.target() is None
-        assert not syncs(world)
-
-    def test_an_unreadable_env_file_is_refused(self, world):
-        world.env_file.unlink()
-        result = world.run()
-        assert result.returncode == 1
-        assert str(world.env_file) in result.stderr
-        assert world.target() is None
-
-    def test_an_env_file_that_will_not_source_is_refused_with_why(self, world):
-        """CR 2: set -e does not reach into a command substitution, so the lines
-        before the error were taken as the file, in silence."""
-        world.env_file.write_text("GOOGLE_APPLICATION_CREDENTIALS=/k.json\nif then\n")
-        result = world.run()
-        assert result.returncode == 1
-        assert f"cannot read {world.env_file}" in result.stderr
-        assert world.target() is None
-
-    def test_only_the_files_the_lock_names_are_copied(self, world):
+    def test_the_sync_runs_through_the_wrapper_in_the_release(self, world):
         assert_ok(world.run())
-        wheelhouse = world.release(world.main[-1]) / ".wheelhouse"
-        assert sorted(p.name for p in wheelhouse.iterdir()) == sorted(
-            [".gitkeep", CO_CORE_SDIST, CO_CORE_WHEEL]
-        )
-
-    def test_a_lock_that_spells_the_wheelhouse_as_pyproject_does_still_copies(self, world):
-        """CR 12: pyproject.toml says ./.wheelhouse, and uv normalises it today."""
-        world.push(top={"uv.lock": UV_LOCK.replace('"' + ".wheelhouse" + '"', '"./.wheelhouse"')})
-        assert_ok(world.run())
-        wheelhouse = world.release(world.main[-1]) / ".wheelhouse"
-        assert (wheelhouse / CO_CORE_WHEEL).is_file() and (wheelhouse / CO_CORE_SDIST).is_file()
-
-    def test_the_copies_are_files_never_links(self, world):
-        assert (world.checkout / ".wheelhouse" / CO_CORE_WHEEL).stat().st_nlink == 2
-        assert_ok(world.run())
-        wheelhouse = world.release(world.main[-1]) / ".wheelhouse"
-        for name in (CO_CORE_WHEEL, CO_CORE_SDIST):
-            path = wheelhouse / name
-            assert not path.is_symlink(), name
-            assert path.stat().st_nlink == 1, name
-            assert path.read_bytes() == (world.checkout / ".wheelhouse" / name).read_bytes()
-
-    def test_the_copies_are_made_before_the_sync_needs_them(self, world):
-        assert_ok(world.run())
+        release = world.release(world.main[-1])
         calls = world.calls()
-        assert index_of(calls, "sync_wheelhouse.py") < index_of(calls, " sync --locked ")
+        (wrapped,) = [c for c in calls if c.startswith("co-pypi ")]
+        assert wrapped.startswith(f"co-pypi {release} uv sync --locked --no-dev ")
+        (synced,) = syncs(world)
+        assert calls.index(wrapped) + 1 == calls.index(synced), "the wrapper execs that uv"
+        assert synced.startswith(f"uv {release} pair=set PYDL=never")
 
-    def test_a_locked_file_the_sync_did_not_bring_fails_the_build(self, world):
-        (world.checkout / ".wheelhouse" / CO_CORE_SDIST).unlink()
-        result = world.run()
-        assert result.returncode == 1
-        assert CO_CORE_SDIST in result.stderr
-        assert "nothing switched" in result.stderr
-        assert world.target() is None
-        assert not syncs(world)
-        assert not (world.release(world.main[-1]) / "REVISION").exists()
-
-    def test_a_same_size_wheel_with_other_bytes_is_refused(self, world):
-        """#125: the swap a size-only sync kept, and a spoofed fetch would bring.
-        The release installs nothing it holds: the refusal comes before uv sync."""
-        planted = b"WHEEL"
-        assert len(planted) == len(WHEEL_BYTES)
-        (world.tmp / "cache-wheel").write_bytes(planted)  # the checkout's, by its hardlink
-        result = world.run()
-        assert result.returncode == 1
-        assert CO_CORE_WHEEL in result.stderr
-        assert sha256(planted) in result.stderr and sha256(WHEEL_BYTES) in result.stderr
-        assert "nothing switched" in result.stderr
-        # CR 2: the remedy that holds on a rollback too, whose files the
-        # checkout's lock may not name, so its sync does not hold them to a pin.
-        assert "Remove it and deploy again" in result.stderr
-        assert world.target() is None
-        assert not syncs(world)
-        assert not (world.release(world.main[-1]) / "REVISION").exists()
-        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
-        assert [c for c in logged if CO_CORE_WHEEL in c and sha256(planted) in c], logged
-
-    def test_a_check_that_passes_is_journaled_with_what_it_checked(self, world):
-        """CR 6: without it a deploy that checked reads like one from a
-        deploy.sh that never did: no refusal, either way."""
+    def test_the_wrapper_is_the_checkouts_not_the_releases(self, world):
+        """deploy.sh runs from the checkout, and so does the wrapper: its locked
+        group lives in the checkout's venv, never in a release being built."""
+        wrapper = world.checkout / "scripts" / "co-pypi.sh"
+        wrapper.write_text(STUB_CO_PYPI.replace("co-pypi${", "co-pypi-checkout${"))
         assert_ok(world.run())
+        assert [c for c in world.calls() if c.startswith("co-pypi-checkout ")]
+
+    def test_a_key_that_mints_nothing_switches_nothing(self, world):
+        result = world.run(FAKE_MINT_FAIL="1")
+        assert result.returncode == 1
+        assert "could not mint" in result.stderr
+        assert "uv sync failed" in result.stderr and "nothing switched" in result.stderr
+        assert not syncs(world), "no uv ran without the token"
+        assert world.target() is None
+
+    def test_a_checkout_without_the_wrapper_is_refused_before_anything(self, world):
+        (world.checkout / "scripts" / "co-pypi.sh").unlink()
+        result = world.run()
+        assert result.returncode == 1 and "co-pypi.sh is missing" in result.stderr
+        assert not world.github_calls() and world.target() is None
+
+    def test_needs_no_wheelhouse_and_no_env_file(self, world):
+        assert not (world.checkout / ".wheelhouse").exists()
+        assert_ok(world.run())
+        assert not (world.release(world.main[-1]) / ".wheelhouse").exists()
+        assert "ENV_FILE" not in DEPLOY.read_text(), "the wrapper knows its own key"
+
+    @pytest.mark.parametrize("spelling", [".wheelhouse", "./.wheelhouse"])
+    def test_a_lock_from_before_144_is_refused_with_the_way_back(self, world, spelling):
+        """The kept releases are reused, never rebuilt; one no longer kept is
+        built by its own commit's deploy.sh."""
+        world.push(top={"uv.lock": LEGACY_LOCK.replace(".wheelhouse", spelling)})
         build = world.build(world.main[-1])
-        logged = [c for c in world.calls() if c.startswith("logger -t broker-deploy ")]
-        assert (
-            f"logger -t broker-deploy wheelhouse for {build}: {CO_CORE_SDIST} {CO_CORE_WHEEL}"
-            " match their pinned sha256" in logged
-        ), logged
-
-    def test_the_sdist_is_held_to_its_digest_too(self, world):
-        (world.checkout / ".wheelhouse" / CO_CORE_SDIST).write_bytes(b"SDIST")
         result = world.run()
         assert result.returncode == 1
-        assert CO_CORE_SDIST in result.stderr
+        assert f"refused {build}" in result.stderr and "before #144" in result.stderr
+        assert "nothing switched" in result.stderr and "Environment" in result.stderr
+        assert not syncs(world) and not [c for c in world.calls() if c.startswith("co-pypi")]
         assert world.target() is None
-        assert not syncs(world)
-
-    def test_a_locked_file_with_no_digest_is_refused(self, world):
-        world.push(top={"pyproject.toml": pyproject({CO_CORE_WHEEL: sha256(WHEEL_BYTES)})})
-        result = world.run()
-        assert result.returncode == 1
-        assert CO_CORE_SDIST in result.stderr and "wheelhouse-sha256" in result.stderr
-        assert world.target() is None
-        assert not syncs(world)
-
-    def test_the_digests_are_the_releases_own_not_the_checkouts(self, world):
-        """A pin moves in the commit deployed: its pyproject.toml is what the
-        release is held to, whatever the checkout's working tree says."""
-        moved = b"wh33l"
-        world.push(
-            top={
-                "pyproject.toml": pyproject(
-                    {CO_CORE_WHEEL: sha256(moved), CO_CORE_SDIST: sha256(SDIST_BYTES)}
-                )
-            }
-        )
-        assert (world.checkout / "pyproject.toml").read_text() == PYPROJECT
-        (world.tmp / "cache-wheel").write_bytes(moved)
-        assert_ok(world.run())
-        assert (world.release(world.main[-1]) / ".wheelhouse" / CO_CORE_WHEEL).read_bytes() == moved
+        journaled = [c for c in world.calls() if c.startswith("logger -t broker-deploy refused")]
+        assert journaled and "before #144" in journaled[0]
 
     def test_a_failed_sync_fails_the_build(self, world):
-        result = world.run(FAKE_WHEELHOUSE_FAIL="1")
+        result = world.run(FAKE_SYNC_FAIL="1")
         assert result.returncode == 1
-        assert "wheelhouse" in result.stderr
+        assert "uv sync failed" in result.stderr
         assert world.target() is None
-        assert not syncs(world)
 
     def test_a_reused_release_syncs_nothing(self, world):
         assert_ok(world.run())
         world.reset_log()
         assert_ok(world.run())
-        assert not [c for c in world.calls() if c.startswith("uv ")]
+        assert not [c for c in world.calls() if c.startswith(("uv ", "co-pypi"))]
 
 
 class TestWhatMayBeDeployed:
@@ -1539,7 +1413,7 @@ class TestOwnership:
         assert world.root_owned(release)
         assert world.root_owned(release / "REVISION")
         assert world.root_owned(release / ".venv")
-        assert world.root_owned(release / ".wheelhouse" / CO_CORE_WHEEL)
+        assert world.root_owned(release / ".venv" / "bin" / "python")
 
     def test_revision_is_written_by_root_after_the_chown_and_is_444(self, world):
         assert_ok(world.run())
@@ -2346,7 +2220,7 @@ def getents(world: World) -> list[str]:
 class TestTheUserPreflight:
     """#121's review, finding 5: a User= that does not exist fails every run of
     its unit, so the verify failed and the deploy switched back. Refused before
-    the switch now, journaled, as the wheelhouse pin check is (#125)."""
+    the switch now, journaled, as a pre-#144 lock is."""
 
     @staticmethod
     def with_user(world: World, lines: str) -> None:
@@ -2677,7 +2551,6 @@ class TestOperation:
         for knob, value in (
             ("BROKER_DEPLOY_ROOT", world.root),
             ("BROKER_DEPLOY_HOST", world.host),
-            ("BROKER_DEPLOY_ENV_FILE", world.env_file),
             ("BROKER_DEPLOY_BACKUP_STATE", world.backup_state),
         ):
             assert f"{knob}={value}" in result.stderr, knob
