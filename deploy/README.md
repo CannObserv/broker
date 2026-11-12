@@ -705,12 +705,11 @@ rewrite time, which `maxmemory` also caps.
   (CannObserv/archiver#195). `localhost` rather than `broker`, because this
   probe runs *on* the broker and `redis.conf` binds loopback as well as the
   tailnet address, deliberately.
-- `GOOGLE_APPLICATION_CREDENTIALS` - the `co-pypi-reader` key's path, for the
-  wheelhouse sync #144 retired. **Nothing in a current commit reads it:**
-  `scripts/co-pypi.sh` names its own key. It stays while a pre-#144 commit may
-  need building (below); the unit unsets it either way, and the probe runs a
-  release whose venv was resolved at build, so nothing resolves at start
-  (CannObserv/broker#37, #107).
+Nothing else. `GOOGLE_APPLICATION_CREDENTIALS`, the `co-pypi-reader` key's
+path for the wheelhouse sync #144 retired, was removed from the node's file
+2026-11-12: `scripts/co-pypi.sh` names its own key. The unit still unsets it, so
+putting it back (below) reaches no probe; the probe runs a release whose venv
+was resolved at build, so nothing resolves at start (CannObserv/broker#37, #107).
 
 **co-core comes from the co-pypi index; no unit resolves anything** (#144).
 co-core is pinned to cannobserv's Artifact Registry index, `explicit`, in
@@ -736,7 +735,9 @@ lock names `.wheelhouse`, which this deploy no longer syncs:
 journaled, before any sync. A kept release is reused and never rebuilt, so a
 rollback to one needs nothing. One no longer kept is built from a worktree of
 its own commit, by that commit's `scripts/deploy.sh`, which syncs the wheelhouse
-with the key path in `/etc/broker/.env` - the reason that line is still there.
+with the key path from `/etc/broker/.env`: add
+`GOOGLE_APPLICATION_CREDENTIALS=/etc/broker/co-pypi-reader.json` back for that
+build, and remove it after.
 
 **Google's TLS trust is certifi's bundle, not the system store** (CannObserv/broker#124).
 The backup, the restore and the co-pypi token mint reach Google over `requests`, which

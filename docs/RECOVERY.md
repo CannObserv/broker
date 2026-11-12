@@ -155,7 +155,7 @@ anywhere.
 
 | Secret | Path on the node | Mode | Why the value matters |
 |---|---|---|---|
-| the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`redis://brokeradmin@...`, the user alone); `GOOGLE_APPLICATION_CREDENTIALS`, if present, is the retired wheelhouse sync's (#144), and the probe's unit unsets it |
+| the probe's env | `/etc/broker/.env` | 0640 root:exedev | `BROKER_REDIS_URL` (`redis://brokeradmin@...`, the user alone); nothing else since #144 (`GOOGLE_APPLICATION_CREDENTIALS` was the retired wheelhouse sync's, removed 2026-11-12; the probe's unit still unsets it) |
 | the co-pypi reader | `/etc/broker/co-pypi-reader.json` | 0640 root:exedev | `scripts/co-pypi.sh` mints the index token from it; every build's `uv sync` needs that token (#144) |
 | the co-status check-in | `/etc/broker/status.env` | 0400 root | the monitor id is node-agnostic; the same monitor continues |
 | the drift check's key | `/etc/broker/status-checkin.key` | 0400 root | the same key as `status.env`, copied from it (`deploy/README.md`, *The drift check*); not a second secret to keep |
