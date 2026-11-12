@@ -9,7 +9,8 @@ person looks, so each property is pinned here. CannObserv/watcher's
 * **``github-actions`` only.** No ``uv`` version updates: co-core's pin moves
   as a registration (#104, #114), never a weekly PR. Security updates need no
   entry and move ``uv.lock`` regardless; they resolve co-core from the co-pypi
-  index over OIDC once an org owner admits broker (#144, ``docs/CI.md``). No
+  index over OIDC through the org registry broker was admitted to (#144,
+  ``docs/CI.md``). No
   ``registries:`` key either way: the org registry is supplied to an admitted
   repository's jobs (cannobserv ``docs/DEPENDABOT.md``).
 * **The generated cadence workflow is excluded.** ``install-cadence.sh``

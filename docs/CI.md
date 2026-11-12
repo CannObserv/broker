@@ -130,10 +130,14 @@ checks that.
 
 **Dependabot security updates** move `uv.lock` without a `dependabot.yml`
 entry. The updater reads the index over OIDC through the org registry
-`PYTHON_INDEX_OIDC_GCP`, keyed on the index URL byte for byte, once an org owner
-admits this repository (ID `1353004854`) to it and to the `github-dependabot`
-WIF provider's condition (cannobserv `docs/DEPENDABOT.md`, step 3). Until then
-a security update fails before it opens anything; this repo's token gets 403 on
-the registry API, so admission is read in the org's UI. A security PR lands by
+`PYTHON_INDEX_OIDC_GCP`, keyed on the index URL byte for byte. An org owner
+admitted this repository (ID `1353004854`) to it and to the `github-dependabot`
+WIF provider's condition on 2026-11-12 (operator; cannobserv
+`docs/DEPENDABOT.md`, step 3). Not yet proven by a run: the first security
+update's job log should show `registered gcp OIDC credentials for python index`,
+PyPI's 404 for co-core, then a 200 from `us-west1-python.pkg.dev`. Without
+admission a security update fails before it opens anything. This repo's token
+gets 403 on the registry API, so admission is read by an owner (step 3's
+read-back) or in the org's UI. A security PR lands by
 hand, as processor's do: check every co-core `source` in the proposed `uv.lock`
 is still the index URL, since the updater asks PyPI first.

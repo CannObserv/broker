@@ -8,7 +8,7 @@
 # github-actions only, never uv version updates: co-core's pin moves as a
 # registration (#104, #114). Security updates need no entry here and move uv.lock
 # regardless. They resolve co-core from the co-pypi index over OIDC through the
-# org registry PYTHON_INDEX_OIDC_GCP once an org owner admits this repository
+# org registry PYTHON_INDEX_OIDC_GCP, which admitted this repository 2026-11-12
 # (#144; cannobserv docs/DEPENDABOT.md, step 3), so no `registries:` key.
 # Guarded by tests/deploy/test_dependabot.py: a mistyped config stops producing
 # PRs without erroring anywhere a person looks.
