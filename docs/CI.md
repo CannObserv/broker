@@ -133,12 +133,16 @@ entry. The updater reads the index over OIDC through the org registry
 `PYTHON_INDEX_OIDC_GCP`, keyed on the index URL byte for byte. An org owner
 admitted this repository (ID `1353004854`) to it and to the `github-dependabot`
 WIF provider's condition on 2026-11-12 (operator; cannobserv
-`docs/DEPENDABOT.md`, step 3); its read-back agreed and listed broker. Not yet
-proven by a run: the first security
-update's job log should show `registered gcp OIDC credentials for python index`,
-PyPI's 404 for co-core, then a 200 from `us-west1-python.pkg.dev`. Without
+`docs/DEPENDABOT.md`, step 3); its read-back agreed and listed broker. The
+first security job proved it (run `43565852623`, 2026-11-14, #146): its log
+shows `registered gcp OIDC credentials for python index`, then co-core's
+`simple/` page and wheel from `us-west1-python.pkg.dev`, a 200 each. No request
+for co-core reached PyPI. The updater's own lookup of the package it bumps
+(`opentelemetry-api`) asked PyPI's JSON API, then the index, a 404 there: it
+ignores `explicit`. The re-lock that followed kept to it: co-core from the index,
+every other package from PyPI. Without
 admission a security update fails before it opens anything. This repo's token
 gets 403 on the registry API, so admission is read by an owner (step 3's
 read-back) or in the org's UI. A security PR lands by
 hand, as processor's do: check every co-core `source` in the proposed `uv.lock`
-is still the index URL, since the updater asks PyPI first.
+is still the index URL, since the updater ignores `explicit`.
