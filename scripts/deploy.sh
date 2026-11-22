@@ -66,6 +66,13 @@ POLL_SECONDS="${BROKER_DEPLOY_POLL_SECONDS:-10}"
 # every job a run lists must pass too, named here or not. Each quoted: the name
 # has spaces.
 CI_JOBS=("lint + test")
+# The steps that must have run and passed, in whichever job (#147): the tests
+# are the pytest job's since #147 and lint + test's before it, so a rollback to
+# an older release still passes, and a skipped job lists no steps.
+CI_STEPS=("pytest")
+# The job a push run skips when the local gate attested the commit (#147): then
+# a dispatch or schedule run of it on main, which always runs it, decides.
+HEAVY_JOB=pytest
 GITHUB_API="https://api.github.com/repos/CannObserv/broker"
 UNIT_DIR="$HOST/etc/systemd/system"
 PROBE_UNIT=broker-bus-health.service
@@ -268,12 +275,24 @@ github() { # <path>: GitHub's JSON answer, or a refusal naming GitHub's message
 # The run that decides: the newest push run of ci.yml on main for exactly this
 # commit. A dispatch adds a workflow_dispatch run on the same SHA, and check
 # runs cannot tell them apart. A re-run counts, since a run reports its latest attempt.
-push_run() { # the run as JSON, or nothing
-  jq -c --arg sha "$sha" '[.workflow_runs[]
-    | select(.head_sha == $sha and .event == "push" and .head_branch == "main")]
+# For an attested commit (#147), the newest "full" run instead: a dispatch or a
+# schedule on main, which never skip the heavy tier (ci.yml's pytest job).
+newest_run() { # <push|full>: the run as JSON, or nothing
+  jq -c --arg sha "$sha" --arg kind "$1" '[.workflow_runs[]
+    | select(.head_sha == $sha and .head_branch == "main")
+    | select(if $kind == "push" then .event == "push"
+             else .event == "workflow_dispatch" or .event == "schedule" end)]
     | max_by(.created_at) // empty' ||
     die "GitHub's answer about $build's CI runs is not the JSON expected; nothing was built." \
       "Deploy again later, or pass --skip-ci."
+}
+
+# GitHub's runs list filters on one event at most, so a full run is asked for
+# by commit and branch alone, and newest_run picks the kind.
+runs_query() { # <push|full>
+  local q="actions/workflows/ci.yml/runs?head_sha=$sha&branch=main&per_page=100"
+  [[ "$1" == push ]] && q="actions/workflows/ci.yml/runs?head_sha=$sha&event=push&branch=main&per_page=100"
+  printf '%s\n' "$q"
 }
 
 # Waits for the run, bounded. Two commits will never get one, so they are
@@ -282,15 +301,31 @@ push_run() { # the run as JSON, or nothing
 # for a push made with GITHUB_TOKEN, and the weekly context measurement is one
 # (c5a0e06, 2026-10-15, has no run). The skills hook pushes with a PAT, and its
 # commits do get runs.
-finished_run() {
+#
+# A full run (#147) is never waited for to appear: nothing starts one but a
+# person or the schedule, so its absence is refused at once, naming the way to
+# start one. A dispatch or a schedule runs main's tip, so a commit behind it is
+# told to deploy the tip instead.
+finished_run() { # <push|full> [<the push run's url>]
+  local kind="$1" pushed="${2:-}"
   local deadline=$((SECONDS + CI_WAIT_SECONDS)) tip run state url left committer
   tip="$(git -C "$SRC" rev-parse origin/main)"
   committer="$(git -C "$SRC" log -1 --format=%cn "$sha")"
   while :; do
-    run="$(github "actions/workflows/ci.yml/runs?head_sha=$sha&event=push&branch=main&per_page=100" | push_run)" ||
-      exit 1
+    run="$(github "$(runs_query "$kind")" | newest_run "$kind")" || exit 1
     left=$((deadline - SECONDS))
-    if [[ -z "$run" && "$committer" == "github-actions[bot]" ]]; then
+    if [[ -z "$run" && "$kind" == full && "$sha" != "$tip" ]]; then
+      die "CI skipped $HEAVY_JOB on $build's push run: the local gate attested it (gate/local)," \
+        "and a release needs the tests from a runner. No dispatch or schedule run of it on main" \
+        "exists, and none can: both run main's tip, which $build is not. Deploy the tip once its" \
+        "full run passes, or pass --skip-ci. Nothing was built. Push run: $pushed"
+    elif [[ -z "$run" && "$kind" == full ]]; then
+      die "CI skipped $HEAVY_JOB on $build's push run: the local gate attested it (gate/local)," \
+        "and a release needs the tests from a runner. Dispatch ci.yml on main (gh workflow run" \
+        "ci.yml --ref main, with Actions: write; or the Actions tab), or wait for the daily schedule" \
+        "run, then deploy again; or pass --skip-ci. Dispatched in the last minute? Its run may not" \
+        "be listed yet. Nothing was built. Push run: $pushed"
+    elif [[ -z "$run" && "$committer" == "github-actions[bot]" ]]; then
       die "no CI run for $build, pushed by a workflow ($committer): GitHub never runs CI for a" \
         "push made with GITHUB_TOKEN, such as the weekly context measurement. Deploy the commit" \
         "under it, scripts/deploy.sh $(git -C "$SRC" rev-parse --short=12 "$sha^"), or pass" \
@@ -320,31 +355,66 @@ finished_run() {
   done
 }
 
-# Success only, from the run itself, every job it lists, and at least CI_JOBS.
-# A skipped job leaves the run "success", so the jobs are read too. CI_JOBS is
-# only the floor: it comes from this checkout, which may be older than ci.yml.
-# It goes to jq as a JSON array: "lint + test" would not survive a split on spaces.
-ci_gate() {
-  local run url conclusion jobs problems required
-  run="$(finished_run)" || exit 1
-  url="$(jq -r .html_url <<<"$run")"
-  conclusion="$(jq -r '.conclusion // "nothing"' <<<"$run")"
+# Success only, from the run itself, every job it lists, at least CI_JOBS, and
+# each of CI_STEPS run and passed in some job. A skipped job leaves the run
+# "success", so the jobs are read too, and a skipped job lists no steps. CI_JOBS
+# and CI_STEPS are only the floor: they come from this checkout, which may be
+# older than ci.yml. Each goes to jq as a JSON array: "lint + test" would not
+# survive a split on spaces.
+#
+# Sets PROBLEMS (empty: a pass), CONCLUSION, and ATTESTED: true when the run
+# passed but for its HEAVY_JOB alone, skipped, as an attested push run is (#147).
+judge() { # <run JSON>
+  local run="$1" jobs jobs_floor steps_floor
+  CONCLUSION="$(jq -r '.conclusion // "nothing"' <<<"$run")"
   jobs="$(github "actions/runs/$(jq -r .id <<<"$run")/jobs?per_page=100")" || exit 1
-  required="$(jq -cn '$ARGS.positional' --args "${CI_JOBS[@]}")"
-  problems="$(jq -r --argjson required "$required" '[
+  jobs_floor="$(jq -cn '$ARGS.positional' --args "${CI_JOBS[@]}")"
+  steps_floor="$(jq -cn '$ARGS.positional' --args "${CI_STEPS[@]}")"
+  PROBLEMS="$(jq -r --argjson jobs_floor "$jobs_floor" --argjson steps_floor "$steps_floor" '[
       (.jobs[] | select(.conclusion != "success") | "\(.name) (\(.conclusion // .status))"),
-      ($required[] as $name | select(any(.jobs[]; .name == $name) | not)
-        | "\($name) (not in the run)")
+      ($jobs_floor[] as $name | select(any(.jobs[]; .name == $name) | not)
+        | "\($name) (not in the run)"),
+      ($steps_floor[] as $name | [.jobs[].steps[]? | select(.name == $name)] as $ran
+        | select(any($ran[]; .conclusion == "success") | not)
+        | "\($name) step (\($ran[0] | if . then .conclusion // .status else "not in the run" end))")
     ] | join(", ")' <<<"$jobs")" ||
     die "GitHub's answer about $build's CI jobs is not the JSON expected; nothing was built." \
       "Deploy again later, or pass --skip-ci."
-  [[ "$conclusion" == success ]] || problems="run concluded $conclusion${problems:+; $problems}"
+  ATTESTED="$(jq -r --arg heavy "$HEAVY_JOB" --argjson jobs_floor "$jobs_floor" '. as $run
+      | ([.jobs[] | select(.conclusion != "success") | [.name, .conclusion]] == [[$heavy, "skipped"]])
+        and all($jobs_floor[]; . as $name | any($run.jobs[]; .name == $name))' <<<"$jobs")" ||
+    die "GitHub's answer about $build's CI jobs is not the JSON expected; nothing was built." \
+      "Deploy again later, or pass --skip-ci."
+  [[ "$CONCLUSION" == success ]] || {
+    PROBLEMS="run concluded $CONCLUSION${PROBLEMS:+; $PROBLEMS}"
+    ATTESTED=false
+  }
+}
+
+ci_gate() {
+  local run url kind=push remedy="fix it on main"
+  run="$(finished_run push)" || exit 1
+  url="$(jq -r .html_url <<<"$run")"
+  judge "$run"
+  if [[ -n "$PROBLEMS" && "$ATTESTED" == true ]]; then
+    # An attested push run (#147): its tests ran on the operator's machine, not
+    # a runner, and a re-run of it reads gate/local again and skips them again.
+    note "$build's push run skipped $HEAVY_JOB, attested by the local gate: asking for its full run"
+    run="$(finished_run full "$url")" || exit 1
+    url="$(jq -r .html_url <<<"$run")"
+    kind=full
+    judge "$run"
+  fi
   # Cancelled is not a verdict, and has nothing to fix. ci.yml cancels no push
   # run in progress, but a pending one is replaced when a newer push queues
-  # behind a running one, and the skills hook pushes unprompted.
-  local remedy="fix it on main"
-  [[ "$conclusion" == cancelled ]] && remedy="re-run it from its page (a re-run counts), or deploy a newer commit"
-  [[ -z "$problems" ]] || die "CI did not pass for $build: $problems. Nothing was built; $remedy. Run: $url"
+  # behind a running one, and the skills hook pushes unprompted. Dispatch,
+  # schedule and push runs on main share that one concurrency group.
+  if [[ "$CONCLUSION" == cancelled && "$kind" == full ]]; then
+    remedy="dispatch it again (gh workflow run ci.yml --ref main), or deploy a newer commit"
+  elif [[ "$CONCLUSION" == cancelled ]]; then
+    remedy="re-run it from its page (a re-run counts), or deploy a newer commit"
+  fi
+  [[ -z "$PROBLEMS" ]] || die "CI did not pass for $build: $PROBLEMS. Nothing was built; $remedy. Run: $url"
   note "CI passed for $build: $url"
   logger -t broker-deploy "CI passed for $build: $url" || true
 }

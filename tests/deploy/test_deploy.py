@@ -59,6 +59,8 @@ PROBE = "broker-bus-health.service"
 BACKUP = "broker-backup.service"
 # ci.yml's one job, by its name.
 JOB = "lint + test"
+# The heavy tier: its own job since #147, which an attested push run skips.
+HEAVY = "pytest"
 
 # The world's lock (#144): co-core from the co-pypi index, with a sha256 per file,
 # which `uv sync --locked` holds each download to; between two that are not.
@@ -301,7 +303,8 @@ printf '"revision": "%s"}\n' "$build"
 
 # GitHub's Actions API answers from <tmp>/ci: runs-<n>.json in turn, the last
 # repeating (a run that finishes between polls), and jobs-<id>.json. With none
-# written, one green push run on main for whatever commit was asked about.
+# written, one green push run on main for whatever commit was asked about, its
+# jobs ci.yml's two since #147, the tests step in the pytest job.
 # FAKE_CI_ERROR is GitHub refusing; as real curl does, only --fail-with-body
 # passes its message on.
 STUB_CURL = r"""#!/usr/bin/env bash
@@ -317,7 +320,9 @@ case "$url" in
     id="${url#*/actions/runs/}"
     id="${id%%/*}"
     cat "$ci/jobs-$id.json" 2>/dev/null ||
-      echo '{"jobs":[{"name":"lint + test","status":"completed","conclusion":"success"}]}' ;;
+      echo '{"jobs":[{"name":"lint + test","status":"completed","conclusion":"success","steps":[]},
+        {"name":"pytest","status":"completed","conclusion":"success",
+         "steps":[{"name":"pytest","status":"completed","conclusion":"success"}]}]}' ;;
   *)
     sha="${url#*head_sha=}"
     sha="${sha%%&*}"
@@ -612,15 +617,35 @@ class World:
             (self.ci / f"runs-{n}.json").write_text(body)
 
     def ci_jobs(self, run_id: int, **conclusions: str) -> None:
-        """A run's jobs by name and conclusion; ``lint + test`` left out is green.
-        Its name has spaces, so pass it as ``**{JOB: ...}``."""
-        jobs = {JOB: "success", **conclusions}
+        """A run's jobs by name and conclusion; ``lint + test`` and ``pytest``
+        left out are green. Its name has spaces, so pass it as ``**{JOB: ...}``.
+        A job that ran lists one step of its own name, as the pytest job's
+        ``pytest`` step; a skipped one lists none, as GitHub does."""
+        jobs = {JOB: "success", HEAVY: "success", **conclusions}
         body = [
-            {"name": name, "status": "completed", "conclusion": conclusion}
+            {
+                "name": name,
+                "status": "completed",
+                "conclusion": conclusion,
+                "steps": []
+                if conclusion == "skipped"
+                else [{"name": name, "status": "completed", "conclusion": conclusion}],
+            }
             for name, conclusion in jobs.items()
             if conclusion != "absent"
         ]
         (self.ci / f"jobs-{run_id}.json").write_text(json.dumps({"jobs": body}))
+
+    def ci_jobs_before_the_split(self, run_id: int, tests: str = "success") -> None:
+        """A run from before #147: one job, ``lint + test``, its ``pytest`` a step.
+        Every release older than #147 was gated on such a run, so a rollback to
+        one is too."""
+        steps = [
+            {"name": "ruff check", "status": "completed", "conclusion": "success"},
+            {"name": HEAVY, "status": "completed", "conclusion": tests},
+        ]
+        job = {"name": JOB, "status": "completed", "conclusion": "success", "steps": steps}
+        (self.ci / f"jobs-{run_id}.json").write_text(json.dumps({"jobs": [job]}))
 
     def calls(self) -> list[str]:
         return self.log.read_text().splitlines()
@@ -1207,6 +1232,201 @@ class TestTheCIGate:
         assert set(names) <= set(declared), (names, declared)
         assert "strategy:" not in jobs and "uses: ./" not in jobs, "a matrix renames the job"
         assert re.search(r"^on:\n  push:\n    branches: \[main\]$", workflow, re.M)
+
+
+class TestTheTestsStep:
+    """#147: a run passes only if its ``pytest`` step ran and passed, in
+    whichever job. Since #147 that is the pytest job; before it, ``lint +
+    test``, which every older release, and so every rollback, was gated on."""
+
+    def test_a_release_from_before_the_split_still_passes(self, world):
+        world.ci_answers([ci_run(7, world.main[-1])])
+        world.ci_jobs_before_the_split(7)
+        assert_ok(world.run())
+
+    def test_a_skipped_tests_step_is_refused(self, world):
+        """The reference's step-level skip leaves every job green."""
+        world.ci_answers([ci_run(7, world.main[-1])])
+        world.ci_jobs_before_the_split(7, tests="skipped")
+        result = world.run()
+        assert result.returncode == 1
+        assert "pytest step (skipped)" in result.stderr
+        assert_nothing_happened(world)
+
+    def test_a_run_whose_tests_never_ran_is_refused(self, world):
+        world.ci_answers([ci_run(7, world.main[-1])])
+        world.ci_jobs(7, **{HEAVY: "absent"})
+        result = world.run()
+        assert result.returncode == 1
+        assert "pytest step (not in the run)" in result.stderr
+        assert_nothing_happened(world)
+
+    def test_the_steps_the_gate_requires_are_ones_ci_yml_runs(self):
+        required = re.search(r"^CI_STEPS=\((.*)\)$", DEPLOY.read_text(), re.M)
+        assert required, "deploy.sh names its steps in CI_STEPS=(...)"
+        names = re.findall(r'"([^"]+)"', required.group(1))
+        assert names == [HEAVY]
+        steps = re.findall(r"^      - name: (.+)$", CI_WORKFLOW.read_text(), re.M)
+        assert set(names) <= set(steps), (names, steps)
+        heavy = re.search(r"^HEAVY_JOB=(\S+)$", DEPLOY.read_text(), re.M)
+        assert heavy and heavy.group(1) == HEAVY
+
+
+class TestAnAttestedCommit:
+    """#147: a push run that skipped only the pytest job (the local gate
+    attested the commit) is not a pass. A full run of the same commit on main,
+    a dispatch or a schedule, which always run the heavy tier, decides instead."""
+
+    @staticmethod
+    def attested(world: World, *full: dict, sha: str | None = None) -> None:
+        sha = sha or world.main[-1]
+        world.ci_answers([ci_run(7, sha), *full])
+        world.ci_jobs(7, **{HEAVY: "skipped"})
+
+    def test_with_no_full_run_the_tip_is_refused_naming_the_dispatch(self, world):
+        self.attested(world)
+        result = world.run()  # the default wait, 600 s: refused at once
+        assert result.returncode == 1
+        assert "skipped pytest" in result.stderr
+        assert "gate/local" in result.stderr
+        assert "gh workflow run ci.yml --ref main" in result.stderr
+        assert "--skip-ci" in result.stderr
+        assert "https://github.test/runs/7" in result.stderr
+        assert_nothing_happened(world)
+
+    def test_the_full_run_is_asked_for_by_commit_on_main_of_any_event(self, world):
+        self.attested(world)
+        world.run()
+        push, jobs, full = world.github_calls()
+        assert "event=push" in push and jobs.endswith("/runs/7/jobs?per_page=100")
+        assert "/actions/workflows/ci.yml/runs?" in full
+        assert f"head_sha={world.main[-1]}" in full and "branch=main" in full
+        assert "event=" not in full
+
+    @pytest.mark.parametrize("event", ["workflow_dispatch", "schedule"])
+    def test_a_green_full_run_passes_it(self, world, event):
+        self.attested(world, ci_run(8, world.main[-1], event=event, created="2026-10-01T02:00:00Z"))
+        world.ci_jobs(8)
+        result = world.run()
+        assert_ok(result)
+        assert world.github_calls()[-1].endswith("/actions/runs/8/jobs?per_page=100")
+        build = world.build(world.main[-1])
+        assert f"CI passed for {build}: https://github.test/runs/8" in result.stderr
+
+    def test_the_newest_full_run_decides(self, world):
+        sha = world.main[-1]
+        self.attested(
+            world,
+            ci_run(8, sha, event="schedule", created="2026-10-01T02:00:00Z"),
+            ci_run(9, sha, event="workflow_dispatch", created="2026-10-01T03:00:00Z"),
+        )
+        world.ci_jobs(8)
+        world.ci_jobs(9, **{HEAVY: "failure"})
+        result = world.run()
+        assert result.returncode == 1
+        assert "pytest (failure)" in result.stderr
+        assert "https://github.test/runs/9" in result.stderr
+        assert_nothing_happened(world)
+
+    def test_a_failed_full_run_is_refused(self, world):
+        self.attested(world, ci_run(8, world.main[-1], event="workflow_dispatch"))
+        world.ci_jobs(8, **{HEAVY: "failure"})
+        result = world.run()
+        assert result.returncode == 1
+        assert "pytest (failure)" in result.stderr
+        assert "fix it on main" in result.stderr
+        assert_nothing_happened(world)
+
+    def test_a_cancelled_full_run_says_dispatch_again(self, world):
+        """Dispatch, schedule and push runs on main share one concurrency
+        group, which replaces a pending run when another queues."""
+        full = ci_run(8, world.main[-1], event="workflow_dispatch", conclusion="cancelled")
+        self.attested(world, full)
+        world.ci_jobs(8, **{JOB: "absent", HEAVY: "absent"})
+        result = world.run()
+        assert result.returncode == 1
+        assert "run concluded cancelled" in result.stderr
+        assert "dispatch it again" in result.stderr
+        assert_nothing_happened(world)
+
+    def test_a_full_run_still_going_is_awaited(self, world):
+        sha = world.main[-1]
+        going = ci_run(8, sha, event="workflow_dispatch", status="in_progress")
+        world.ci_answers(
+            [ci_run(7, sha), going],
+            [ci_run(7, sha), going],
+            [ci_run(7, sha), {**going, "status": "completed", "conclusion": "success"}],
+        )
+        world.ci_jobs(7, **{HEAVY: "skipped"})
+        world.ci_jobs(8)
+        result = world.run(**PROMPT_POLLS)
+        assert_ok(result)
+        assert "waiting for CI" in result.stderr and "https://github.test/runs/8" in result.stderr
+
+    def test_a_full_run_still_going_when_the_wait_ends_is_refused(self, world):
+        going = ci_run(8, world.main[-1], event="workflow_dispatch", status="queued")
+        self.attested(world, going)
+        result = world.run(BROKER_DEPLOY_CI_WAIT_SECONDS="0")
+        assert result.returncode == 1
+        assert "queued" in result.stderr and "https://github.test/runs/8" in result.stderr
+        assert_nothing_happened(world)
+
+    @pytest.mark.parametrize(
+        ("event", "branch"),
+        [("workflow_dispatch", "feature"), ("pull_request", "main"), ("push", "feature")],
+        ids=["dispatch-elsewhere", "pr-from-main", "push-elsewhere"],
+    )
+    def test_a_green_run_of_another_kind_is_not_a_full_run(self, world, event, branch):
+        self.attested(world, ci_run(8, world.main[-1], event=event, branch=branch))
+        world.ci_jobs(8)
+        result = world.run()
+        assert result.returncode == 1
+        assert "gh workflow run ci.yml --ref main" in result.stderr
+        assert_nothing_happened(world)
+
+    def test_a_commit_behind_the_tip_is_refused_naming_the_tip(self, world):
+        """A dispatch or a schedule runs on main's tip: this commit gets neither."""
+        self.attested(world, sha=world.main[0])
+        result = world.run(world.main[0])
+        assert result.returncode == 1
+        assert "main's tip" in result.stderr
+        assert "gh workflow run" not in result.stderr
+        assert "--skip-ci" in result.stderr
+        assert_nothing_happened(world)
+
+    def test_a_full_run_still_passes_a_commit_behind_the_tip(self, world):
+        """A schedule that ran while it was the tip."""
+        sha = world.main[0]
+        self.attested(world, ci_run(8, sha, event="schedule"), sha=sha)
+        world.ci_jobs(8)
+        assert_ok(world.run(sha))
+
+    @pytest.mark.parametrize(
+        "jobs",
+        [{JOB: "failure"}, {"e2e": "skipped"}, {JOB: "skipped"}],
+        ids=["lint-failed-too", "another-job-skipped", "lint-skipped-too"],
+    )
+    def test_only_a_lone_skip_of_the_pytest_job_looks_for_a_full_run(self, world, jobs):
+        sha = world.main[-1]
+        world.ci_answers([ci_run(7, sha), ci_run(8, sha, event="workflow_dispatch")])
+        world.ci_jobs(7, **{HEAVY: "skipped", **jobs})
+        world.ci_jobs(8)
+        result = world.run()
+        assert result.returncode == 1
+        assert "https://github.test/runs/7" in result.stderr
+        assert len(world.github_calls()) == 2, "no full run asked for"
+        assert_nothing_happened(world)
+
+    def test_a_push_run_that_did_not_conclude_success_looks_for_no_full_run(self, world):
+        sha = world.main[-1]
+        world.ci_answers([ci_run(7, sha, conclusion="failure"), ci_run(8, sha, event="schedule")])
+        world.ci_jobs(7, **{HEAVY: "skipped"})
+        world.ci_jobs(8)
+        result = world.run()
+        assert result.returncode == 1
+        assert "run concluded failure" in result.stderr
+        assert len(world.github_calls()) == 2
+        assert_nothing_happened(world)
 
 
 class TestReleases:
