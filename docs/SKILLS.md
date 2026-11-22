@@ -49,6 +49,18 @@ The first session in a fresh clone or new worktree fails the hook with exit 127:
 it is a vendor symlink, and Claude Code runs hooks in parallel, so nothing can
 initialise the submodule before it. `bash .skills/doctor.sh` once fixes it.
 
+## The local-gate knob (#147)
+
+`.skills/attest-local-gate`, committed, holds `on`: shipping-work's `push.sh`
+gates and attests every push (`gate/local`), and refuses one from a tree that
+is dirty, has untracked files, or fails the gate. It reads the knob from the
+commit it pushes, never the work tree, so a push from `~/broker` needs
+`git submodule update` there after a pointer bump: a stale gitlink is dirt. The
+gate is the vendored `pre-ship.sh` (no `scripts/pre-ship.sh` here), which runs
+the whole suite with the node-only tests, but not shellcheck. The skills hook's
+own pushes don't go through `push.sh`, so its bumps get CI's full tier.
+CI's and the deploy's halves: [CI.md](CI.md), *The local gate's attestation*.
+
 ## Context cadence
 
 `.github/workflows/context-cadence.yml` measures the agent-context surface

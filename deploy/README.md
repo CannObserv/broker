@@ -440,6 +440,13 @@ journalctl -t broker-deploy -n 20          # CI passed for ..., live -> <sha12> 
      `GITHUB_TOKEN` push, such as the weekly context measurement. The refusal
      names the commit under it.
    - `audit.yml` is not gated.
+   - The `pytest` step must have run and passed, in whichever job
+     (`CI_STEPS`, #147). A push run that skipped the `pytest` job, the local
+     gate having attested the commit (`.skills/attest-local-gate`), is
+     replaced by the commit's newest dispatch or schedule run on `main`, judged
+     the same way. With none, it is refused at once with the way to start one:
+     `gh workflow run ci.yml --ref main`, then deploy again
+     ([docs/CI.md](../docs/CI.md), *The local gate's attestation*).
 2. **Build** `releases/<sha12>` at its final path, or reuse it when it is
    complete, root's, and still imports. A release `live` links is never rebuilt.
    Then two refusals before the switch, each journaled (#122):
