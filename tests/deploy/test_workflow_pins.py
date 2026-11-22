@@ -109,20 +109,31 @@ def test_wheel_check_fails_on_an_sdist_only_lock(tmp_path):
     assert _private_packages_without_a_wheel(lock) == ["co-core"]
 
 
+def _ci_jobs() -> list[str]:
+    """Each job's block in ci.yml."""
+    body = CI.read_text().split("\njobs:\n", 1)[1]
+    return re.split(r"^  [\w-]+:\n", body, flags=re.MULTILINE)[1:]
+
+
 def test_the_index_token_reaches_the_uv_sync_step_alone():
     """#144: the WIF step mints an access token for co-pypi's basic auth, and
     only the step that downloads takes it. ``uv lock --locked`` and every later
-    ``uv run`` resolve from the lock and the synced venv, so need none."""
-    assert _step_with(CI, "google-github-actions/auth").get("token_format") == "access_token"
-    text = CI.read_text()
-    assert len(re.findall(r"^[ \t]+id: auth$", text, re.MULTILINE)) == 1
-    uses = re.findall(r"steps\.auth\.outputs\.access_token", text)
-    assert len(uses) == 1, "the token goes to one step"
-    steps = re.split(r"^      - ", text, flags=re.MULTILINE)
-    (step,) = [s for s in steps if "steps.auth.outputs.access_token" in s]
-    assert step.startswith("name: uv sync\n")
-    assert "UV_INDEX_CO_PYPI_USERNAME: oauth2accesstoken" in step
-    assert re.search(r"^        run: uv sync --locked --group dev$", step, re.MULTILINE)
+    ``uv run`` resolve from the lock and the synced venv, so need none. Each
+    job syncs its own venv since #147's pytest job, so each holds the rule."""
+    jobs = _ci_jobs()
+    assert len(jobs) == 2, "lint + test, and pytest (#147)"
+    for job in jobs:
+        auth = re.search(r"^      - name: Authenticate.*\n((?:        .*\n)+)", job, re.MULTILINE)
+        assert auth, "each job authenticates"
+        assert re.search(r"^          token_format: access_token$", auth.group(1), re.MULTILINE)
+        assert len(re.findall(r"^[ \t]+id: auth$", job, re.MULTILINE)) == 1
+        uses = re.findall(r"steps\.auth\.outputs\.access_token", job)
+        assert len(uses) == 1, "the token goes to one step"
+        steps = re.split(r"^      - ", job, flags=re.MULTILINE)
+        (step,) = [s for s in steps if "steps.auth.outputs.access_token" in s]
+        assert step.startswith("name: uv sync\n")
+        assert "UV_INDEX_CO_PYPI_USERNAME: oauth2accesstoken" in step
+        assert re.search(r"^        run: uv sync --locked --group dev$", step, re.MULTILINE)
 
 
 def test_ci_no_longer_syncs_a_wheelhouse():
