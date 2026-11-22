@@ -87,6 +87,8 @@ def _condition() -> str:
 # Just enough of the expression language for the one condition: property
 # paths, string literals, ==, !=, &&, ||, !, parentheses, startsWith() and
 # cancelled(). A missing property is null, which equals no string, as on Actions.
+# Strings compare ignoring case there, startsWith() too, so both sides are
+# case-folded here (CR 3).
 
 
 class _Null:
@@ -106,12 +108,15 @@ class _Ctx:
 
     def __getattr__(self, name: str):
         value = self._data.get(name, _Null())
-        return _Ctx(value) if isinstance(value, dict) else value
+        if isinstance(value, dict):
+            return _Ctx(value)
+        return value.casefold() if isinstance(value, str) else value
 
 
 def _evaluate(expr: str, context: dict, *, cancelled: bool = False) -> bool:
     py = expr.replace("&&", " and ").replace("||", " or ")
     py = re.sub(r"!(?!=)", " not ", py)
+    py = re.sub(r"'([^']*)'", lambda m: repr(m.group(1).casefold()), py)
     assert re.fullmatch(r"[\w.'\s()=!,/-]+", py), py
     names = {k: _Ctx(v) for k, v in context.items()}
     names["startsWith"] = lambda s, p: isinstance(s, str) and s.startswith(p)
@@ -165,6 +170,13 @@ def test_the_heavy_tier_runs_for_everything_else(context):
 
 def test_a_cancelled_run_starts_no_heavy_tier():
     assert not _evaluate(_condition(), _context("push", attested="no"), cancelled=True)
+
+
+def test_the_evaluator_compares_strings_ignoring_case_as_actions_does():
+    assert _evaluate(
+        "github.event.pull_request.user.type == 'bot'", _context("pull_request", user_type="Bot")
+    )
+    assert _evaluate("startsWith(github.ref, 'REFS/tags/')", _context("push", ref="refs/tags/v1"))
 
 
 def test_the_evaluator_reads_null_as_no_string():
