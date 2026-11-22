@@ -1,0 +1,3 @@
+# shipping-work's push.sh gates and attests each push: gate/local on the SHA.
+# Read from the commit pushed. docs/SKILLS.md, *The local-gate knob* (#147).
+on
