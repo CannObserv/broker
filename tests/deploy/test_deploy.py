@@ -1349,6 +1349,19 @@ class TestAnAttestedCommit:
         assert "dispatch it again" in result.stderr
         assert_nothing_happened(world)
 
+    def test_a_cancelled_full_run_behind_the_tip_names_the_tip(self, world):
+        """A dispatch runs main's tip: it would never cover this commit."""
+        sha = world.main[0]
+        full = ci_run(8, sha, event="schedule", conclusion="cancelled")
+        self.attested(world, full, sha=sha)
+        world.ci_jobs(8, **{JOB: "absent", HEAVY: "absent"})
+        result = world.run(sha)
+        assert result.returncode == 1
+        assert "run concluded cancelled" in result.stderr
+        assert "main's tip" in result.stderr
+        assert "dispatch it again" not in result.stderr
+        assert_nothing_happened(world)
+
     def test_a_full_run_still_going_is_awaited(self, world):
         sha = world.main[-1]
         going = ci_run(8, sha, event="workflow_dispatch", status="in_progress")

@@ -409,7 +409,10 @@ ci_gate() {
   # run in progress, but a pending one is replaced when a newer push queues
   # behind a running one, and the skills hook pushes unprompted. Dispatch,
   # schedule and push runs on main share that one concurrency group.
-  if [[ "$CONCLUSION" == cancelled && "$kind" == full ]]; then
+  # A dispatch runs main's tip, so it never covers a commit behind it (CR 1).
+  if [[ "$CONCLUSION" == cancelled && "$kind" == full && "$sha" != "$(git -C "$SRC" rev-parse origin/main)" ]]; then
+    remedy="no dispatch can replace it, since one runs main's tip: deploy the tip once its full run passes"
+  elif [[ "$CONCLUSION" == cancelled && "$kind" == full ]]; then
     remedy="dispatch it again (gh workflow run ci.yml --ref main), or deploy a newer commit"
   elif [[ "$CONCLUSION" == cancelled ]]; then
     remedy="re-run it from its page (a re-run counts), or deploy a newer commit"
