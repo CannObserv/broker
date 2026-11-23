@@ -32,7 +32,8 @@ gives its reason on the same line. Pinned by `tests/deploy/test_shellcheck_gate.
 
 ## Pins (#88, #90)
 
-Every `uses:` in `ci.yml` and `audit.yml` is `owner/action@<40-hex sha> # vX.Y.Z`.
+Every `uses:` in `ci.yml` and `audit.yml` is `owner/action@<40-hex sha> # vX.Y.Z`,
+as is `context-cadence.yml`'s checkout, whose pin is the template's (#149).
 setup-uv publishes no floating major since v8, and a tag can be moved. When a
 pin moves, check the SHA against its tag:
 
@@ -52,10 +53,11 @@ one PR per action, `chore:` subjects. No `uv` version updates: co-core's pin
 moves as a registration (#104, #114). Security updates need no entry and no
 `registries:` key ([below](#the-co-pypi-index-144)).
 
-**`context-cadence.yml` is excluded** (`exclude-paths`). A re-render reverts any
-bump made in it (gregoryfoster/skills#373), so its `actions/checkout@v5` moves
-with the installer: re-run `install-cadence.sh` after the skills submodule
-brings a new template. `exclude-paths` lists no ecosystem limit in GitHub's
+**`context-cadence.yml` is excluded** (`exclude-paths`), so its checkout pin
+moves with the installer: re-run `install-cadence.sh` after the skills submodule
+brings a new template, and check the new SHA as Pins, above. The exclusion
+dates from re-renders that reverted a bump; since gregoryfoster/skills#373 a
+re-render keeps an installed SHA pin, so it is now a choice (#149). `exclude-paths` lists no ecosystem limit in GitHub's
 [Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#exclude-paths),
 and dependabot-core applies it in the base fetcher's `repo_contents`
 (`common/lib/dependabot/file_fetchers/base.rb`, `filter_excluded`, read at
