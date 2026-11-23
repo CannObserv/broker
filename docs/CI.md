@@ -70,7 +70,8 @@ and `context-cadence.yml` together, and the PR's checks run only the first
 two: the cadence workflow runs on `schedule` and `workflow_dispatch` alone.
 Land the PR as below, then read its next Thursday run (15:51 UTC,
 [SKILLS.md](SKILLS.md)): `gh run list --workflow context-cadence.yml --limit 1`.
-Dispatching it instead is not a free check: a run appends a ledger row and
+Green confirms the bump; a red **checkout** step is the bump's, any other red
+the cadence's own. Dispatching it instead is not a free check: a run appends a ledger row and
 pushes it to `main` (#149).
 
 **A Dependabot run reads its own credential context.** GitHub runs it as if
