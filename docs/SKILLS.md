@@ -69,7 +69,8 @@ from the repo name to stagger the cohort. It appends one `baseline:scheduled`
 row to `.skills/context-metrics.jsonl` and **pushes it to `main` itself**, so a
 local `main` can fall behind by a `chore: weekly context measurement` commit.
 It measures and never curates; a budget warning in its run means someone runs
-`curate context` here.
+`curate context` here. Dependabot moves its checkout pin, in a PR whose CI never
+runs it: [CI.md](CI.md), *Dependabot* (#150).
 
 - **It needs the `ANTHROPIC_API_KEY` repository secret.** It checks the
   credential first and fails the run without it. An estimated count can't be
