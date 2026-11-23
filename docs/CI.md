@@ -32,8 +32,9 @@ gives its reason on the same line. Pinned by `tests/deploy/test_shellcheck_gate.
 
 ## Pins (#88, #90)
 
-Every `uses:` in `ci.yml` and `audit.yml` is `owner/action@<40-hex sha> # vX.Y.Z`,
-as is `context-cadence.yml`'s checkout, whose pin is the template's (#149).
+Every `uses:` in `ci.yml`, `audit.yml` and `context-cadence.yml` is
+`owner/action@<40-hex sha> # vX.Y.Z`, and Dependabot moves all three files'
+pins (#150).
 setup-uv publishes no floating major since v8, and a tag can be moved. When a
 pin moves, check the SHA against its tag:
 
@@ -44,9 +45,10 @@ gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq '.object.type + " " + .obj
 `commit`: that SHA is the pin. `tag`: an annotated tag, whose SHA names the tag
 object, not a commit; the pin is the commit it points at,
 `gh api repos/<owner>/<action>/git/tags/<sha> --jq .object.sha`. Pinned by
-`tests/deploy/test_workflow_pins.py` and `tests/deploy/test_dependabot.py`;
-neither reads the cadence pin, which `install-cadence.sh --check` reports (the
-skills hook logs it daily).
+`tests/deploy/test_workflow_pins.py` (`ci.yml`, `audit.yml`) and
+`tests/deploy/test_dependabot.py` (all three). `install-cadence.sh --check`
+also reports the cadence pin against its template's (the skills hook logs it
+daily).
 
 ## Dependabot (#90)
 
@@ -55,15 +57,21 @@ one PR per action, `chore:` subjects. No `uv` version updates: co-core's pin
 moves as a registration (#104, #114). Security updates need no entry and no
 `registries:` key ([below](#the-co-pypi-index-144)).
 
-**`context-cadence.yml` is excluded** (`exclude-paths`), so its checkout pin
-moves with the installer: re-run `install-cadence.sh` after the skills submodule
-brings a new template, and check the new SHA as Pins, above. The exclusion
-dates from re-renders that reverted a bump; since gregoryfoster/skills#373 a
-re-render keeps an installed SHA pin, so it is now a choice (#149). `exclude-paths` lists no ecosystem limit in GitHub's
-[Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#exclude-paths),
-and dependabot-core applies it in the base fetcher's `repo_contents`
-(`common/lib/dependabot/file_fetchers/base.rb`, `filter_excluded`, read at
-`00f6c78`), which the `github-actions` fetcher lists `.github/workflows/` through.
+**`context-cadence.yml` is scanned too** (#150). `install-cadence.sh`
+renders it, and since gregoryfoster/skills#373 a re-render keeps an installed
+SHA pin, so a bump survives the next one. The installer keeps only the
+checkout line, so `tests/deploy/test_dependabot.py` pins that as the file's
+only `uses:`: a template that adds another fails there, and gets a decision
+before a bump to it can be reverted unseen.
+
+**A cadence bump is not exercised by its PR's CI.** Dependabot opens one PR
+per action across every file, so a checkout bump moves `ci.yml`, `audit.yml`
+and `context-cadence.yml` together, and the PR's checks run only the first
+two: the cadence workflow runs on `schedule` and `workflow_dispatch` alone.
+Land the PR as below, then read its next Thursday run (15:51 UTC,
+[SKILLS.md](SKILLS.md)): `gh run list --workflow context-cadence.yml --limit 1`.
+Dispatching it instead is not a free check: a run appends a ledger row and
+pushes it to `main` (#149).
 
 **A Dependabot run reads its own credential context.** GitHub runs it as if
 from a fork: a read-only `GITHUB_TOKEN`, Dependabot secrets only. `ci.yml` needs
