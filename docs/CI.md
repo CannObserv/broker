@@ -44,7 +44,9 @@ gh api repos/<owner>/<action>/git/ref/tags/<tag> --jq '.object.type + " " + .obj
 `commit`: that SHA is the pin. `tag`: an annotated tag, whose SHA names the tag
 object, not a commit; the pin is the commit it points at,
 `gh api repos/<owner>/<action>/git/tags/<sha> --jq .object.sha`. Pinned by
-`tests/deploy/test_workflow_pins.py` and `tests/deploy/test_dependabot.py`.
+`tests/deploy/test_workflow_pins.py` and `tests/deploy/test_dependabot.py`;
+neither reads the cadence pin, which `install-cadence.sh --check` reports (the
+skills hook logs it daily).
 
 ## Dependabot (#90)
 
