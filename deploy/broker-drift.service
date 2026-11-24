@@ -2,7 +2,7 @@
 Description=Broker drift check - does live lag origin/main in code that runs? Checks in to co-status (CannObserv/broker#110)
 Documentation=https://github.com/CannObserv/broker/blob/main/deploy/README.md
 # After tailscaled: co-status is reached by its MagicDNS name. Deliberately NOT
-# bound to redis-server.service or the probe: a deploy concern stays out of the
+# bound to valkey-server.service or the probe: a deploy concern stays out of the
 # bus (#22 D6), and the drift check touches no Redis at all.
 Wants=network-online.target
 After=network-online.target tailscaled.service

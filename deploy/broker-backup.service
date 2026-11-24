@@ -1,6 +1,6 @@
 [Unit]
 Description=Broker RDB snapshot and ACL digests to GCS - hourly, create-only, holds no Redis credential (CannObserv/broker#4, #72)
-# Deliberately NOT ordered after or bound to redis-server.service. The artifact
+# Deliberately NOT ordered after or bound to valkey-server.service. The artifact
 # is a file: a stopped broker still has a dump.rdb worth shipping, and binding
 # to its unit would skip exactly that backup.
 After=network-online.target
@@ -9,8 +9,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 # A static system user (#109), made by hand before the deploy that installs this
-# unit: no home, no login, in no supplementary group. NOT the redis group, which
-# holds WRITE on dump.rdb and on /etc/redis; NOT DynamicUser=, which moves
+# unit: no home, no login, in no supplementary group. NOT the valkey group, which
+# holds WRITE on dump.rdb and on /etc/valkey; NOT DynamicUser=, which moves
 # StateDirectory= under /var/lib/private (0700) where the probe cannot read
 # state.json. It reads neither dump.rdb nor the two root-only files itself: the
 # copy below and the credentials hand each over at start.
@@ -41,7 +41,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 # snapshot first and then fails, as a refused one does (#72).
 LoadCredential=gcs-writer:/etc/broker/co-broker-backup.json
 SetCredential=gcs-writer:\n
-LoadCredential=acl-passwords:/etc/redis/broker-acl-passwords
+LoadCredential=acl-passwords:/etc/valkey/broker-acl-passwords
 SetCredential=acl-passwords:\n
 
 # /var/lib/broker-backup/state.json - one record per run, written 0644 because
@@ -85,10 +85,10 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 TimeoutStartSec=600
 
 # The only privileged step: root runs coreutils, never Python, outside the
-# sandbox. /var/lib/redis is 0750 redis:redis, so this is the one read the user
+# sandbox. /var/lib/valkey is 0750 valkey:valkey, so this is the one read the user
 # cannot make. -p keeps the mtime snapshot_time falls back to. '-': a failed
 # copy is no start failure, so the run finds no file and records that.
-ExecStartPre=+-/usr/bin/install -p -m 0400 -o broker-backup -g broker-backup /var/lib/redis/dump.rdb ${RUNTIME_DIRECTORY}/dump.rdb
+ExecStartPre=+-/usr/bin/install -p -m 0400 -o broker-backup -g broker-backup /var/lib/valkey/dump.rdb ${RUNTIME_DIRECTORY}/dump.rdb
 # The release venv's interpreter, never `uv run`: uv wants a writable cache and
 # may sync the environment, both refused by the sandbox. The venv was resolved
 # when the release was built; nothing resolves at start.

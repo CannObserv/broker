@@ -24,23 +24,33 @@ quiet *:00-*:07
 # harmless; a Redis step is best started just after one.
 
 # --- the data store -------------------------------------------------------
-datastore redis redis-server
+# Valkey 7.2 since CannObserv/broker#85's window: a redis-type store, on
+# Valkey's own unit. The skill reads its conf from ExecStart
+# (/etc/valkey/valkey.conf) and its listener from the socket.
+datastore redis valkey-server
 # The hourly snapshot to gs://co-gcs-broker-backup stands in for a dump. Under
 # appendonly yes a restored RDB is ignored unless staged as the AOF base:
 # docs/RECOVERY.md, src/broker/restore.py.
-backup broker-backup.service redis-server.service
+backup broker-backup.service valkey-server.service
 
-# tailscaled carries every participant's connection, and redis-server binds
+# tailscaled carries every participant's connection, and valkey-server binds
 # the tailnet address (After=/Wants= tailscaled, wait-for-tailnet-addr.sh), so
 # a tailscaled restart is a bus event: its own held step, after the redis one.
 # Followed in the maintenance lane (owner, 2026-10-13); its postinst restarts
 # tailscaled, so the step is approved on its own and the bind checked after.
 origin pkgs.tailscale.com follow
 hold tailscale tailscale
-# The probe checks redis-server's After= on tailscaled, and --post-boot that
+# The probe checks valkey-server's After= on tailscaled, and --post-boot that
 # tailscaled was active first. depends stops and holds nothing, so the hold
 # above stays.
-depends redis-server tailscaled
+depends valkey-server tailscaled
+
+# The skill's default redis step holds redis-server redis-tools alone, and
+# valkey-server's postinst restarts the unit on upgrade: without this line a
+# Valkey update would ride the bulk lane and restart the bus outside a held
+# step. Naming the default step replaces it, so the 7.0 packages, installed and
+# stopped through #85's soak, stay in it too until they are removed.
+hold redis-server redis-tools valkey-server valkey-tools redis
 
 # --- who is told ----------------------------------------------------------
 # Each bus participant (docs/STREAMS.md, docs/NETWORK-PATHS.md).
@@ -55,8 +65,10 @@ caller CannObserv/processor
 
 # --- checks (never root: they run as the invoking user, here exedev) -------
 # Redis answers, and anonymous is still refused. NOAUTH writes no ACL LOG
-# entry (measured 2026-10-13), so polling it every second adds no evidence noise.
-health redis-cli -h 127.0.0.1 -p 6379 PING 2>&1 | grep -qx 'NOAUTH Authentication required.'
+# entry (measured 2026-10-13 on 7.0; valkey-cli against Valkey 7.2.14 answers the
+# same line and logs nothing, measured 2026-11-24, #85), so polling it every
+# second adds no evidence noise.
+health valkey-cli -h 127.0.0.1 -p 6379 PING 2>&1 | grep -qx 'NOAUTH Authentication required.'
 # The tailnet bind every remote participant connects through.
 health ss -Hltn 'sport = :6379' | grep -q '100\.97\.91\.19:6379'
 # The probe's last tick is recent and clean. 12 min: OnUnitActiveSec=10min,

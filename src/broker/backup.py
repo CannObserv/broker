@@ -1,6 +1,6 @@
 """Ship the broker's RDB snapshot to a bucket, hourly (CannObserv/broker#4).
 
-``/var/lib/redis`` is the only copy of every stream, every consumer group's
+``/var/lib/valkey`` is the only copy of every stream, every consumer group's
 position and PEL, and replicator's expiring command state. ``appendonly yes``
 protects against a process restart, not against losing the disk. This job puts
 a copy of the server's own snapshot off-node, and it is built to be dumb in the
@@ -26,7 +26,7 @@ ways that keep a backup honest:
 - **It ships the ACL digests beside the snapshot** (CannObserv/broker#72).
   The service users' digests are not reproducible - each service holds its
   plaintext on its own host - and they are what re-admits it on a rebuilt node.
-  The object is a projection of ``/etc/redis/broker-acl-passwords``: service
+  The object is a projection of ``/etc/valkey/broker-acl-passwords``: service
   digest lines only, sorted. Prose stays on the node, and so do the three node
   users a rebuild mints fresh. A digest is not a credential - ``AUTH`` takes
   the plaintext - which is why "holds no Redis credential" survives it. That
@@ -75,13 +75,13 @@ OBJECT_SUFFIX = ".rdb.gz"
 # Basic-format ISO 8601, UTC. Sorts as it reads, and no ':' for a shell to trip on.
 KEY_TIME_FORMAT = "%Y%m%dT%H%M%SZ"
 CONTENT_TYPE = "application/gzip"
-DEFAULT_RDB = Path("/var/lib/redis/dump.rdb")
+DEFAULT_RDB = Path("/var/lib/valkey/dump.rdb")
 
 # The ACL digests (CannObserv/broker#72). Not ``.rdb.gz``, so the restore's
 # snapshot listing never offers one.
 DIGESTS_SUFFIX = ".digests"
 DIGESTS_CONTENT_TYPE = "text/plain"
-DEFAULT_ACL_PASSWORDS = Path("/etc/redis/broker-acl-passwords")
+DEFAULT_ACL_PASSWORDS = Path("/etc/valkey/broker-acl-passwords")
 # The users a rebuild mints rather than restores (docs/RECOVERY.md step 0):
 # acladmin and brokeradmin into credentials encrypted to the new host key, and
 # default a fresh tombstone. Shipping their lines would make a rebuild's append

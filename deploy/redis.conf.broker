@@ -1,6 +1,8 @@
-# The broker's Redis tuning, as deployed (CannObserv/broker#1 D3/D5/D6).
+# The broker's engine tuning, as deployed (CannObserv/broker#1 D3/D5/D6). The
+# engine is Valkey 7.2 since CannObserv/broker#85's window; the file keeps its
+# name, which archiver's half of the OOM seam names (archiver#196).
 #
-# INSTALL: appended verbatim to /etc/redis/redis.conf on the broker node, with
+# INSTALL: appended verbatim to /etc/valkey/valkey.conf on the broker node, with
 # the requirepass placeholder replaced by a value minted at install and kept
 # nowhere else (../deploy/README.md, "Install"; CannObserv/broker#52). Redis
 # takes the LAST occurrence of a directive, so this block wins over everything
@@ -13,10 +15,10 @@
 # had already answered it the other way on the node. Phase 5 settles it here:
 # requirepass CANNOT move to a drop-in, because a drop-in states its settings as
 # ExecStart arguments and that puts the password in argv, visible in `ps` and in
-# journald. The secret has to live in redis.conf regardless, so splitting the
+# journald. The secret has to live in valkey.conf regardless, so splitting the
 # rest of the tuning across two mechanisms buys nothing and costs a second place
 # to look. The drop-in slot is used for the one thing a config file cannot
-# express - unit ordering - and nothing else; see redis-server.service.d/.
+# express - unit ordering - and nothing else; see valkey-server.service.d/.
 #
 # THE SECRET IS TEMPLATED, and `test_tracked_config_carries_no_secret` keeps it
 # that way. The live-config parity test compares every directive below against
@@ -30,16 +32,16 @@
 # ../docs/STREAMS.md grows.
 
 ################################ CannObserv/broker#1 ##########################
-# Everything above this line is the stock Debian/Ubuntu redis.conf, untouched.
+# Everything above this line is the stock Ubuntu valkey.conf, untouched.
 # Redis takes the LAST occurrence of a directive, so this block wins without
 # needing to edit anything above it - which keeps the diff against the packaged
 # file to a single appended, clearly delimited section.
 
 # Loopback stays in the bind list deliberately. It is not remotely reachable,
-# and it keeps local redis-cli working. notifier#43 lost an afternoon to a
+# and it keeps local valkey-cli working. notifier#43 lost an afternoon to a
 # tailnet-only bind where both 127.0.0.1 and the short hostname failed; there is
 # no reason to inherit that trap on a box whose entire job is to be administered.
-# The tailnet address is why redis-server.service.d/broker.conf orders after
+# The tailnet address is why valkey-server.service.d/broker.conf orders after
 # tailscaled and waits for the address (broker#1 R1 / observo#473).
 bind 127.0.0.1 100.97.91.19
 protected-mode yes
@@ -60,7 +62,7 @@ appendfsync everysec
 # D6, carried verbatim from archiver#128 because it is easy to lose in a move:
 # noeviction WITHOUT a cap is inert. With the default maxmemory 0 there is no
 # ceiling to refuse writes at, so an untrimmed stream grows until the kernel
-# OOM-killer takes redis-server, costing the broker plus an AOF-replay restart.
+# OOM-killer takes the engine, costing the broker plus an AOF-replay restart.
 # The cap restores the intended failure mode: bounded, instance-wide
 # "OOM command not allowed" errors that a producer can retry through. Archiver's
 # outbox does - that error is classified TRANSIENT in _TRANSIENT_PUBLISH_ERRORS
@@ -111,6 +113,6 @@ databases 1
 # broker#2. Immutable config - this is why the ACL users needed a window at all.
 # Everything after this is live: ACL SETUSER applies immediately, ACL SAVE
 # persists to the file.
-aclfile /etc/redis/users.acl
+aclfile /etc/valkey/users.acl
 
 ###############################################################################

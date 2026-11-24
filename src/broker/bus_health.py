@@ -160,7 +160,7 @@ MEMORY_NAMED_STREAMS = 3
 # load-bearing beyond refusing writes" (CannObserv/broker#9).
 BROKER_EVICTION_POLICY = "noeviction"
 
-# Root-filesystem headroom. On this node ``/`` is where ``/var/lib/redis``
+# Root-filesystem headroom. On this node ``/`` is where ``/var/lib/valkey``
 # lives, so this is the AOF's headroom and nothing else alerts on it. The
 # fraction matches the state observed when archiver#130 was un-deferred (91%
 # used); the absolute floor catches the same condition on a small disk where a
@@ -2148,8 +2148,9 @@ def evaluate_persistence(info: dict, *, now: datetime) -> list[Finding]:
         Finding(
             check="persistence",
             subject=field,
-            message=f"{field} is {info[field]!r} - see `INFO persistence` and the redis-server "
-            "journal; while it stays that way the on-disk copy is not being refreshed",
+            message=f"{field} is {info[field]!r} - see `INFO persistence` and "
+            "/var/log/valkey/valkey-server.log; while it stays that way the on-disk copy is "
+            "not being refreshed",
         )
         for field in _PERSISTENCE_STATUS_FIELDS
         if field in info and str(info[field]) != "ok"

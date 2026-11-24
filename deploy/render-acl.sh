@@ -1,5 +1,5 @@
 #!/bin/bash
-# Render deploy/redis-acl.conf into a file redis-server will actually load.
+# Render deploy/redis-acl.conf into a file valkey-server will actually load.
 #
 # TWO transforms, and the first is not optional: **an aclfile permits no
 # comments and no blank lines.** Redis refuses to start on one -
@@ -23,7 +23,7 @@
 # what is tested is what is installed. Nothing it prints to stderr carries a
 # value from the passwords file - placeholders and line numbers only.
 #
-# Usage: render-acl.sh <passwords-file>  > /etc/redis/users.acl
+# Usage: render-acl.sh <passwords-file>  > /etc/valkey/users.acl
 set -euo pipefail
 
 PASSWORDS="${1:?usage: render-acl.sh <passwords-file>}"

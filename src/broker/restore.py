@@ -10,10 +10,10 @@ recognises the base by its ``REDIS`` magic, loads it, opens the incr file, and
 the next write appends there. ``tests/deploy/test_backup_restore_rehearsal.py``
 proves it against a real server on every run, positions and PEL included.
 
-``python -m src.broker.restore --latest --into /var/lib/redis`` is the whole
+``python -m src.broker.restore --latest --into /var/lib/valkey`` is the whole
 data half of a rebuild; docs/RECOVERY.md is the runbook around it.
 
-``--digests /etc/redis/broker-acl-passwords`` is the admission half
+``--digests /etc/valkey/broker-acl-passwords`` is the admission half
 (CannObserv/broker#72): the newest ACL digests the backup shipped, whichever
 snapshot is staged. Rolling data back is not rolling back who is admitted.
 """
@@ -54,7 +54,7 @@ MANIFEST_FILE = "appendonly.aof.manifest"
 # swapped for the snapshot. One entry per line and a trailing newline; the
 # manifest parser is strict about both.
 MANIFEST = f"file {BASE_FILE} seq 1 type b\nfile {INCR_FILE} seq 1 type i\n"
-DEFAULT_REDIS_DIR = Path("/var/lib/redis")
+DEFAULT_REDIS_DIR = Path("/var/lib/valkey")
 # The passwords file render-acl.sh reads: root's alone, as the install makes it.
 DIGESTS_FILE_MODE = 0o400
 # What `--list` prints beside each name, in this order.
@@ -123,7 +123,7 @@ def write_digests(body: bytes, dest: Path, *, expected_sha256: str | None) -> No
     rule), bytes that are not what the object's metadata says was shipped, and
     anything the backup itself would not ship. The bucket is not trusted to
     have been written by this job alone, so a plaintext or a node user's line
-    stops here rather than in ``/etc/redis``.
+    stops here rather than in ``/etc/valkey``.
     """
     if expected_sha256 and hashlib.sha256(body).hexdigest() != expected_sha256:
         raise RestoreError("download does not match the sha256 the backup recorded")
@@ -162,10 +162,10 @@ def _next_steps(redis_dir: Path, source: str) -> str:
     return (
         f"staged {source}\n"
         f"  as {staged / BASE_FILE}\n"
-        "next, as root - Redis must own what it will write to:\n"
-        f"  chown -R redis:redis {staged}\n"
+        "next, as root - the engine must own what it will write to:\n"
+        f"  chown -R valkey:valkey {staged}\n"
         f"  chmod 0750 {staged} && chmod 0640 {staged}/*\n"
-        "  systemctl start redis-server\n"
+        "  systemctl start valkey-server\n"
         "then verify the positions, not just the key count - docs/RECOVERY.md\n"
     )
 

@@ -37,7 +37,7 @@
 #   6. compare the host configs (never installed), prune to KEEP releases plus
 #      live, never the release live replaced
 #
-# It restarts nothing, and never redis-server. The one thing it starts is the
+# It restarts nothing, and never valkey-server. The one thing it starts is the
 # drift timer, the first time it installs it. Runs as exedev; sudo -n for every
 # write under the deploy root, for the unit files and for systemctl: a password
 # prompt would hang the deploy holding its lock, so it is a refusal instead. exedev can
@@ -87,8 +87,8 @@ ENABLE_NEW=(broker-drift.timer)
 # so compared byte for byte after a deploy, and never installed by one (D9).
 # tests/deploy/test_deploy.py accounts for every file under deploy/.
 HOST_CONFIGS=(
-  "redis-server.service.d/broker.conf=/etc/systemd/system/redis-server.service.d/broker.conf"
-  "redis-server.service.d/memory.conf=/etc/systemd/system/redis-server.service.d/memory.conf"
+  "valkey-server.service.d/broker.conf=/etc/systemd/system/valkey-server.service.d/broker.conf"
+  "valkey-server.service.d/memory.conf=/etc/systemd/system/valkey-server.service.d/memory.conf"
   "system.slice.d/broker-memory.conf=/etc/systemd/system/system.slice.d/broker-memory.conf"
   "tailscaled.service.d/memory.conf=/etc/systemd/system/tailscaled.service.d/memory.conf"
   "sysctl.d/60-broker-memory.conf=/etc/sysctl.d/60-broker-memory.conf"
@@ -98,7 +98,7 @@ HOST_CONFIGS=(
   "wait-for-tailnet-addr.sh=/usr/local/sbin/wait-for-tailnet-addr.sh"
 )
 # Installed derived, not verbatim: redis.conf.broker appended with a requirepass
-# minted at install, redis-acl.conf rendered with digests, both under /etc/redis,
+# minted at install, redis-acl.conf rendered with digests, both under /etc/valkey,
 # which exedev cannot read. Compared with the release live ran instead; the
 # parity tests in tests/deploy compare them with the node.
 DERIVED_CONFIGS=(redis.conf.broker redis-acl.conf)
@@ -912,7 +912,7 @@ note_units_not_in_release() {
 }
 
 # Host configs change rarely, and installing one is a reload, a sysctl or a
-# redis-server restart: by hand, in a window when it is the last. A difference is
+# valkey-server restart: by hand, in a window when it is the last. A difference is
 # a note, never an install, never a failure (D9).
 compare_host_configs() {
   local entry rel dest previous_dir="" told=0
@@ -934,7 +934,7 @@ compare_host_configs() {
       told=1
     elif ! cmp -s "$previous_dir/deploy/$rel" "$release/deploy/$rel"; then
       note "deploy/$rel changed since $(basename "$previous_dir"). A deploy never installs it:" \
-        "deploy/README.md says how, redis-server rereads it only in a restart window" \
+        "deploy/README.md says how, valkey-server rereads it only in a restart window" \
         "(docs/RESTART-WINDOW.md), and tests/deploy compares it with the node"
     fi
   done

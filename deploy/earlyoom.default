@@ -13,7 +13,7 @@
 #   -m 10     SIGTERM below 10% available (~790 MiB at 8 GB), SIGKILL below 5%.
 #             There is no swap, so earlyoom's swap condition always holds and
 #             memory alone decides.
-#   --avoid   the bus and the way in: redis-server, tailscaled, systemd*,
+#   --avoid   the bus and the way in: valkey-server, tailscaled, systemd*,
 #             dbus-daemon, and exe.dev's own exe-init and sshd. Only -300, not
 #             an exclusion: the drop-ins' OOMScoreAdjust=-900 is what takes the
 #             bus's oom_score under 300, so --avoid lands it below earlyoom's
@@ -30,4 +30,4 @@
 # quotes, and drops a backslash for the character after it: `\.` would reach
 # earlyoom as `.`, matching anything. tests/deploy/test_memory_protection.py
 # pins both lists and the host class they assume.
-EARLYOOM_ARGS="-r 3600 -m 10 --avoid ^(redis-server|tailscaled|systemd.*|dbus-daemon|exe-init|sshd)$ --prefer ^(node|npm.*|npx|MainThread)$"
+EARLYOOM_ARGS="-r 3600 -m 10 --avoid ^(valkey-server|tailscaled|systemd.*|dbus-daemon|exe-init|sshd)$ --prefer ^(node|npm.*|npx|MainThread)$"
