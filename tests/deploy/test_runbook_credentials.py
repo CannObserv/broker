@@ -59,7 +59,7 @@ SECRET_IN_URL = re.compile(r"""redis://[^\s"'/]*:[^\s"'@]*\$""")
 #: into a variable and the variable is handed over, so no literal ``redis://``
 #: sits beside the expansion. ``-u "$BROKER_REDIS_URL"`` is the same defect
 #: wearing an env file. ``-a`` and ``--pass`` are the direct spellings of it.
-CREDENTIAL_FLAG = re.compile(r"redis-cli\b[^\n]*?\s(?:-u|-a|--pass)\b")
+CREDENTIAL_FLAG = re.compile(r"(?:redis|valkey)-cli\b[^\n]*?\s(?:-u|-a|--pass)\b")
 
 
 def _hits(pattern: re.Pattern[str]) -> list[str]:
@@ -86,4 +86,13 @@ def test_no_runbook_hands_redis_cli_a_credential_bearing_flag() -> None:
     the line. Every URL that reaches this node's broker carries a password, so a
     ``-u`` that does not is either a rehearsal server or a line that is about to
     grow one."""
-    assert not _hits(CREDENTIAL_FLAG), "redis-cli is given a credential in argv: use REDISCLI_AUTH"
+    assert not _hits(CREDENTIAL_FLAG), "a CLI is given a credential in argv: use REDISCLI_AUTH"
+
+
+def test_the_flag_pattern_reads_both_engines_clis() -> None:
+    """valkey-cli is the node's CLI since #85's window and takes the same
+    ``-u``/``-a``/``--pass``; redis-cli stays until the soak removes redis-tools."""
+    for cli in ("redis-cli", "valkey-cli"):
+        assert CREDENTIAL_FLAG.search(f'{cli} -u "$BROKER_REDIS_URL" PING')
+        assert CREDENTIAL_FLAG.search(f"{cli} --user acladmin -a x PING")
+        assert not CREDENTIAL_FLAG.search(f'REDISCLI_AUTH="$p" {cli} --user acladmin PING')

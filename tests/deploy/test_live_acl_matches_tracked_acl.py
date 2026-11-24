@@ -118,7 +118,7 @@ NOT_COMPARED = "passwords"
 # The node's own passwords file - `0400 root:root`, so read only through `sudo -n`,
 # and only ever by the render, which emits digests (CannObserv/broker#49), or by
 # a `grep` that prints a key or an exit status and never a value.
-NODE_PASSWORDS = Path("/etc/redis/broker-acl-passwords")
+NODE_PASSWORDS = Path("/etc/valkey/broker-acl-passwords")
 
 # Every user, by digest alone. The services since CannObserv/broker#49 - each
 # one's plaintext belongs to its service - and the operator users since
@@ -598,13 +598,13 @@ def test_requirepass_is_nobodys_password(live_client, live_rules) -> None:
     on_disk = _sudo(
         "sh",
         "-c",
-        "c=/etc/redis/redis.conf; grep -c '^requirepass ' $c; "
+        "c=/etc/valkey/valkey.conf; grep -c '^requirepass ' $c; "
         "sed -n 's/^requirepass //p' $c | tail -n1 | tr -d '\\n' | sha256sum",
         text=True,
     )
-    assert on_disk.returncode == 0, "cannot read /etc/redis/redis.conf through sudo -n"
+    assert on_disk.returncode == 0, "cannot read /etc/valkey/valkey.conf through sudo -n"
     count, file_digest = on_disk.stdout.split()[:2]
-    assert count == "1", f"/etc/redis/redis.conf has {count} requirepass lines, want 1"
+    assert count == "1", f"/etc/valkey/valkey.conf has {count} requirepass lines, want 1"
     assert EMPTY_DIGEST not in (running, file_digest), (
         "a requirepass is empty - nopass by another door"
     )

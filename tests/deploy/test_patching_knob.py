@@ -95,7 +95,7 @@ def test_the_knob_reads_clean() -> None:
     assert {q["weekday"] for q in quiet} == {None}
     assert len({q["line"] for q in quiet}) == 1, "the 24 ranges are one line"
     assert [(d["datastore"], d["unit"]) for d in knob["depends"]] == [
-        ("redis-server", "tailscaled")
+        ("valkey-server", "tailscaled")
     ]
 
 
@@ -112,8 +112,8 @@ def test_the_cadence_is_stated_weekly() -> None:
 
 
 def test_the_backup_covers_the_redis_datastore() -> None:
-    assert _named("datastore") == [["redis", "redis-server"]]
-    assert _named("backup") == [["broker-backup.service", "redis-server.service"]]
+    assert _named("datastore") == [["redis", "valkey-server"]]
+    assert _named("backup") == [["broker-backup.service", "valkey-server.service"]]
 
 
 def test_the_backup_minutes_are_one_quiet_line() -> None:
@@ -121,9 +121,21 @@ def test_the_backup_minutes_are_one_quiet_line() -> None:
 
 
 def test_redis_depends_on_tailscaled_which_stays_held() -> None:
-    assert _named("depends") == [["redis-server", "tailscaled"]]
+    assert _named("depends") == [["valkey-server", "tailscaled"]]
     assert ["tailscale", "tailscale"] in _named("hold")
 
 
 def test_the_callers_are_the_public_participants() -> None:
     assert {words[0] for words in _named("caller")} == PUBLIC_CALLERS
+
+
+def test_both_engines_packages_are_one_held_step() -> None:
+    """The skill's default ``redis`` step holds ``redis-server redis-tools``
+    alone, and ``valkey-server``'s postinst restarts the unit on upgrade, so
+    without this line a Valkey update would ride the bulk lane and restart the
+    bus outside a held step. The 7.0 packages stay in it for the soak, when they
+    are still installed (CannObserv/broker#85). A line naming a default step
+    replaces that default."""
+    assert ["redis-server", "redis-tools", "valkey-server", "valkey-tools", "redis"] in _named(
+        "hold"
+    )

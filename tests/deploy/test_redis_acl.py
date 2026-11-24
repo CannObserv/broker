@@ -899,7 +899,9 @@ def test_a_service_reads_exactly_what_its_owner_answered(users, user) -> None:
     rules = users[user]
     root, _ = split_rules(rules)
     assert not root_key_patterns(rules), f"{user}'s root names {root_key_patterns(rules)}"
-    assert {r for r in root if r.startswith(("+", "-"))} == {"+info", "+ping"}, root
+    # +client|setinfo: the connect handshake, where its owner said it sends it (#85).
+    handshake = {"+client|setinfo"} if user in SETINFO_SENDERS else set()
+    assert {r for r in root if r.startswith(("+", "-"))} == {"+info", "+ping", *handshake}, root
     for command in READ_PROBES:
         reached = {key for key in STREAMS_AND_QUEUES if reaches(rules, command, key)}
         expected = ANSWERED_READS[user].get(command, frozenset())
@@ -2872,3 +2874,47 @@ def test_the_tracked_acl_declares_no_ci_identity(users) -> None:
     there. The database-index axis is `databases 1`
     (`test_tracked_config_closes_the_database_index_axis`)."""
     assert set(users) == {*SERVICE_USERS, *backup.NODE_USERS}
+
+
+#: The users whose client sends ``CLIENT SETINFO`` on connect - redis-py's
+#: default ``driver_info`` - by their owners' answers to #85's pre-window ask
+#: (archiver#462, watcher#418, replicator#178, processor's 2026-10-16 answer),
+#: plus ``acladmin``, whose client is the deploy tests' redis-py.
+SETINFO_SENDERS = ("acladmin", "archiver", "processor", "replicator", "watcher")
+#: Built with ``driver_info=None``: ``probe_client`` (#102) and provisioner's
+#: client, read off its source. A grant either would never use.
+SETINFO_SILENT = ("brokeradmin", "provisioner")
+
+
+def test_every_client_that_sends_client_setinfo_is_granted_it(users) -> None:
+    """Valkey 7.2 checks ``CLIENT SETINFO`` against the ACL; 7.0 rejected the
+    subcommand before the ACL saw it, and refused this grant outright, so it
+    could only arrive with the engine (CannObserv/broker#85). Missing, redis-py
+    swallows the error and each connect logs two denials; ``replicator`` is
+    denied ``CLIENT LIST`` and reads its own ``lib-name`` nowhere else."""
+    assert set(SETINFO_SENDERS) | set(SETINFO_SILENT) == {*SERVICE_USERS, "acladmin", "brokeradmin"}
+    for user in SETINFO_SENDERS:
+        root, _ = split_rules(users[user])
+        assert "+client|setinfo" in root, f"{user} sends CLIENT SETINFO and is not granted it"
+    for user in SETINFO_SILENT:
+        assert not holds(granted_commands(users[user]), "client|setinfo"), (
+            f"{user} sends no CLIENT SETINFO: the grant is unused"
+        )
+
+
+def test_a_setinfo_senders_connection_is_denied_nothing(fresh_acl_broker) -> None:
+    """On the wire, with redis-py's defaults: each sender's connect leaves no
+    ``ACL LOG`` entry, and registers its library. A 7.0 server never gets this
+    far - it refuses the whole file over the grant (``test_redis_loads_the_file``)."""
+    clients = [fresh_acl_broker(user) for user in SETINFO_SENDERS]
+    try:
+        for client in clients:
+            assert client.info("server")
+        admin = fresh_acl_broker("acladmin")
+        denied = [(e["username"], e["object"]) for e in admin.acl_log()]
+        assert not denied, f"denied on connect: {denied}"
+        libs = {c.get("user"): c.get("lib-name") for c in admin.client_list()}
+        assert all(libs.get(user) == "redis-py" for user in SETINFO_SENDERS), libs
+    finally:
+        for client in clients:
+            client.close()

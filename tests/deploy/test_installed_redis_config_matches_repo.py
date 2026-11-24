@@ -12,8 +12,8 @@ the drift a parity test exists to catch, and it was catching it about itself.
 So the repo now tracks the three artifacts the node actually deploys:
 
 ===========================================  ===================================
-``deploy/redis.conf.broker``                 appended to ``/etc/redis/redis.conf``
-``deploy/redis-server.service.d/broker.conf``  the drop-in of the same name
+``deploy/redis.conf.broker``                  appended to ``/etc/valkey/valkey.conf``
+``deploy/valkey-server.service.d/broker.conf``  the drop-in of the same name
 ``deploy/wait-for-tailnet-addr.sh``          ``/usr/local/sbin/``
 ===========================================  ===================================
 
@@ -59,10 +59,10 @@ import pytest
 from tests.deploy.conftest import DEPLOY, outcome_of, pretend_node, read_installed
 
 REPO_REDIS_CONF = DEPLOY / "redis.conf.broker"
-REPO_DROPIN = DEPLOY / "redis-server.service.d" / "broker.conf"
+REPO_DROPIN = DEPLOY / "valkey-server.service.d" / "broker.conf"
 REPO_WAIT_SCRIPT = DEPLOY / "wait-for-tailnet-addr.sh"
 
-INSTALLED_DROPIN = Path("/etc/systemd/system/redis-server.service.d/broker.conf")
+INSTALLED_DROPIN = Path("/etc/systemd/system/valkey-server.service.d/broker.conf")
 INSTALLED_WAIT_SCRIPT = Path("/usr/local/sbin/wait-for-tailnet-addr.sh")
 
 # The placeholder the install substitutes with a value minted on the spot and
@@ -139,6 +139,14 @@ def test_tracked_config_closes_the_database_index_axis() -> None:
     CannObserv/broker#53). Live, ``test_every_tracked_directive_is_in_force``
     reads the same value back; this is the half CI runs."""
     assert parse_directives(REPO_REDIS_CONF.read_text()).get("databases") == "1"
+
+
+def test_tracked_config_loads_valkeys_own_aclfile() -> None:
+    """Valkey's packaged unit writes only under ``/etc/valkey`` (its
+    ``ReadWriteDirectories=``), so ``ACL SAVE`` has nowhere else to go, and the
+    7.0 file under ``/etc/redis`` stays as a rollback left it: it must never
+    carry ``+client|setinfo``, which 7.0 refuses whole (CannObserv/broker#85)."""
+    assert parse_directives(REPO_REDIS_CONF.read_text()).get("aclfile") == "/etc/valkey/users.acl"
 
 
 def test_tracked_config_carries_no_secret() -> None:

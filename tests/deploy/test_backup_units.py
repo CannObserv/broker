@@ -270,8 +270,9 @@ def test_service_is_not_bound_to_the_broker() -> None:
     """The artifact is a file. A stopped broker still has a dump.rdb worth
     shipping, and binding to its unit would skip exactly that backup."""
     text = REPO_SERVICE.read_text()
-    assert "Requires=redis-server.service" not in text
-    assert "BindsTo=redis-server.service" not in text
+    # Either engine: the 7.0 unit stays installed through the soak (#85).
+    bound = re.findall(r"^(?:Requires|BindsTo)=.*\b(?:redis|valkey)-server\b.*$", text, re.M)
+    assert not bound, bound
 
 
 def test_timer_is_hourly_and_catches_up_after_downtime() -> None:
@@ -387,3 +388,16 @@ def test_an_absent_unit_fails_on_the_node_and_skips_off_it(
     pretend_node(monkeypatch, tmp_path, present=present)
     expected = pytest.fail.Exception if present else pytest.skip.Exception
     assert isinstance(outcome_of(test), expected)
+
+
+def test_service_reads_valkeys_snapshot_and_passwords() -> None:
+    """Spelled out, not through ``DEFAULT_RDB``/``DEFAULT_ACL_PASSWORDS``, which
+    move with the unit and so could never catch the two disagreeing with the
+    node: Valkey's ``dir`` is ``/var/lib/valkey`` (0750 valkey:valkey), and the
+    passwords file is copied, never moved, to ``/etc/valkey`` in the window, so
+    a 7.0 rollback still finds its own (CannObserv/broker#85)."""
+    text = REPO_SERVICE.read_text()
+    assert "/var/lib/valkey/dump.rdb ${RUNTIME_DIRECTORY}/dump.rdb" in text
+    assert "acl-passwords:/etc/valkey/broker-acl-passwords" in _directive(text, "LoadCredential")
+    assert DEFAULT_RDB == Path("/var/lib/valkey/dump.rdb")
+    assert DEFAULT_ACL_PASSWORDS == Path("/etc/valkey/broker-acl-passwords")

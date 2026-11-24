@@ -10,7 +10,7 @@ Tracked in ``deploy/``, installed as:
 
 - ``sysctl.d/60-broker-memory.conf`` -> ``/etc/sysctl.d/``
 - ``system.slice.d/broker-memory.conf`` -> ``/etc/systemd/system/system.slice.d/``
-- ``redis-server.service.d/memory.conf`` -> ``/etc/systemd/system/redis-server.service.d/``
+- ``valkey-server.service.d/memory.conf`` -> ``/etc/systemd/system/valkey-server.service.d/``
 - ``tailscaled.service.d/memory.conf`` -> ``/etc/systemd/system/tailscaled.service.d/``
 - ``earlyoom.default`` -> ``/etc/default/earlyoom``
 
@@ -39,14 +39,14 @@ from tests.deploy.test_installed_redis_config_matches_repo import (
 
 SYSCTL = DEPLOY / "sysctl.d" / "60-broker-memory.conf"
 SYSTEM_SLICE = DEPLOY / "system.slice.d" / "broker-memory.conf"
-REDIS_MEMORY = DEPLOY / "redis-server.service.d" / "memory.conf"
+ENGINE_MEMORY = DEPLOY / "valkey-server.service.d" / "memory.conf"
 TAILSCALED_MEMORY = DEPLOY / "tailscaled.service.d" / "memory.conf"
 EARLYOOM = DEPLOY / "earlyoom.default"
 
 INSTALLED = {
     SYSCTL: Path("/etc/sysctl.d/60-broker-memory.conf"),
     SYSTEM_SLICE: Path("/etc/systemd/system/system.slice.d/broker-memory.conf"),
-    REDIS_MEMORY: Path("/etc/systemd/system/redis-server.service.d/memory.conf"),
+    ENGINE_MEMORY: Path("/etc/systemd/system/valkey-server.service.d/memory.conf"),
     TAILSCALED_MEMORY: Path("/etc/systemd/system/tailscaled.service.d/memory.conf"),
     EARLYOOM: Path("/etc/default/earlyoom"),
 }
@@ -54,12 +54,12 @@ INSTALLED = {
 #: The cgroup each MemoryLow drop-in protects, and where the kernel exposes it.
 CGROUPS = {
     SYSTEM_SLICE: Path("/sys/fs/cgroup/system.slice/memory.low"),
-    REDIS_MEMORY: Path("/sys/fs/cgroup/system.slice/redis-server.service/memory.low"),
+    ENGINE_MEMORY: Path("/sys/fs/cgroup/system.slice/valkey-server.service/memory.low"),
     TAILSCALED_MEMORY: Path("/sys/fs/cgroup/system.slice/tailscaled.service/memory.low"),
 }
 
 #: The two drop-ins that also lower their unit's OOM score, and the unit each is for.
-OOM_UNITS = {REDIS_MEMORY: "redis-server", TAILSCALED_MEMORY: "tailscaled"}
+OOM_UNITS = {ENGINE_MEMORY: "valkey-server", TAILSCALED_MEMORY: "tailscaled"}
 
 #: What ``--avoid`` subtracts from ``oom_score`` in earlyoom 1.7. earlyoom starts
 #: each scan with a badness-0 victim and never picks a score at or below it, so a
@@ -78,7 +78,7 @@ EXE_DEV_ROOTS = ["exe-init", "sshd"]
 #: ``--avoid`` ranks these last, not exempt - except ``sshd`` and ``exe-init``,
 #: exe.dev's own, which sit at -1000 and are exempt whatever the regex says.
 PROTECTED = [
-    "redis-server",
+    "valkey-server",
     "tailscaled",
     "systemd",
     "systemd-journal",
@@ -211,7 +211,7 @@ def test_redis_protection_covers_the_cap_and_a_forks_copy_on_write() -> None:
     already sized ``maxmemory`` against.
     """
     cap = parse_size(parse_directives(REPO_REDIS_CONF.read_text())["maxmemory"])
-    assert memory_low(REDIS_MEMORY) >= 2 * cap
+    assert memory_low(ENGINE_MEMORY) >= 2 * cap
 
 
 def test_system_slice_protects_at_least_what_its_children_claim() -> None:
@@ -220,7 +220,7 @@ def test_system_slice_protects_at_least_what_its_children_claim() -> None:
     ``system.slice``'s default is 0. Without this drop-in the two below would read
     correctly in ``systemctl show`` and protect nothing.
     """
-    assert memory_low(SYSTEM_SLICE) >= memory_low(REDIS_MEMORY) + memory_low(TAILSCALED_MEMORY)
+    assert memory_low(SYSTEM_SLICE) >= memory_low(ENGINE_MEMORY) + memory_low(TAILSCALED_MEMORY)
 
 
 @pytest.mark.parametrize("tracked", list(OOM_UNITS), ids=lambda p: OOM_UNITS[p])

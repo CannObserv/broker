@@ -118,7 +118,7 @@ class TestCounts:
             "deploy/redis.conf.broker",
             "deploy/render-acl.sh",
             "deploy/README.md",
-            "deploy/redis-server.service.d/broker.conf",
+            "deploy/valkey-server.service.d/broker.conf",
             "deploy/wait-for-tailnet-addr.sh",
             "docs/plans/2026-10-17-22-release-deploy.md",
             "AGENTS.md",

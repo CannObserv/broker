@@ -225,8 +225,9 @@ def test_service_is_not_bound_to_the_broker_it_probes() -> None:
     or ``BindsTo=`` on it would silence the probe in exactly the state it was
     written for."""
     text = REPO_SERVICE.read_text()
-    assert "Requires=redis-server.service" not in text
-    assert "BindsTo=redis-server.service" not in text
+    # Either engine: the 7.0 unit stays installed through the soak (#85).
+    bound = re.findall(r"^(?:Requires|BindsTo)=.*\b(?:redis|valkey)-server\b.*$", text, re.M)
+    assert not bound, bound
 
 
 def test_timer_ticks_periodically() -> None:

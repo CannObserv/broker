@@ -701,7 +701,7 @@ def test_main_exits_zero_on_success_and_prefixes_by_host(stub_main, monkeypatch)
     assert kwargs["bucket"] == "a-backup-bucket"
     assert kwargs["prefix"] == "co-broker"
     assert kwargs["host"] == "co-broker"
-    assert kwargs["acl_passwords"] == Path("/etc/redis/broker-acl-passwords")
+    assert kwargs["acl_passwords"] == Path("/etc/valkey/broker-acl-passwords")
 
 
 def test_main_reads_the_passwords_file_it_is_given(stub_main) -> None:

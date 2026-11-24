@@ -13,7 +13,7 @@ Two changes, each pinned here:
 - **The guard.** The rotation refuses any ``u`` but the two node users, after
   the helpers and before ``C=``: a check beside ``u=`` is skipped by the same
   extraction. The rehearsal replays the over-wide range under a ``sudo`` and a
-  ``redis-cli`` that only record their argv, so no Redis and no root is touched.
+  ``valkey-cli`` that only record their argv, so no Redis and no root is touched.
   It stops at the closing fence: past it bash would parse prose.
 - **The loading path.** *Loading the helpers*, the doc's last section, holds
   ``cred`` and ``rcli`` between two sentinel lines; the recipe there starts on
@@ -84,9 +84,9 @@ esac
 exit 0
 """
 
-_REDIS_CLI = r"""#!/usr/bin/env bash
+_VALKEY_CLI = r"""#!/usr/bin/env bash
 # Records argv; keeps one user's password digests, enough for the rotation's checks.
-printf 'redis-cli %s\n' "$*" >> "$STUB_LOG"
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$STUB_LOG"
 h="$STUB_STATE/hashes"
 case "$*" in
   *" ACL SETUSER "*)
@@ -140,11 +140,14 @@ def _recipe() -> str:
 
 @pytest.fixture
 def stubs(tmp_path: Path) -> tuple[dict[str, str], Path]:
-    """A ``sudo`` and a ``redis-cli`` first on ``PATH``; the environment and argv log."""
+    """A ``sudo`` and a ``valkey-cli`` first on ``PATH``; the environment and argv log."""
     bin_dir, state = tmp_path / "bin", tmp_path / "state"
     bin_dir.mkdir()
     state.mkdir()
-    for name, body in (("sudo", _SUDO), ("redis-cli", _REDIS_CLI)):
+    # Both CLIs, whichever the docs name: a stub under one name only let the
+    # real other one reach the live broker with the stub's password - three
+    # acladmin AUTH denials, 2026-11-24T01:12:30Z (CannObserv/broker#85).
+    for name, body in (("sudo", _SUDO), ("valkey-cli", _VALKEY_CLI), ("redis-cli", _VALKEY_CLI)):
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(0o755)
     old = hashlib.sha256(STUB_CREDENTIAL.encode()).hexdigest()
@@ -214,8 +217,8 @@ class TestTheRehearsal:
             r"^sudo chmod 0400 ",
             r"^sudo cp -p ",
             r"^sudo mv \S+/broker-acladmin\.new ",
-            r"^sudo install .* /etc/redis/broker-acl-passwords\.new$",
-            r"^sudo mv /etc/redis/broker-acl-passwords\.new /etc/redis/broker-acl-passwords$",
+            r"^sudo install .* /etc/valkey/broker-acl-passwords\.new$",
+            r"^sudo mv /etc/valkey/broker-acl-passwords\.new /etc/valkey/broker-acl-passwords$",
             r"ACL SETUSER acladmin ![0-9a-f]{64}$",
             r"ACL SAVE$",
             r"^sudo rm \S+/broker-acladmin\.old$",
@@ -233,10 +236,10 @@ class TestTheGuard:
         assert len(guards) == 1, f"the rotation has {len(guards)} guards"
         guard = guards[0]
         assert "exit 1" in lines[guard]
-        assert "redis-cli --user" not in lines[guard], "it would end an rcli extraction early"
+        assert "valkey-cli --user" not in lines[guard], "it would end an rcli extraction early"
         helpers = [i for i, line in enumerate(lines) if re.match(r"\w+\(\) \{", line)]
         assert helpers and guard > max(helpers), "an extraction from cred() { skips it"
-        assert not any("redis-cli --user" in line for line in lines[max(helpers) + 1 : guard])
+        assert not any("valkey-cli --user" in line for line in lines[max(helpers) + 1 : guard])
         code = [(i, line) for i, line in enumerate(lines) if not line.lstrip().startswith("#")]
         first_c = next(i for i, line in code if line.startswith("C="))
         first_write = next(i for i, line in code if _WRITE_SOURCE.search(line))
@@ -273,7 +276,7 @@ class TestTheLoadingPath:
         assert log.read_text().splitlines() == [
             "sudo -n systemd-creds decrypt --name=broker-acladmin "
             "/etc/credstore.encrypted/broker-acladmin -",
-            "redis-cli --user acladmin -h localhost -p 6379 PING",
+            "valkey-cli --user acladmin -h localhost -p 6379 PING",
         ]
 
 

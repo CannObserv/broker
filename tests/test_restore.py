@@ -239,7 +239,8 @@ def test_main_latest_stages_the_newest_snapshot(stub_main, capsys) -> None:
     out = capsys.readouterr().out
     assert "20260910T163511Z" in out
     # The follow-ups the operator runs next are printed, not remembered.
-    assert "chown" in out and "redis:redis" in out
+    assert "chown -R valkey:valkey" in out
+    assert "systemctl start valkey-server" in out
 
 
 def test_main_refuses_when_the_bucket_holds_nothing(stub_main) -> None:

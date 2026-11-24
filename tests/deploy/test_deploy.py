@@ -883,7 +883,7 @@ class TestTheC2Shape:
     def test_redis_is_never_touched(self, world):
         world.go_live()
         assert_ok(world.run())
-        assert not [c for c in world.calls() if "redis-server" in c]
+        assert not [c for c in world.calls() if "redis-server" in c or "valkey-server" in c]
 
 
 class TestTheIndex:
@@ -2367,9 +2367,19 @@ class TestHostConfigs:
         assert_ok(world.run())
         assert not installs(world.calls())
 
-    def test_nothing_compared_lives_under_etc_redis(self):
+    def test_nothing_compared_lives_under_either_engines_etc(self):
         for dest in host_configs().values():
-            assert not dest.startswith("/etc/redis/"), dest
+            assert not dest.startswith(("/etc/redis/", "/etc/valkey/")), dest
+
+    def test_the_engine_drop_ins_compared_are_valkeys(self):
+        """The node runs valkey-server.service since #85's window. A drop-in
+        compared under redis-server.service.d would read as installed while the
+        unit that runs carries none of it."""
+        engine = {rel: dest for rel, dest in host_configs().items() if "-server.service.d/" in rel}
+        assert engine == {
+            f"valkey-server.service.d/{name}": f"/etc/systemd/system/valkey-server.service.d/{name}"
+            for name in ("broker.conf", "memory.conf")
+        }
 
     def test_every_file_under_deploy_is_a_unit_a_config_the_render_tool_or_the_readme(self):
         """A new file there is installed, compared or named, never forgotten."""
@@ -2804,5 +2814,5 @@ class TestOperation:
     def test_the_script_holds_no_redis_credential(self):
         """It needs none: tests/deploy/test_runbook_credentials.py scans it too."""
         text = DEPLOY.read_text()
-        assert "redis-cli" not in text
+        assert "redis-cli" not in text and "valkey-cli" not in text
         assert "redis://" not in text
