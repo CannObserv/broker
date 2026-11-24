@@ -20,7 +20,7 @@ Measured 2026-10-25, after the 2026-10-24 cleanup (`/` at 71%, 5.6 GB free):
 | `/srv/broker/releases` | 441 MB | `scripts/deploy.sh` keeps five |
 | `~/.npm`, `~/.cache` (uv) | 1.2 GB, 913 MB | the GC's `npx`, `npm-cache` and `uv` (`uv cache prune` only) |
 | `/tmp/claude-1000` | 676 MB | agent scratchpads; a reboot clears `/tmp` |
-| `/var/lib/redis` | 38 MB | `maxmemory` ([MEMORY-PROTECTION.md](MEMORY-PROTECTION.md)) |
+| `/var/lib/valkey` | 38 MB, measured as 7.0's `/var/lib/redis` (#85 moved it) | `maxmemory` ([MEMORY-PROTECTION.md](MEMORY-PROTECTION.md)) |
 
 ## What the editor prunes itself
 

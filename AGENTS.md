@@ -43,9 +43,9 @@ detached, from `~/broker` on a clean `main`:
 [deploy/README.md](deploy/README.md), *Deploying*.
 
 **No test targets `co-broker`.** `tests/deploy/` spawns its own throwaway
-`redis-server` on 127.0.0.1 (skipped where the binary is absent, as on CI's
-runner). The node-only live tests read the broker as `acladmin` and write
-nothing. The ACL declares no CI identity (#53).
+server on 127.0.0.1: the node's running engine (`valkey-server` since #85),
+else whichever is installed; skipped where neither is, as on CI's runner. The
+node-only live tests read the broker as `acladmin` and write nothing. The ACL declares no CI identity (#53).
 
 ## Rules
 
@@ -201,7 +201,7 @@ appending a context measurement - pull before pushing. Review is the
 - [docs/UNDELIVERED-CONSUMERS.md](docs/UNDELIVERED-CONSUMERS.md) - a consumer that stopped reading: why `pending`, `lag` and `idle` are each blind to it, and what the probe compares instead
 - [docs/HOST-DISK.md](docs/HOST-DISK.md) - what else fills `/`, and the disk GC that prunes it
 - [docs/RECOVERY.md](docs/RECOVERY.md) - losing the node or its data: the backup and its findings, the restore
-- [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `redis-server`: the runbook and its symptom playbook
+- [docs/RESTART-WINDOW.md](docs/RESTART-WINDOW.md) - restarting `valkey-server`: the runbook and its symptom playbook
 - [docs/INCIDENT-2026-09-10.md](docs/INCIDENT-2026-09-10.md) - `databases 1` wiping db0, and why `BGREWRITEAOF` comes first
 - [docs/NODE-CREDENTIALS.md](docs/NODE-CREDENTIALS.md) - `acladmin`/`brokeradmin` as encrypted credentials: mint, rotate, limits; *Loading the helpers*, the one `cred`/`rcli` recipe (#132)
 - [docs/ACL-CUTOVER.md](docs/ACL-CUTOVER.md) - how the cluster moved onto per-service ACL users, and the order a new one repeats; to change a grant, [deploy/README.md](deploy/README.md)

@@ -78,11 +78,11 @@ entries are at
 node, and the finding names the exact path. Capture is incremental by stream id,
 so a queue that keeps growing accumulates one dump per growth rather than
 re-dumping itself every ten minutes. Read those before the `XRANGE` below;
-re-dump only if you want the entries in `redis-cli`'s own framing.
+re-dump only if you want the entries in `valkey-cli`'s own framing.
 
 ```bash
 # `cred` and `rcli` as defined at the top of RESTART-WINDOW.md - the operator,
-# acladmin; bare redis-cli is NOAUTH, and a password on its argv is the wrong fix.
+# acladmin; bare valkey-cli is NOAUTH, and a password on its argv is the wrong fix.
 rcli acladmin XLEN content.fetch.dlq                # what you are about to delete
 rcli acladmin XINFO STREAM content.fetch.dlq | grep -A1 last-generated-id   # the boundary, FIRST
 rcli acladmin --no-raw XRANGE content.fetch.dlq - <last-generated-id> > /var/tmp/fetch-dlq-$(date +%F).txt

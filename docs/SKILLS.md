@@ -154,7 +154,7 @@ for `live is on <sha12>` ([deploy/README.md](../deploy/README.md),
 *Deploying*). `--check` runs nothing. A change outside the drift check's
 runtime paths, such as `docs/` or `.skills/`, needs no deploy. Any other
 `deploy/` change is installed by hand. The only long-running service is
-`redis-server`, whose restart is a cohort-wide event -
+`valkey-server` (#85), whose restart is a cohort-wide event -
 [RESTART-WINDOW.md](RESTART-WINDOW.md), never a ship step.
 
 Left out:

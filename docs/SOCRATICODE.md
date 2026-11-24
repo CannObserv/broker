@@ -126,7 +126,7 @@ vendored prose outranks first-party code in `codebase_search` results.
 `co-index`; this repo is a client, addressed by the `env` block in
 `.claude/settings.json` and the key in git-ignored `.claude/settings.local.json`.
 No Docker on this node: `docker.socket` is disabled precisely so the managed-mode
-fallback fails loudly instead of starting a local stack beside `redis-server`.
+fallback fails loudly instead of starting a local stack beside `valkey-server`.
 The design and its decisions D0-D14: CannObserv/notifier#57. Broker's adoption:
 CannObserv/broker#17.
 

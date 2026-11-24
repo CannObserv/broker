@@ -53,7 +53,7 @@
     {
       "name": "restart-runbook",
       "path": "./docs/RESTART-WINDOW.md",
-      "description": "Restarting redis-server: the cohort restart window, the service identities that must come back, the tailnet bind race and its boot-race insurance, symptoms, and the 2026-09-10 incident."
+      "description": "Restarting the engine (valkey-server since #85): the cohort restart window, the service identities that must come back, the tailnet bind race and its boot-race insurance, symptoms, and the 2026-09-10 incident."
     },
     {
       "name": "acl-cutover",

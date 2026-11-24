@@ -39,7 +39,7 @@ cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encryp
 # otherwise be a WRONGPASS naming the user in ACL LOG, the evidence log.
 rcli() { local u=$1 p; shift
          p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
-         REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+         REDISCLI_AUTH="$p" valkey-cli --user "$u" -h localhost -p 6379 "$@"; }
 digest() { printf %s "$1" | sha256sum | cut -d' ' -f1; }
 mint() { (set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40); }
 # The target, checked here rather than beside u=: an extraction from cred() never
@@ -51,7 +51,7 @@ NEW="$(mint)"; [ "${#NEW}" -eq 40 ] || { echo "minted ${#NEW} chars, want 40"; e
 NEWH="$(digest "$NEW")"
 
 # 1. ADD the new password; both authenticate until 4. Checked live, because
-#    redis-cli's exit status does not say whether the reply was an error.
+#    valkey-cli's exit status does not say whether the reply was an error.
 rcli acladmin ACL SETUSER "$u" "#$NEWH" >/dev/null
 rcli acladmin ACL GETUSER "$u" | grep -qx "$NEWH" || { echo "1: not live"; exit 1; }
 [ "$(rcli acladmin ACL SAVE)" = OK ]
@@ -62,12 +62,12 @@ unset NEW
 [ "$(digest "$(sudo -n systemd-creds decrypt --name="broker-$u" "$C.new" -)")" = "$NEWH" ]
 sudo chmod 0400 "$C.new" && sudo cp -p "$C" "$C.old" && sudo mv "$C.new" "$C"
 # 3. The digest line the render reads.
-sudo cat /etc/redis/broker-acl-passwords \
+sudo cat /etc/valkey/broker-acl-passwords \
     | awk -F= -v k="__${u^^}_PW_SHA256__" -v h="$NEWH" '$1==k {print k "=" h; next} {print}' \
-    | sudo install -m 0400 -o root -g root /dev/stdin /etc/redis/broker-acl-passwords.new
-sudo grep -qx "__${u^^}_PW_SHA256__=$NEWH" /etc/redis/broker-acl-passwords.new \
+    | sudo install -m 0400 -o root -g root /dev/stdin /etc/valkey/broker-acl-passwords.new
+sudo grep -qx "__${u^^}_PW_SHA256__=$NEWH" /etc/valkey/broker-acl-passwords.new \
     || { echo "3: no __${u^^}_PW_SHA256__ line to replace"; exit 1; }
-sudo mv /etc/redis/broker-acl-passwords.new /etc/redis/broker-acl-passwords
+sudo mv /etc/valkey/broker-acl-passwords.new /etc/valkey/broker-acl-passwords
 # 4. RETIRE the old one - as the new credential, which proves it for acladmin.
 rcli acladmin ACL SETUSER "$u" "!$OLDH" >/dev/null
 [ "$(rcli acladmin ACL GETUSER "$u" | grep -cE '^[0-9a-f]{64}$')" -eq 1 ]
@@ -101,7 +101,7 @@ for u in acladmin brokeradmin; do
     printf %s "$NEW" | sudo systemd-creds encrypt --name="broker-$u" - "/etc/credstore.encrypted/broker-$u"
     sudo chmod 0400 "/etc/credstore.encrypted/broker-$u"
     echo "__${u^^}_PW_SHA256__=$(printf %s "$NEW" | sha256sum | cut -d' ' -f1)" \
-        | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
+        | sudo tee -a /etc/valkey/broker-acl-passwords >/dev/null
     unset NEW
 done
 ```
@@ -109,7 +109,7 @@ done
 ## `requirepass` belongs to no user
 
 It accepts plaintext only, so it is the one Redis secret-shaped value left on
-disk, in `/etc/redis/redis.conf` (`0640 redis:redis`). Since CannObserv/broker#52
+disk, in `/etc/valkey/valkey.conf` (`0640 valkey:valkey`). Since CannObserv/broker#52
 it is a random value minted at install and kept nowhere else ([deploy/README.md](../deploy/README.md), *Install*),
 and it authenticates nobody: the aclfile's `default` line overrides it while the
 aclfile loads, and `default` is a tombstone besides. Its only job is the
@@ -179,6 +179,6 @@ cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encryp
 # otherwise be a WRONGPASS naming the user in ACL LOG, the evidence log.
 rcli() { local u=$1 p; shift
          p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
-         REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+         REDISCLI_AUTH="$p" valkey-cli --user "$u" -h localhost -p 6379 "$@"; }
 # broker-helpers: end
 ```

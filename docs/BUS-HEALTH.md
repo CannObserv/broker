@@ -51,7 +51,7 @@ boot by replaying from `0-0`, so the floor is "at least one full snapshot plus
 the deltas since" - a consumer contract, not operator housekeeping. It is
 capped on every publish via `BusPublish.maxlen` at `max(1_000, 10 x set)`
 (CannObserv/archiver#373; `ARCHIVER_REGISTRY_STREAM_MAXLEN` raises it only) and **`XTRIM`med by nobody** - not archiver's drain loop,
-and not a person at a `redis-cli`: the operator's `acladmin` trims `*.dlq`
+and not a person at a `valkey-cli`: the operator's `acladmin` trims `*.dlq`
 keys only (CannObserv/broker#34, #52), and the probe's `brokeradmin` trims
 nothing. Snapshot period: `ARCHIVER_REGISTRY_SNAPSHOT_INTERVAL`,
 default 3600s; operator republish-now: `POST

@@ -9,7 +9,7 @@ Then the two fixtures, and the distinction between them is the whole reason
 they are here:
 
 ``tracked_acl_broker``
-    A throwaway ``redis-server`` loading the ACL file **this repo tracks**, on a
+    A throwaway server (the node's engine, ``engine_binary()``) loading the ACL file **this repo tracks**, on a
     free loopback port with no persistence. It never reads
     ``BROKER_REDIS_URL``, so it cannot reach ``co-broker``.
 
@@ -277,7 +277,7 @@ def acl_server(acl: Path, workdir: Path, extra_args: tuple[str, ...] = ()):
     deadline = time.time() + 10
     while time.time() < deadline:
         if proc.poll() is not None:
-            pytest.fail(f"redis-server refused the ACL file:\n{log.read_text()}")
+            pytest.fail(f"{engine} refused the ACL file:\n{log.read_text()}")
         with socket.socket() as s:
             s.settimeout(0.2)
             if s.connect_ex(("127.0.0.1", port)) == 0:
@@ -285,7 +285,7 @@ def acl_server(acl: Path, workdir: Path, extra_args: tuple[str, ...] = ()):
         time.sleep(0.1)
     else:
         _stop(proc)
-        pytest.fail(f"redis-server did not start:\n{log.read_text()}")
+        pytest.fail(f"{engine} did not start:\n{log.read_text()}")
 
     def connect(user: str | None = None):
         kwargs = {} if user is None else {"username": user, "password": PASSWORD}

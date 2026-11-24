@@ -47,16 +47,16 @@ since CannObserv/broker#52.
 # In a script that sets pipefail, `head` closing the pipe SIGPIPEs `tr` and the
 # subshell exits 141 - so the mint disables it for itself and asserts the length.
 mint() { set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40; }
-sudo install -m 0400 -o root -g root /dev/null /etc/redis/broker-acl-passwords
+sudo install -m 0400 -o root -g root /dev/null /etc/valkey/broker-acl-passwords
 for p in ARCHIVER WATCHER REPLICATOR; do
     echo "__${p}_PW__=$(mint)"
-done | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
+done | sudo tee -a /etc/valkey/broker-acl-passwords >/dev/null
 # default, on a new cluster: the digest of a value nobody keeps.
 echo "__DEFAULT_PW_SHA256__=$(mint | sha256sum | cut -d' ' -f1)" \
-    | sudo tee -a /etc/redis/broker-acl-passwords >/dev/null
-sudo chmod 0400 /etc/redis/broker-acl-passwords
+    | sudo tee -a /etc/valkey/broker-acl-passwords >/dev/null
+sudo chmod 0400 /etc/valkey/broker-acl-passwords
 awk -F= '{ printf "%-24s %s chars\n", $1, length($2) }' \
-    <(sudo cat /etc/redis/broker-acl-passwords)     # -> 40 each, 64 for a digest; CHECK IT
+    <(sudo cat /etc/valkey/broker-acl-passwords)     # -> 40 each, 64 for a digest; CHECK IT
 ```
 
 `tr -dc 'A-Za-z0-9'` is not fussiness: these end up in `redis://user:pass@host`
@@ -119,17 +119,17 @@ the check file below holds no secret; it is shredded anyway.
 
 ```bash
 sudo install -m 0600 -o root -g root /dev/null /root/users.acl.check
-sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
+sudo deploy/render-acl.sh /etc/valkey/broker-acl-passwords \
     | sudo tee /root/users.acl.check >/dev/null
 
-sudo redis-server --port 6399 --bind 127.0.0.1 --save '' --appendonly no \
+sudo valkey-server --port 6399 --bind 127.0.0.1 --save '' --appendonly no \
     --daemonize yes --pidfile /root/aclcheck.pid --logfile /root/aclcheck.log \
     --aclfile /root/users.acl.check
 sleep 1
-redis-cli -p 6399 PING                                  # -> NOAUTH  (not PONG!)
+valkey-cli -p 6399 PING                                 # -> NOAUTH  (not PONG!)
 # Spelled out, NOT `rcli`: that helper is pinned to 6379, and reaching for it
 # here would talk to production instead of the throwaway server.
-P="$(cred acladmin)" && [ -n "$P" ] && REDISCLI_AUTH="$P" redis-cli --user acladmin -h 127.0.0.1 -p 6399 ACL LIST
+P="$(cred acladmin)" && [ -n "$P" ] && REDISCLI_AUTH="$P" valkey-cli --user acladmin -h 127.0.0.1 -p 6399 ACL LIST
 sudo kill "$(sudo cat /root/aclcheck.pid)"              # no user holds +shutdown, by design
 sudo shred -u /root/users.acl.check /root/aclcheck.log
 ```
@@ -203,7 +203,7 @@ events. Widen the grant live:
 
 ```bash
 rcli acladmin ACL SETUSER <service> +<command>
-rcli acladmin ACL SAVE                            # persists to /etc/redis/users.acl
+rcli acladmin ACL SAVE                            # persists to /etc/valkey/users.acl
 ```
 
 Then add the same grant to `deploy/redis-acl.conf` and commit it, or the next
@@ -264,14 +264,14 @@ rcli acladmin ACL SAVE
 Then verify every axis, not only the one that changed:
 
 ```bash
-redis-cli PING                                             # -> NOAUTH Authentication required.
+valkey-cli PING                                            # -> NOAUTH Authentication required.
 rcli acladmin ACL GETUSER default                          # -> flags off, one hash, keys %W~*, commands -@all +@blocking ...
-rcli brokeradmin INFO server | grep redis_version          # the probe's credential still answers
+rcli brokeradmin INFO server | grep valkey_version         # the probe's credential still answers
 for u in archiver watcher replicator processor provisioner; do
     echo "$u: held by digest on this node - verify from its own host"
 done
 rcli acladmin CLIENT LIST | grep -c 'flags=b'              # same count as before the flip
-sudo grep '^user default' /etc/redis/users.acl             # -> user default off #<hash> %W~* resetchannels -@all +@blocking ...
+sudo grep '^user default' /etc/valkey/users.acl            # -> user default off #<hash> %W~* resetchannels -@all +@blocking ...
 ```
 
 **The skip in that loop is the general case, not an archiver exception.** Any
@@ -326,7 +326,7 @@ window's commands by name, and is still refused `XADD` and `FLUSHALL`. The split
 that survives is the other direction: the probe's credential changes nothing.
 
 **Keep a shell on the node** through step 4 regardless. The last-resort recovery
-is still `redis-server`'s own config - restart with the `aclfile` line commented
+is still the engine's own config, `/etc/valkey/valkey.conf` - restart with the `aclfile` line commented
 out, restoring `requirepass` behaviour - and that is a cohort-wide event, which
 is exactly why `acladmin` is the path you want to reach for first.
 
@@ -387,5 +387,5 @@ effect of enabling the mechanism meant to prevent it*.
 `test_default_is_declared_disabled_and_still_carries_a_password` fails if the
 line is ever removed - or if it loses its password, which would turn the
 rollback `ACL SETUSER default on` into the same trap by another door. **The
-one-line check is `redis-cli PING` with no credentials at all.**
+one-line check is `valkey-cli PING` with no credentials at all.**
 It appears twice for this reason: in the dry run above, and after the restart in [RESTART-WINDOW.md](RESTART-WINDOW.md) step 1d.

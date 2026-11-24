@@ -1,27 +1,27 @@
 # deploy/
 
-Everything the broker node runs, tracked. Four of these are Redis's, two are
+Everything the broker node runs, tracked. Four of these are the engine's (Valkey since #85), two are
 the health probe's, two are the backup's, two are the drift check's, and five
 protect the node's memory.
 
 | File | Installs as | Purpose |
 |---|---|---|
-| `redis.conf.broker` | appended to `/etc/redis/redis.conf` | The tuning: bind, `requirepass`, AOF `everysec`, `maxmemory-policy noeviction`, explicit `maxmemory`. `__REQUIREPASS__` is substituted at install time with a value minted there and kept nowhere - nobody's password since broker#52 |
-| `redis-server.service.d/broker.conf` | `/etc/systemd/system/redis-server.service.d/broker.conf` | Unit **ordering only**: `After=tailscaled.service`, widened restart limits, and the `ExecStartPre=+` wait |
+| `redis.conf.broker` | appended to `/etc/valkey/valkey.conf` | The tuning: bind, `requirepass`, AOF `everysec`, `maxmemory-policy noeviction`, explicit `maxmemory`. `__REQUIREPASS__` is substituted at install time with a value minted there and kept nowhere - nobody's password since broker#52 |
+| `valkey-server.service.d/broker.conf` | `/etc/systemd/system/valkey-server.service.d/broker.conf` | Unit **ordering only**: `After=tailscaled.service`, widened restart limits, and the `ExecStartPre=+` wait |
 | `wait-for-tailnet-addr.sh` | `/usr/local/sbin/` | R1's boot-race insurance. Probes `/proc/net/fib_trie`, never `ip addr` |
 | `broker-bus-health.service` | `/etc/systemd/system/` | One WARN-only health tick: memory and eviction policy, per-stream length, last-entry age, per-group pending count and undelivered age, DLQ depth + evidence capture + `entries-added` continuity, disk, persistence status, backup freshness. Never blocks anything. Runs `/srv/broker/live`, a release; a deploy installs a changed copy (#107) |
 | `broker-bus-health.timer` | `/etc/systemd/system/` | Runs the probe every 10 min |
-| `redis-acl.conf` + `render-acl.sh` | `/etc/redis/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day, and `default` made a tombstone on 2026-09-29 (broker#52). Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
+| `redis-acl.conf` + `render-acl.sh` | `/etc/valkey/users.acl` | Per-service ACL users (D3, broker#2). Live since broker#5's window on 2026-09-10; the shared `default` password was retired the same day, and `default` made a tombstone on 2026-09-29 (broker#52). Changes are made live with `ACL SETUSER` + `ACL SAVE` as `acladmin`, then mirrored here - `aclfile` is immutable, so the file itself is only re-read at a restart |
 | `broker-backup.service` | `/etc/systemd/system/` | Ships `dump.rdb` to `gs://co-gcs-broker-backup`, verified and create-only, holding **no Redis credential** (broker#4). Ships the service users' ACL digests beside each snapshot, refusing any plaintext line (broker#72). Runs `/srv/broker/live`, a release, with `/home` hidden; a deploy installs a changed copy (#108). Runs as `broker-backup`, a static user with no capability: root only copies `dump.rdb` in, and the key and passwords file arrive as credentials (#109). See [`../docs/RECOVERY.md`](../docs/RECOVERY.md) |
 | `broker-backup.timer` | `/etc/systemd/system/` | Hourly, `Persistent=true` |
 | `broker-drift.service` | `/etc/systemd/system/` | Does live lag `origin/main` in code that runs? Asks GitHub, checks in to co-status's `co-broker-drift` once a run (#110). `DynamicUser=`, the co-status key as a `LoadCredential=`, **no Redis credential** and no `.env`. Runs `/srv/broker/live`; see *The drift check* below |
 | `broker-drift.timer` | `/etc/systemd/system/` | Hourly, 5 min after boot. Enabled by the deploy that first installs it, once it verifies |
 | `sysctl.d/60-broker-memory.conf` | `/etc/sysctl.d/` | `vm.min_free_kbytes` 64 MiB: the reserve atomic allocations draw on (broker#21) |
 | `system.slice.d/broker-memory.conf` | `/etc/systemd/system/system.slice.d/` | `MemoryLow=` for the slice - without it the two below protect nothing, because this node has no `memory_recursiveprot` |
-| `redis-server.service.d/memory.conf` | `/etc/systemd/system/redis-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`: out of earlyoom's reach, and the kernel's last resort after dev tooling and the small daemons. `broker.conf` beside it stays ordering-only |
+| `valkey-server.service.d/memory.conf` | `/etc/systemd/system/valkey-server.service.d/` | `MemoryLow=1G`, twice `maxmemory`: protection from reclaim, not a limit. `OOMScoreAdjust=-900`: out of earlyoom's reach, and the kernel's last resort after dev tooling and the small daemons. `broker.conf` beside it stays ordering-only |
 | `tailscaled.service.d/memory.conf` | `/etc/systemd/system/tailscaled.service.d/` | `MemoryLow=128M` and `OOMScoreAdjust=-900` for the network path |
 | `earlyoom.default` | `/etc/default/earlyoom` | A per-process OOM killer weighted against the bus and the way in (`--avoid`, -300). **Installed and disabled**: broker#58 disabled it when dev tooling sat at exe.dev's -1000, out of its reach, and it stays disabled now that broker#71 put sessions at 0, where the kernel takes them before the bus (operator's decision, 2026-10-06). Configured, so turning it on is one command |
-| `needrestart.conf.d/broker.conf` | `/etc/needrestart/conf.d/` | `$nrconf{restart} = 'l'`: needrestart **lists** restarts after an apt run, never performs them. Stock Ubuntu mode restarts automatically, so a `libc6` security update would restart `redis-server` outside a window (broker#65) |
+| `needrestart.conf.d/broker.conf` | `/etc/needrestart/conf.d/` | `$nrconf{restart} = 'l'`: needrestart **lists** restarts after an apt run, never performs them. Stock Ubuntu mode restarts automatically, so a `libc6` security update would restart `valkey-server` outside a window (broker#65) |
 | `apt/preferences.d/tailscale.pref` | `/etc/apt/preferences.d/` | Scopes `pkgs.tailscale.com`, which patching-hosts' maintenance lane follows: `Package: *` at 100, below Ubuntu's 500, and `tailscale` + `tailscale-archive-keyring` at 600. Unpinned, the site ties Ubuntu and could replace an Ubuntu package (broker#67) |
 
 `tests/deploy/` asserts all of it: the installed copies match these files, and
@@ -64,10 +64,11 @@ by reading it:
 - **An aclfile permits no comments and no blank lines.** Redis aborts startup
   on one - and refuses the *whole file*, not the offending line. `render-acl.sh`
   strips them, so the reasoning can live with the rules where it belongs.
-- **`CLIENT SETINFO` does not exist before Redis 7.2.** This broker is 7.0.15,
-  so granting `+client|setinfo` pre-emptively is rejected and takes every user
-  down with it. It becomes a required step of any upgrade to >= 7.2 instead,
-  for the consumers: not `brokeradmin`, whose probe sends none since #102.
+- **`+client|setinfo` loads only on an engine that has `CLIENT SETINFO`.**
+  7.0 refused the grant, and with it every user; it arrived with Valkey 7.2 in
+  #85's window, for archiver, watcher, replicator, processor and acladmin -
+  not `brokeradmin`, whose probe sends none since #102, nor provisioner.
+  `redis-acl.conf`, *+client|setinfo FOR EVERY CLIENT THAT SENDS IT*.
 
 ## Installing the ACL users
 
@@ -80,9 +81,9 @@ by reading it:
 # `__X_PW__=<plaintext>` still renders - for the interval a new service's
 # password waits to be handed off - and the live suite fails while one exists.
 # Every user renders as #<sha256>; the output carries no plaintext.
-sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
-    | sudo install -m 0640 -o root -g redis /dev/stdin /etc/redis/users.acl
-# then, in the restart window, add `aclfile /etc/redis/users.acl` to redis.conf
+sudo deploy/render-acl.sh /etc/valkey/broker-acl-passwords \
+    | sudo install -m 0640 -o root -g valkey /dev/stdin /etc/valkey/users.acl
+# then, in the restart window, add `aclfile /etc/valkey/users.acl` to valkey.conf
 ```
 
 ### The cutover order, and why only step 1 needs the window
@@ -102,12 +103,12 @@ leaves the password set intact, and a line with none would be `nopass` the
 moment anything flipped it `on`. A new cluster repeats the order: `on` with the
 shared grants for the first load, migrate, then the tombstone live.
 
-1. **In the window** - install `/etc/redis/users.acl`, add `aclfile` to
-   `redis.conf` (and `databases 1` only after a `BGREWRITEAOF` - see the
+1. **In the window** - install `/etc/valkey/users.acl`, add `aclfile` to
+   `valkey.conf` (and `databases 1` only after a `BGREWRITEAOF` - see the
    runbook's step 1a-bis), restart. Nothing changes for any service:
    every URL still says `default:` and `default` still has the same password.
    Confirm the tailnet wait fired, `NRestarts=0`, and that an anonymous
-   `redis-cli` is refused.
+   `valkey-cli` is refused.
 2. **Rolling, no window** - flip each service's URL to its own credential, one
    at a time, verifying each before the next.
 3. **Rolling** - flip the probe's `BROKER_REDIS_URL` to `brokeradmin` (the
@@ -135,17 +136,17 @@ reason the grants are in a separate `aclfile` rather than in `redis.conf`:
 ```bash
 # $1 is the ACL user - acladmin, or the probe's brokeradmin. Each password is a
 # systemd-creds credential encrypted to this node, decrypted by root on demand
-# with no prompt (broker#52). It reaches redis-cli's ENVIRONMENT and never its
+# with no prompt (broker#52). It reaches valkey-cli's ENVIRONMENT and never its
 # argv - CannObserv/broker#47, and the reason no line here says `-u`.
 cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
 # Refuses rather than connecting with an empty password: a failed decrypt would
 # otherwise be a WRONGPASS naming the user in ACL LOG, the evidence log.
 rcli() { local u=$1 p; shift
          p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
-         REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+         REDISCLI_AUTH="$p" valkey-cli --user "$u" -h localhost -p 6379 "$@"; }
 
 rcli acladmin ACL SETUSER <user> <rule>   # applies now
-rcli acladmin ACL SAVE                    # -> /etc/redis/users.acl
+rcli acladmin ACL SAVE                    # -> /etc/valkey/users.acl
 # then mirror the same rule into deploy/redis-acl.conf, with its reason, and commit
 ```
 
@@ -153,16 +154,17 @@ rcli acladmin ACL SAVE                    # -> /etc/redis/users.acl
 a `redis://user:<plaintext>@host` URL lands the secret in `argv`, readable from
 `ps` by any local user for the life of the call, in root's shell history, and -
 under `sudo` - in journald, which is what cost CannObserv/archiver#251 a
-rotation. Verified on a scratch 7.0.15: `REDISCLI_AUTH` authenticates
-identically and emits no "may not be safe" warning, so a `--no-auth-warning` in
-a diff here is itself the tell that the old form is back.
+rotation. Verified on a scratch 7.0.15, and `valkey-cli` honours the same
+variable: `REDISCLI_AUTH` authenticates identically and emits no "may not be
+safe" warning, so a `--no-auth-warning` in a diff here is itself the tell that
+the old form is back.
 `tests/deploy/test_runbook_credentials.py` fails on either spelling.
 
 **`ACL SETUSER` ADDS; it does not replace.** `-xadd`, `clearselectors` and the
 like are how a rule comes *off*. The obvious shortcut - `ACL SETUSER <user>
 reset <the whole line>` - works and costs something that is not obvious: `reset`
 sets an explicit `sanitize-payload` flag that a user loaded from an aclfile does
-not carry, `ACL SAVE` then writes it into `/etc/redis/users.acl`, and
+not carry, `ACL SAVE` then writes it into `/etc/valkey/users.acl`, and
 `test_live_acl_matches_tracked_acl.py` goes red on a difference that is
 behaviourally nil (it is the default, stated; only `RESTORE` reads it, which no
 user here holds). **There is no keyword that clears it** - verified on a scratch
@@ -182,7 +184,7 @@ password and keeps the others, `#<hash>` adds one that then authenticates, and
 neither disturbs an `off` flag. The digest is
 `printf %s "$pw" | sha256sum | cut -d' ' -f1` over the plaintext - the `cut`
 is not optional, `sha256sum` prints `<hash>  -` and redis refuses the trailing
-filename. For a user `/etc/redis/broker-acl-passwords` holds by digest
+filename. For a user `/etc/valkey/broker-acl-passwords` holds by digest
 (`__X_PW_SHA256__`), the old digest is that line's value:
 
 ```bash
@@ -203,9 +205,9 @@ plaintext or digest, is matched by `.*` and never spelled:
 
 ```bash
 sudo sed -i 's/^__<USER>_PW\(_SHA256\)\?__=.*/__<USER>_PW_SHA256__=<new-sha256>/' \
-    /etc/redis/broker-acl-passwords      # GNU sed -i keeps the 0400 root:root
+    /etc/valkey/broker-acl-passwords     # GNU sed -i keeps the 0400 root:root
 sudo grep -c '^__<USER>_PW_SHA256__=<new-sha256>$' \
-    /etc/redis/broker-acl-passwords      # -> 1; sed says nothing when no line matched
+    /etc/valkey/broker-acl-passwords     # -> 1; sed says nothing when no line matched
 ```
 
 The two **node** users - `acladmin`, `brokeradmin` - have a digest line too
@@ -230,7 +232,7 @@ checked it, and it rested on someone remembering four times: eleven corrections
 during the broker#2 cutover, step 4 of the restart window, and broker#9's key
 pattern. `tests/deploy/test_live_acl_matches_tracked_acl.py` now compares every
 tracked user's rules against the running broker, loading the tracked file into
-the throwaway `redis-server` the parse tests already spawn - a byte comparison
+the throwaway server the parse tests already spawn (the node's engine) - a byte comparison
 is out, because `ACL SAVE` rewrites in Redis's canonical form (`#<sha256>` for
 passwords, the rule string reordered, `-@admin` folded into `-@dangerous`).
 This is the ACL's counterpart to reading `maxmemory` back through `CONFIG GET`.
@@ -270,8 +272,8 @@ it hourly as the digest of a user no rebuild creates.
 rcli acladmin ACL DELUSER <user>          # -> (integer) 1; drops its connections
 rcli acladmin ACL SAVE
 # then delete its stanza from deploy/redis-acl.conf, commit, and push
-sudo sed -i '/^__<USER>_PW\(_SHA256\)\?__=/d' /etc/redis/broker-acl-passwords
-sudo grep -c '^__<USER>_PW' /etc/redis/broker-acl-passwords   # -> 0
+sudo sed -i '/^__<USER>_PW\(_SHA256\)\?__=/d' /etc/valkey/broker-acl-passwords
+sudo grep -c '^__<USER>_PW' /etc/valkey/broker-acl-passwords   # -> 0
 ```
 
 The tracked file goes before the passwords line, not after. A rebuild renders
@@ -300,15 +302,20 @@ keeps it that way.
 ## Install
 
 ```bash
-# Redis tuning (first install only; the block is delimited in redis.conf)
+# The engine: Ubuntu's own Valkey (#85). Never valkey-redis-compat - it removes
+# the 7.0 server and moves its data dir. The unit is valkey-server.service,
+# User=valkey, config /etc/valkey/valkey.conf, data /var/lib/valkey.
+sudo apt-get install -y valkey-server
+
+# The tuning (first install only; the block is delimited in valkey.conf)
 # `requirepass` is minted here and kept nowhere else: it is nobody's password
 # (broker#52; the aclfile's `default` line overrides it), and its only job is
 # the last-resort restart with `aclfile` commented out. Minted inside the root
 # shell, so the value is only ever a shell variable and awk's environment -
 # never an argv, including sudo's.
 sudo sh -c 'R=$(LC_ALL=C tr -dc "A-Za-z0-9" < /dev/urandom | head -c 40); export R
-    awk "/^requirepass / { sub(/__REQUIREPASS__/, ENVIRON[\"R\"]) } 1" deploy/redis.conf.broker >> /etc/redis/redis.conf'
-sudo grep -c '^requirepass [A-Za-z0-9]\{40\}$' /etc/redis/redis.conf   # -> 1
+    awk "/^requirepass / { sub(/__REQUIREPASS__/, ENVIRON[\"R\"]) } 1" deploy/redis.conf.broker >> /etc/valkey/valkey.conf'
+sudo grep -c '^requirepass [A-Za-z0-9]\{40\}$' /etc/valkey/valkey.conf   # -> 1
 
 # On a rebuild, the passwords file comes first, from the bucket: docs/RECOVERY.md
 # step 2 (`restore --digests`, broker#72). It refuses a file that exists, and the
@@ -319,8 +326,8 @@ sudo grep -c '^requirepass [A-Za-z0-9]\{40\}$' /etc/redis/redis.conf   # -> 1
 
 # Unit ordering + the boot-race wait
 sudo install -m 0755 deploy/wait-for-tailnet-addr.sh /usr/local/sbin/
-sudo install -m 0644 -D deploy/redis-server.service.d/broker.conf \
-    /etc/systemd/system/redis-server.service.d/broker.conf
+sudo install -m 0644 -D deploy/valkey-server.service.d/broker.conf \
+    /etc/systemd/system/valkey-server.service.d/broker.conf
 
 # The health timer. The unit runs /srv/broker/live (#107), which the first
 # deploy makes (Deploying, below): install and enable it BEFORE that deploy.
@@ -344,7 +351,7 @@ sudo systemctl enable --now broker-bus-health.timer
 # backup.env is the restore's, and the #108 unit's a switch back restores; this
 # unit names its bucket and takes the key as a credential.
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin broker-backup
-id broker-backup                                     # its own group alone: never redis
+id broker-backup                                     # its own group alone: never valkey
 sudo install -m 0644 deploy/broker-backup.service deploy/broker-backup.timer /etc/systemd/system/
 sudo install -m 0400 -o root -g root /dev/null /etc/broker/backup.env
 printf 'BROKER_BACKUP_BUCKET=co-gcs-broker-backup\nGOOGLE_APPLICATION_CREDENTIALS=/etc/broker/co-broker-backup.json\n' \
@@ -362,12 +369,12 @@ sudo systemctl enable --now broker-backup.timer      # after the key exists
 # daemon-reload applies MemoryLow= to running units (checked on a scratch unit).
 sudo install -m 0644 -D deploy/sysctl.d/60-broker-memory.conf /etc/sysctl.d/60-broker-memory.conf
 sudo sysctl -p /etc/sysctl.d/60-broker-memory.conf
-for d in system.slice.d/broker-memory.conf redis-server.service.d/memory.conf tailscaled.service.d/memory.conf; do
+for d in system.slice.d/broker-memory.conf valkey-server.service.d/memory.conf tailscaled.service.d/memory.conf; do
     sudo install -m 0644 -D "deploy/$d" "/etc/systemd/system/$d"
 done
 sudo systemctl daemon-reload
 # OOMScoreAdjust= applies at exec; take it live rather than restarting the bus.
-for u in redis-server tailscaled; do
+for u in valkey-server tailscaled; do
     sudo choom -n -900 -p "$(systemctl show -p MainPID --value "$u")"
 done
 # earlyoom: installed and configured, NOT running (broker#58). The install starts
@@ -392,7 +399,7 @@ set -a; . /etc/broker/.env; set +a
 uv run pytest tests/deploy -rs        # the only skips: test_redis_acl.py's unassigned-DLQ rows
 ```
 
-**Restarting `redis-server` is a cohort-wide event.** Every service connects
+**Restarting `valkey-server` is a cohort-wide event.** Every service connects
 to this instance, so anything needing a restart waits for a window rather than
 being applied in passing.
 
@@ -519,10 +526,10 @@ that twice when it switches back. Run it in the background and read
 - `1`: refused before anything switched, or switched back to a build that answers.
 - `4`: nothing answers. Read `journalctl -t broker-deploy` and each unit's own journal.
 
-**It never installs a host config, and never restarts `redis-server`.** It
+**It never installs a host config, and never restarts `valkey-server`.** It
 compares the files Install puts in place verbatim, and a difference is a note.
 `redis.conf.broker` and `redis-acl.conf` are installed derived, under an
-`/etc/redis` that `exedev` cannot read. They are compared with the release
+`/etc/valkey` that `exedev` cannot read. They are compared with the release
 `live` ran before, and a change is a note pointing at the restart window.
 
 ## Memory protection (broker#21)
@@ -541,7 +548,7 @@ things about this node shaped them:
   (`vm.min_free_kbytes`) and a kill order, not a limit on what does not.
 - **cgroup2 has no `memory_recursiveprot`.** A service's protection is capped by
   its slice's, and `system.slice` defaults to 0. Check
-  `/sys/fs/cgroup/system.slice/redis-server.service/memory.low`, not
+  `/sys/fs/cgroup/system.slice/valkey-server.service/memory.low`, not
   `systemctl show`, which reports the configured value either way.
 - **exe.dev's own processes sit at `oom_score_adj` -1000; its sessions no
   longer do.** `exe-init` and `sshd` run there, and nothing can kill them. Until
@@ -566,7 +573,7 @@ things about this node shaped them:
 - **The bus is out of earlyoom's reach and near-last for the kernel.** A unit at
   the default adj 0 reads ~667, which `--avoid` only takes to ~367, so as first
   installed earlyoom's dry run would have killed tailscaled and redis-server.
-  Both run at -900 now: `oom_score` under 300, so `--avoid` puts them below the
+  Both run at -900 now (the engine as `valkey-server` since #85): `oom_score` under 300, so `--avoid` puts them below the
   badness-0 victim earlyoom starts each scan with, and never picks. Not -1000,
   so the kernel's own OOM killer still has a restartable victim instead of a
   panic that `kernel.panic = 0` turns into a hung node. Its order, measured
@@ -623,7 +630,7 @@ persist it in both places:
 ```bash
 # `cred` and `rcli` as defined under "Changing a grant" above.
 rcli acladmin CONFIG SET maxmemory <value>  # applies now
-sudo sed -i 's/^maxmemory .*/maxmemory <value>/' /etc/redis/redis.conf
+sudo sed -i 's/^maxmemory .*/maxmemory <value>/' /etc/valkey/valkey.conf
 sed -i 's/^maxmemory .*/maxmemory <value>/' deploy/redis.conf.broker
 ```
 
@@ -638,13 +645,13 @@ said so. Until #52 raising the cap then meant `ACL SETUSER default on`, the
 Pass the value **exactly as the config file spells it** - `CONFIG SET` accepts
 the same unit suffixes, so there is no byte conversion to get wrong.
 
-**Raising it moves two more files.** `redis-server.service.d/memory.conf` holds
+**Raising it moves two more files.** `valkey-server.service.d/memory.conf` holds
 `MemoryLow=` at twice the cap, and `system.slice.d/broker-memory.conf` at least
 that plus tailscaled's; `test_memory_protection.py` fails until both follow.
 Both apply live:
 
 ```bash
-sudo install -m 0644 deploy/redis-server.service.d/memory.conf /etc/systemd/system/redis-server.service.d/memory.conf
+sudo install -m 0644 deploy/valkey-server.service.d/memory.conf /etc/systemd/system/valkey-server.service.d/memory.conf
 sudo install -m 0644 deploy/system.slice.d/broker-memory.conf /etc/systemd/system/system.slice.d/broker-memory.conf
 sudo systemctl daemon-reload                     # no restart; read back /sys/fs/cgroup/.../memory.low
 ```
@@ -662,7 +669,7 @@ finding every tick.
 `noeviction` with the default `maxmemory 0` is *inert*: there is no ceiling to
 refuse writes at, so an untrimmed stream never produces the retryable write
 errors the "a stream broker must never evict" reasoning assumes - it grows until
-the kernel OOM-killer takes `redis-server`, costing the whole broker plus an
+the kernel OOM-killer takes `valkey-server`, costing the whole broker plus an
 AOF-replay restart (CannObserv/archiver#128). The explicit cap converts that
 into bounded, instance-wide `OOM command not allowed` errors.
 
@@ -1048,14 +1055,13 @@ a snapshot. It holds **no Redis credential**: the server rewrites `dump.rdb`
 atomically at its `save` points, so the file is the interface.
 
 It runs as `broker-backup` (#109), a static system user in no supplementary
-group, with no capability. `/var/lib/redis` is `0750 redis:redis`, so the
+group, with no capability. `/var/lib/valkey` is `0750 valkey:valkey`, so the
 user cannot read `dump.rdb`; the unit's one `+` line, `install -p`, copies it
 as root into the unit's `0700` runtime directory, and the user reads the copy.
-The writer key and `/etc/redis/broker-acl-passwords` arrive through
-`LoadCredential=`. The `redis` group is not an option: it holds write on
-`dump.rdb` and on `/etc/redis`. Neither is `DynamicUser=`, under which the probe
-could not read `state.json` (#22 B1). A missing key or passwords file is an
-empty credential, and a failed copy is no start failure: each fails inside the
+The writer key and `/etc/valkey/broker-acl-passwords` arrive through
+`LoadCredential=`. The `valkey` group is not an option: it holds write on
+`dump.rdb` and on `/etc/valkey` (`2770`, the package's). Neither is `DynamicUser=`, under which the probe could not read `state.json`
+(#22 B1). A missing key or passwords file is an empty credential, and a failed copy is no start failure: each fails inside the
 run and is recorded, so the probe reports it on its next tick.
 
 Each run also ships the service users' ACL digests, `<run time>.digests`, so a

@@ -1,6 +1,8 @@
 # The cohort restart window
 
-Runbook for CannObserv/broker#5, and the CannObserv/broker#2 cutover it enables.
+Runbook for restarting the engine (`valkey-server` since CannObserv/broker#85),
+first written for CannObserv/broker#5 and the CannObserv/broker#2 cutover it
+enabled.
 
 The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
 `nopass` trap - are [ACL-CUTOVER.md](ACL-CUTOVER.md).
@@ -29,14 +31,14 @@ The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
 > # $1 is the ACL user: acladmin, or brokeradmin (the probe's, INFO/SCAN/EXISTS/
 > # XINFO/XRANGE only). Each password is a systemd-creds credential encrypted to
 > # this node, decrypted by root on demand - no prompt, and no plaintext at rest
-> # (CannObserv/broker#52). It reaches redis-cli's ENVIRONMENT and never its
+> # (CannObserv/broker#52). It reaches valkey-cli's ENVIRONMENT and never its
 > # argv - CannObserv/broker#47, and the reason no line here says `-u`.
 > cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encrypted/broker-$1" -; }
 > # Refuses rather than connecting with an empty password: a failed decrypt would
 > # otherwise be a WRONGPASS naming the user in ACL LOG, the evidence log.
 > rcli() { local u=$1 p; shift
 >          p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
->          REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+>          REDISCLI_AUTH="$p" valkey-cli --user "$u" -h localhost -p 6379 "$@"; }
 > ```
 >
 > `rcli acladmin` is the operator: reads, diagnoses, sweeps a dead-letter queue,
@@ -44,7 +46,7 @@ The cutover's own steps - the passwords, the dry run, steps 2 to 4 and the
 > warning, so `--no-auth-warning` comes off with the URL - verified on a scratch
 > 7.0.15.
 
-Restarting `redis-server` on `co-broker` disconnects every participant, so
+Restarting `valkey-server` on `co-broker` disconnects every participant, so
 it is a cohort-wide event rather than a maintenance detail. This window carries
 everything that needs one, and nothing that does not.
 
@@ -70,7 +72,7 @@ cannot reach production topic names*).
 | Directive | Closes | Why it needs a restart |
 |---|---|---|
 | `databases 1` | the database-index axis - `SELECT 15` fails outright, so a repointed `REPLICATOR_TEST_REDIS_URL` has nowhere to land | `databases` is startup-only |
-| `aclfile /etc/redis/users.acl` | the topic-name axis - a `citest` credential that could not **name** a production topic; since CannObserv/broker#53, no test credential at all | `aclfile` is an **immutable** config; `CONFIG SET aclfile` fails |
+| `aclfile /etc/valkey/users.acl` | the topic-name axis - a `citest` credential that could not **name** a production topic; since CannObserv/broker#53, no test credential at all | `aclfile` is an **immutable** config; `CONFIG SET aclfile` fails |
 
 Redis ACLs cannot partition by database index at all, which is why neither
 substitutes for the other. Doing them together means R4 closes in one event.
@@ -95,7 +97,7 @@ decision with archiver (*the OOM seam*).
       A missing artifact fails rather than skips (broker#81). Any other skip
       prints its reason under `-rs`: read it before going on. The usual ones
       are the env not sourced, `sudo -n` not working, or the broker not
-      answering, but a missing tool (`redis-server`, `perl`, `git`) skips too.
+      answering, but a missing tool (`valkey-server`, `perl`, `git`) skips too.
 - [ ] The backup pipeline is healthy before anything depends on it:
       `journalctl -u broker-backup -n 1 -o cat --no-pager` says `uploaded` or
       `unchanged` with a `snapshot_at` inside the last hour, and the probe's
@@ -114,8 +116,8 @@ decision with archiver (*the OOM seam*).
 ### Step 1a - install the ACL file
 
 ```bash
-sudo deploy/render-acl.sh /etc/redis/broker-acl-passwords \
-    | sudo install -m 0640 -o root -g redis /dev/stdin /etc/redis/users.acl
+sudo deploy/render-acl.sh /etc/valkey/broker-acl-passwords \
+    | sudo install -m 0640 -o root -g valkey /dev/stdin /etc/valkey/users.acl
 ```
 
 Installing it does nothing on its own - Redis does not read it until `aclfile`
@@ -173,7 +175,7 @@ file is cumulative. The restore, should it ever be needed, is
 Now the rewrite:
 
 ```bash
-sudo ls /var/lib/redis/appendonlydir/                      # note the base number, <n>
+sudo ls /var/lib/valkey/appendonlydir/                     # note the base number, <n>
 rcli acladmin BGREWRITEAOF                                 # -> Background append only file rewriting started
 while rcli acladmin INFO persistence | tr -d '\r' \
       | grep -E '^aof_rewrite_(in_progress|scheduled):' | grep -qv ':0$'; do sleep 1; done
@@ -183,7 +185,7 @@ rcli acladmin INFO persistence \
 #   aof_rewrite_scheduled:0
 #   aof_rewrite_in_progress:0
 #   aof_last_bgrewrite_status:ok    <- also what a server that never rewrote reports; proves nothing alone
-sudo ls -la /var/lib/redis/appendonlydir/
+sudo ls -la /var/lib/valkey/appendonlydir/
 #   appendonly.aof.<n+1>.base.rdb at roughly the dataset's size (~500 KB today; the old base was
 #   89 bytes) and a near-empty incr. THE BASE NUMBER ADVANCING IS THE CHECK.
 ```
@@ -204,13 +206,13 @@ defaults.
 Confirm no history survived (the counts as executed: [INCIDENT-2026-09-10.md](INCIDENT-2026-09-10.md)):
 
 ```bash
-sudo grep -ac '^SELECT'  /var/lib/redis/appendonlydir/appendonly.aof.*.incr.aof   # -> 0
-sudo grep -ac '^FLUSHDB' /var/lib/redis/appendonlydir/appendonly.aof.*.incr.aof   # -> 0
+sudo grep -ac '^SELECT'  /var/lib/valkey/appendonlydir/appendonly.aof.*.incr.aof   # -> 0
+sudo grep -ac '^FLUSHDB' /var/lib/valkey/appendonlydir/appendonly.aof.*.incr.aof   # -> 0
 ```
 
 ### Step 1b - add the two directives
 
-To **both** `/etc/redis/redis.conf` (inside the `CannObserv/broker#1` block, or
+To **both** `/etc/valkey/valkey.conf` (inside the `CannObserv/broker#1` block, or
 appended at the end - Redis takes the last occurrence) and
 `deploy/redis.conf.broker` in this repo, identically:
 
@@ -223,7 +225,7 @@ databases 1
 # broker#2. Immutable config - this is why the ACL users need a window at all.
 # Everything after this is live: ACL SETUSER applies immediately, ACL SAVE
 # persists here.
-aclfile /etc/redis/users.acl
+aclfile /etc/valkey/users.acl
 ```
 
 `deploy/redis.conf.broker` is the tracked statement of what is deployed, and
@@ -234,7 +236,7 @@ that test fail, which is the point.
 ### Step 1c - restart
 
 ```bash
-sudo systemctl restart redis-server
+sudo systemctl restart valkey-server
 ```
 
 **A restart from exe.dev is not this one.** `ssh exe.dev resize` (and a VM
@@ -253,10 +255,10 @@ Step 1d's bind check still follows one.
 
 ### Step 1d - verify, in this order
 
-**`redis-server` does not log to journald on this node.** `logfile` is
-`/var/log/redis/redis-server.log`, so `journalctl -u redis-server` holds exactly
-one entry in the unit's whole history - the one time the tailnet wait actually
-had to wait. Every check below that reads the server's own output therefore
+**`valkey-server` does not log to journald on this node.** `logfile` is
+`/var/log/valkey/valkey-server.log`, so `journalctl -u valkey-server` holds only
+what the unit itself prints - under 7.0 that was one entry in the unit's whole
+history, the one time the tailnet wait actually had to wait. Every check below that reads the server's own output therefore
 reads the **file**. This is not pedantry: the earlier version of this runbook
 grepped the journal for `DB index is out of range`, which is the single check
 that would have caught the 2026-09-10 incident, and it would have returned
@@ -271,23 +273,23 @@ skipping the line.
 
 ```bash
 # THE CHECK THAT MATTERS MOST, and it is in the file, not the journal.
-sudo grep -c 'DB index is out of range' /var/log/redis/redis-server.log   # -> 0
-sudo tail -20 /var/log/redis/redis-server.log
+sudo grep -c 'DB index is out of range' /var/log/valkey/valkey-server.log   # -> 0
+sudo tail -20 /var/log/valkey/valkey-server.log
 #   * DB loaded from base file appendonly.aof.<n>.base.rdb    <- the snapshot was read
 #   * Done loading RDB, keys loaded: <N>, keys expired: 0
 #   * Ready to accept connections
 # `Creating AOF base file ... on server start` instead means it loaded NOTHING.
 
-systemctl show redis-server -p NRestarts        # -> 0
+systemctl show valkey-server -p NRestarts       # -> 0
 
 # R1's boot race. The wait prints ONLY when it actually waited, so silence here
 # means the address was already up - which it is on any restart that is not a
 # cold boot. The check that always means something is the bind:
 sudo ss -ltnp | grep 6379                       # -> 127.0.0.1:6379 AND 100.97.91.19:6379
-journalctl -u redis-server --no-pager | grep -i 'tailnet address'   # only after a real wait
+journalctl -u valkey-server --no-pager | grep -i 'tailnet address'   # only after a real wait
 
 # Anonymous must still be refused.
-redis-cli PING                                   # -> NOAUTH
+valkey-cli PING                                  # -> NOAUTH Authentication required.
 
 # `cred` and `rcli` as defined at the top of this file.
 rcli acladmin SELECT 15                          # -> ERR DB index is out of range
@@ -353,18 +355,18 @@ count ([BUS-HEALTH.md](BUS-HEALTH.md), *Pending age*).
 How each participant came back on 2026-10-13, and how long each can wait:
 [NETWORK-PATHS.md](NETWORK-PATHS.md#through-a-broker-outage).
 
-**Do not start a second `redis-server` against this config to "test" it.** It
-inherits `dir /var/lib/redis` and `appendonly yes`, so it opens the live AOF for
+**Do not start a second `valkey-server` against this config to "test" it.** It
+inherits `dir /var/lib/valkey` and `appendonly yes`, so it opens the live AOF for
 append alongside the running server. Trial-parse with a throwaway directory
-instead: `redis-server /etc/redis/redis.conf --dir "$(mktemp -d)" --port 6398
+instead: `valkey-server /etc/valkey/valkey.conf --dir "$(mktemp -d)" --port 6398
 --appendonly no --logfile ''`. And note that extra CLI arguments are read as
 config lines *numbered past the end of the file*, so a `FATAL CONFIG FILE ERROR`
 at a line the file does not have is the argument, not the config.
 
 ### Rollback for step 1
 
-Remove the two directives from `/etc/redis/redis.conf`, `systemctl restart
-redis-server`. `/etc/redis/users.acl` can stay - it is inert without `aclfile`.
+Remove the two directives from `/etc/valkey/valkey.conf`, `systemctl restart
+valkey-server`. `/etc/valkey/users.acl` can stay - it is inert without `aclfile`.
 No data is involved in the rollback itself. The AOF history that step 1a-bis
 rewrote is gone either way; the snapshot shipped just before it is what stands
 behind a restart that comes up wrong (`docs/RECOVERY.md`, *Same node, lost
@@ -376,17 +378,17 @@ data*).
 
 | Symptom | Means | Do |
 |---|---|---|
-| `redis-cli PING` returns `PONG` unauthenticated | the `nopass` trap ([ACL-CUTOVER.md](ACL-CUTOVER.md)) | roll back step 1 immediately; the broker is open |
-| redis-server will not start, `Aborting Redis startup because of ACL errors` | a bad rule; Redis refuses the **whole file** | comment out `aclfile`, restart, fix, re-dry-run ([ACL-CUTOVER.md](ACL-CUTOVER.md)) |
+| `valkey-cli PING` returns `PONG` unauthenticated | the `nopass` trap ([ACL-CUTOVER.md](ACL-CUTOVER.md)) | roll back step 1 immediately; the broker is open |
+| valkey-server will not start, `Aborting Redis startup because of ACL errors` (Valkey 7.2 keeps the wording) | a bad rule; Redis refuses the **whole file** | comment out `aclfile`, restart, fix, re-dry-run ([ACL-CUTOVER.md](ACL-CUTOVER.md)) |
 | A service logs `NOPERM ... no permissions to run the '<cmd>' command` | missing command grant | `ACL SETUSER <user> +<cmd>` live, then commit it |
 | A service logs `NOPERM ... no permissions to access one of the keys` | missing `~pattern` - the **quieter** mistake | `ACL SETUSER <user> ~<topic>` live, then commit it |
 | `check_redis_floor.sh` says `could not read redis_version` | missing `+info`; warn-only, so nothing else reports it | `ACL SETUSER <user> +info` |
 | `AuthenticationError` on connect | the service's own credential is wrong | check the URL's username half, not just the password |
 | `ERR DB index is out of range` from a test suite | `databases 1` working as intended | fix the test's URL; do not widen `databases` |
-| `rcli acladmin -n 15 PING` prints that error **and then `PONG`** | redis-cli falls back to db0 and carries on; redis-py raises instead | not a fault - but never verify `databases 1` by selecting the database at connect time, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
-| Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u redis-server` |
+| `rcli acladmin -n 15 PING` prints that error **and then `PONG`** | the CLI falls back to db0 and carries on (seen with redis-cli 7.0); redis-py raises instead | not a fault - but never verify `databases 1` by selecting the database at connect time, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
+| Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u valkey-server` |
 | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
-| `DB index is out of range` in `/var/log/redis/redis-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
+| `DB index is out of range` in `/var/log/valkey/valkey-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
 | A service's `user=` is missing from `CLIENT LIST` after the broker is back | its unit gave up or refused to restart - past its outage bound, or a start guard ([NETWORK-PATHS.md](NETWORK-PATHS.md#through-a-broker-outage)) | check the unit on its host now: `systemctl status <unit>`. `ExecMainStatus` there reports the last `ExecStartPre`, not the worker. A `failed` replicator needs `reset-failed` before `start` (CannObserv/replicator#133) |
 | A group is missing from `XINFO GROUPS`, or a service logs `NOGROUP` | its group is gone. Archiver and provisioner recreate theirs at `0` (provisioner logs `group_recreated`); the other three latch on `NOGROUP` until restarted | restart that one on its host. It recreates the group at `$`, skipping what arrived since: on replicator's groups, step 1d's *Every group by name* gives the cost |
 | `XINFO GROUPS` shows non-zero `lag` on a group after a restart | usually nothing: on 7.0 the counter misreads after a restart | compare the group's `last-delivered-id` with the stream's `last-generated-id`; only a difference is a backlog |
@@ -400,9 +402,10 @@ data*).
   - `dir` and `logfile` get rewritten - which the live-config test then reads as
   drift, and it splits the ACL's source of truth across a file this repo only
   partly tracks.
-- **Do not add `+client|setinfo`.** It does not exist before Redis 7.2 and this
-  broker is 7.0.15; the grant is rejected and takes every user down with it. It
-  becomes a required step of any upgrade to >= 7.2.
+- **Do not take `+client|setinfo` off, nor grant it on a 7.0 engine.** It
+  arrived with Valkey 7.2 in CannObserv/broker#85's window, for the five
+  clients that send `CLIENT SETINFO`; 7.0 refuses the grant and every user with
+  it. `deploy/redis-acl.conf`, *+client|setinfo FOR EVERY CLIENT THAT SENDS IT*.
 - **Do not grant `archiver` `~content.blobs`** to make an error go away. That
   omission is the entire reason this file exists.
 - **Do not do step 4 before steps 2 and 3.** `user default off` with any client

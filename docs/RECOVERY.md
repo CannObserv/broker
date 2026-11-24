@@ -2,15 +2,15 @@
 
 Runbook for CannObserv/broker#4. What is backed up, how, what it costs, and how
 to rebuild the node from it. The restore is rehearsed by
-`tests/deploy/test_backup_restore_rehearsal.py` against a real `redis-server`
-on every test run, and by hand against a real object: the dated record is
+`tests/deploy/test_backup_restore_rehearsal.py` against the node's engine
+(`valkey-server` since #85) on every test run, and by hand against a real object: the dated record is
 [archive/RECOVERY-REHEARSALS.md](archive/RECOVERY-REHEARSALS.md).
 
 ---
 
 ## What is exposed
 
-`/var/lib/redis` is the only copy of:
+`/var/lib/valkey` is the only copy of:
 
 - every stream's entries;
 - **every consumer group's `last-delivered-id`** and PEL - the messages
@@ -58,7 +58,7 @@ It holds no opinion on the AOF (never shipped - point in time is the contract),
 on configuration (this repo is the copy), or on secrets (step 0).
 
 **The ACL digests ship beside each snapshot** (CannObserv/broker#72): the
-service lines of `/etc/redis/broker-acl-passwords`, sorted, as
+service lines of `/etc/valkey/broker-acl-passwords`, sorted, as
 `<run time>.digests`. They cannot be reproduced, because each service holds its
 own plaintext, and they are what re-admits it. The reasoning is in
 `src/broker/backup.py`'s docstring. What an operator needs:
@@ -76,12 +76,12 @@ own plaintext, and they are what re-admits it. The reasoning is in
 - **The newest set is the greatest name.** Every run creates one, so the
   30-day rule never reaches it. `--list` and `--latest` never offer one.
 
-**Why the file, and not `BGSAVE` or `redis-cli --rdb`.** Both would need a
+**Why the file, and not `BGSAVE` or `valkey-cli --rdb`.** Both would need a
 grant on the broker and both fork the server; the file needs neither, is
 consistent by construction (the server renames a complete temp file into
 place, and a copy holding the old inode reads it to the end), and its freshness
 is bounded by the `save` points and reported by the probe when they stop. If
-the RPO ever needs tightening, `redis-cli --rdb` under a user holding
+the RPO ever needs tightening, `valkey-cli --rdb` under a user holding
 `+sync +replconf` is the upgrade path; nothing else changes.
 
 **Why create-only.** Overwriting an object needs `storage.objects.delete`, and
@@ -94,8 +94,8 @@ same reason it does for replicator's temp store: the process that writes must
 not be the process that can erase. Same property as replicator's replicate
 writer, for the same reason.
 
-**Why root.** `/var/lib/redis` is 0750 `redis:redis` and `dump.rdb` is 0660,
-so the reader is root or a member of the `redis` group - and the group holds
+**Why root.** `/var/lib/valkey` is 0750 `valkey:valkey` and `dump.rdb` is 0660,
+so the reader is root or a member of the `valkey` group - and the group holds
 *write* on the live snapshot. Root confined by the unit's sandbox is the safer
 of the two: `ProtectSystem=strict` makes the filesystem read-only except the
 state directory and a private `/tmp`, and the only capability left is the one
@@ -122,7 +122,7 @@ So the snapshot has to *become* the base of a multi-part AOF. That is all
 `src/broker/restore.py` does:
 
 ```
-/var/lib/redis/appendonlydir/
+/var/lib/valkey/appendonlydir/
     appendonly.aof.1.base.rdb    <- the snapshot, byte for byte
     appendonly.aof.1.incr.aof    <- empty
     appendonly.aof.manifest      <- file appendonly.aof.1.base.rdb seq 1 type b
@@ -175,14 +175,15 @@ so the name is free. That is done in the Tailscale admin console, not here.
 
 ### 1. The VM
 
-Same distro family, **Redis 7.0.x or newer** - a newer server loads an older
-RDB; an older one refuses a newer (the object's `rdb_version` metadata says
-which it is; 10 is 7.0). `apt install redis-server` starts a default-config
-server; **stop it** before touching `/var/lib/redis`.
+Same distro family, **Ubuntu's `valkey-server` 7.2.x** (#85), never
+`valkey-redis-compat` - a newer server loads an older RDB; an older one refuses
+a newer (the object's `rdb_version` metadata says which it is; 10 is Redis 7.0,
+11 is Valkey 7.2). `sudo apt-get install valkey-server` starts a default-config
+server; **stop it** before touching `/var/lib/valkey`.
 
 ```bash
-sudo systemctl stop redis-server
-sudo ls -la /var/lib/redis        # a default-config dump.rdb is fine; no appendonlydir yet
+sudo systemctl stop valkey-server
+sudo ls -la /var/lib/valkey       # a default-config dump.rdb is fine; no appendonlydir yet
 ```
 
 ### 2. The repo, the config, the secrets
@@ -205,7 +206,7 @@ never overwritten:
 sudo install -d -o root -g root -m 755 /srv/broker
 ~/broker/scripts/deploy.sh --build-only     # "built <sha12> (--build-only)"
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /srv/broker/releases/<sha12>/.venv/bin/python -I -B -m src.broker.restore --digests /etc/redis/broker-acl-passwords'
+  /srv/broker/releases/<sha12>/.venv/bin/python -I -B -m src.broker.restore --digests /etc/valkey/broker-acl-passwords'
 ```
 
 **Steps 2 and 3 run that release as root, not `live`** (#122): `live` comes
@@ -227,7 +228,7 @@ Then append `redis.conf.broker` with a freshly minted `requirepass`, and
 render and install the ACL file. After that come the drop-in and the wait
 script, the units, and then the memory protection (broker#21).
 
-Do not start `redis-server` yet. `appendonly yes` is now in its config, and
+Do not start `valkey-server` yet. `appendonly yes` is now in its config, and
 started empty it would create the fresh base the trap above describes.
 
 ### 3. The data
@@ -236,7 +237,7 @@ started empty it would create the fresh base the trap above describes.
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
   /srv/broker/releases/<sha12>/.venv/bin/python -I -B -m src.broker.restore --list'          # newest first
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
-  /srv/broker/releases/<sha12>/.venv/bin/python -I -B -m src.broker.restore --latest --into /var/lib/redis'
+  /srv/broker/releases/<sha12>/.venv/bin/python -I -B -m src.broker.restore --latest --into /var/lib/valkey'
 ```
 
 `--object <name>` for a specific snapshot rather than the newest; `--file
@@ -244,9 +245,9 @@ sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
 it staged and the three lines to run next:
 
 ```bash
-sudo chown -R redis:redis /var/lib/redis/appendonlydir
-sudo chmod 0750 /var/lib/redis/appendonlydir && sudo chmod 0640 /var/lib/redis/appendonlydir/*
-sudo systemctl start redis-server
+sudo chown -R valkey:valkey /var/lib/valkey/appendonlydir
+sudo chmod 0750 /var/lib/valkey/appendonlydir && sudo chmod 0640 /var/lib/valkey/appendonlydir/*
+sudo systemctl start valkey-server
 ```
 
 ### 4. Verify the positions, not the key count
@@ -257,9 +258,10 @@ cred() { sudo -n systemd-creds decrypt --name="broker-$1" "/etc/credstore.encryp
 # otherwise be a WRONGPASS naming the user in ACL LOG, the evidence log.
 rcli() { local u=$1 p; shift
          p="$(cred "$u")" && [ -n "$p" ] || { echo "rcli: no credential for $u" >&2; return 1; }
-         REDISCLI_AUTH="$p" redis-cli --user "$u" -h localhost -p 6379 "$@"; }
+         REDISCLI_AUTH="$p" valkey-cli --user "$u" -h localhost -p 6379 "$@"; }
 
-journalctl -u redis-server -n 20 -o cat --no-pager | grep -E 'loaded from base file|DB index'
+# The server's own log is the file, not the journal (docs/RESTART-WINDOW.md, 1d).
+sudo grep -E 'loaded from base file|Creating AOF base|DB index' /var/log/valkey/valkey-server.log | tail -5
 rcli acladmin INFO keyspace                         # db0:keys=N,expires=M - the rule is below
 
 GROUPED="content.fetch content.revisions content.artifacts content.replicate content.blobs
@@ -278,7 +280,7 @@ done
 rcli acladmin XPENDING content.fetch replicator.fetch - + 10
 ```
 
-`DB loaded from base file appendonly.aof.1.base.rdb` in the journal is the
+`DB loaded from base file appendonly.aof.1.base.rdb` in the log is the
 line that says the snapshot was read. `Creating AOF base file` is the line
 that says it was not - stop, the directory is wrong.
 
@@ -345,8 +347,8 @@ may be the better copy, and the incident in `docs/RESTART-WINDOW.md` was
 recovered exactly that way. Check it first:
 
 ```bash
-sudo systemctl stop redis-server
-sudo redis-check-aof /var/lib/redis/appendonlydir/appendonly.aof.manifest
+sudo systemctl stop valkey-server
+sudo valkey-check-aof /var/lib/valkey/appendonlydir/appendonly.aof.manifest
 ```
 
 If it is intact and holds what was lost, a restart replays it and this runbook
@@ -354,7 +356,7 @@ is not needed. If not, move it aside - **never delete it** - and continue from
 step 3:
 
 ```bash
-sudo mv /var/lib/redis/appendonlydir "/var/lib/redis/appendonlydir.$(date -u +%Y%m%dT%H%M%SZ)"
+sudo mv /var/lib/valkey/appendonlydir "/var/lib/valkey/appendonlydir.$(date -u +%Y%m%dT%H%M%SZ)"
 ```
 
 ---
@@ -367,16 +369,16 @@ sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
 sudo sh -c 'set -a; . /etc/broker/backup.env; set +a
   /srv/broker/live/.venv/bin/python -I -B -m src.broker.restore --latest --into /tmp/rehearsal'
 sudo chown -R "$(id -u)" /tmp/rehearsal       # staged as root; the throwaway server runs as you
-redis-check-rdb /tmp/rehearsal/appendonlydir/appendonly.aof.1.base.rdb   # \o/ RDB looks OK! \o/  N keys read, M expires
+valkey-check-rdb /tmp/rehearsal/appendonlydir/appendonly.aof.1.base.rdb  # \o/ RDB looks OK! \o/  N keys read, M expires
 sha256sum /tmp/rehearsal/appendonlydir/appendonly.aof.1.base.rdb         # == the sha256 `--list` printed for it
-redis-server --port 6399 --bind 127.0.0.1 --dir /tmp/rehearsal --appendonly yes --save '' \
+valkey-server --port 6399 --bind 127.0.0.1 --dir /tmp/rehearsal --appendonly yes --save '' \
     --daemonize yes --pidfile /tmp/rehearsal/pid --logfile /tmp/rehearsal/log
 sleep 1; grep -E 'loaded from base file|Creating AOF base' /tmp/rehearsal/log   # the first line, never the second
-redis-cli -p 6399 INFO keyspace
+valkey-cli -p 6399 INFO keyspace
 for s in ${GROUPED:?step 4 above}; do
-    echo "== $s"; redis-cli -p 6399 XINFO GROUPS "$s"
+    echo "== $s"; valkey-cli -p 6399 XINFO GROUPS "$s"
 done
-redis-cli -p 6399 SHUTDOWN NOSAVE; rm -rf /tmp/rehearsal   # nothing left listening, nothing left on disk
+valkey-cli -p 6399 SHUTDOWN NOSAVE; rm -rf /tmp/rehearsal   # nothing left listening, nothing left on disk
 ```
 
 The throwaway server holds a copy of production data, unauthenticated, on

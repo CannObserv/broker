@@ -11,9 +11,9 @@ imported by any service; the services reach the broker over the network, by URL.
 
 | Path | What it is |
 |---|---|
-| [`deploy/redis.conf.broker`](deploy/redis.conf.broker) | The broker's tuning as deployed - bind, auth, AOF persistence, `noeviction`, an explicit `maxmemory` cap. Appended to `/etc/redis/redis.conf`, with the credential templated |
-| [`deploy/redis-acl.conf`](deploy/redis-acl.conf) + [`deploy/render-acl.sh`](deploy/render-acl.sh) | The per-service ACL users - what actually scopes each service to its own streams, rather than documenting it. Since broker#14 `+xadd`/`+xtrim`/`+set` ride **selectors** naming only what each service produces, so a consumer cannot publish to the stream it reads; since broker#43 the group commands ride a selector naming only what it consumes, so a producer cannot take delivery in its consumer's group. Rendered to `/etc/redis/users.acl`; changed live as `acladmin` and mirrored back |
-| [`deploy/redis-server.service.d/broker.conf`](deploy/redis-server.service.d/broker.conf) + [`deploy/wait-for-tailnet-addr.sh`](deploy/wait-for-tailnet-addr.sh) | Unit ordering only: `After=tailscaled` plus the `/proc/net/fib_trie` wait that R1's boot race exists for |
+| [`deploy/redis.conf.broker`](deploy/redis.conf.broker) | The broker's tuning as deployed - bind, auth, AOF persistence, `noeviction`, an explicit `maxmemory` cap. Appended to `/etc/valkey/valkey.conf`, with the credential templated |
+| [`deploy/redis-acl.conf`](deploy/redis-acl.conf) + [`deploy/render-acl.sh`](deploy/render-acl.sh) | The per-service ACL users - what actually scopes each service to its own streams, rather than documenting it. Since broker#14 `+xadd`/`+xtrim`/`+set` ride **selectors** naming only what each service produces, so a consumer cannot publish to the stream it reads; since broker#43 the group commands ride a selector naming only what it consumes, so a producer cannot take delivery in its consumer's group. Rendered to `/etc/valkey/users.acl`; changed live as `acladmin` and mirrored back |
+| [`deploy/valkey-server.service.d/broker.conf`](deploy/valkey-server.service.d/broker.conf) + [`deploy/wait-for-tailnet-addr.sh`](deploy/wait-for-tailnet-addr.sh) | Unit ordering only: `After=tailscaled` plus the `/proc/net/fib_trie` wait that R1's boot race exists for |
 | [`deploy/broker-bus-health.service`](deploy/broker-bus-health.service) / [`.timer`](deploy/broker-bus-health.timer) | The periodic WARN-only health probe, every 10 minutes |
 | [`src/broker/bus_health.py`](src/broker/bus_health.py) | The probe: memory headroom **and eviction policy**, per-stream length against retention caps, last-entry age on groupless streams, per-group `pending`, **the age of what a consumer group has not been delivered** - the check a stopped reader is otherwise invisible to, since pending counts only what was delivered; both, and whether the group exists at all, come out of one `XINFO GROUPS` per stream (#29) - **DLQ depth and continuity** - a queue drained between ticks is reported from its monotonic `entries-added` even though depth never saw it - disk, persistence status, and the backup's freshness |
 | [`deploy/broker-backup.service`](deploy/broker-backup.service) / [`.timer`](deploy/broker-backup.timer) | The hourly RDB backup - a static `broker-backup` user with no capability, read-only everything but its own state directory, holding no Redis credential (broker#4, #109) |
@@ -165,6 +165,12 @@ Onboarding and credential history since, moved from AGENTS.md's *Related*
   2026-09-01, 0 blocks in the incr at the fix. Interim until the
   engine skips the check (Valkey >= 8.0.11, Redis >= 8.4.4);
   `tests/deploy/test_aof_replay.py`'s control says when.
+- CannObserv/broker#85 - the engine: Ubuntu's Valkey 7.2.14 (noble-updates,
+  never `valkey-redis-compat`) replaced Redis 7.0.15 in the 2026-11-27 window.
+  P1/P1b/P2 (the probe's `driver_info=None`, the backup's checker and version
+  key for both engines) landed in #102; P3 (unit, paths, CLI) and P4
+  (`+client|setinfo` for the five clients that send it) rode the window. The
+  7.0 packages stay installed and stopped through the soak, then go.
 
 ## What stayed in archiver
 
