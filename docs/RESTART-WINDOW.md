@@ -257,9 +257,8 @@ Step 1d's bind check still follows one.
 
 **`valkey-server` does not log to journald on this node.** `logfile` is
 `/var/log/valkey/valkey-server.log`, so `journalctl -u valkey-server` holds only
-what the unit itself prints - under 7.0 that was one entry in the unit's whole
-history, the one time the tailnet wait actually had to wait. Every check below that reads the server's own output therefore
-reads the **file**. This is not pedantry: the earlier version of this runbook
+what the unit prints, such as the tailnet wait. Every check below that reads
+the server's own output therefore reads the **file**. This is not pedantry: the earlier version of this runbook
 grepped the journal for `DB index is out of range`, which is the single check
 that would have caught the 2026-09-10 incident, and it would have returned
 "0 occurrences" on an empty journal and read as a pass.
@@ -379,13 +378,13 @@ data*).
 | Symptom | Means | Do |
 |---|---|---|
 | `valkey-cli PING` returns `PONG` unauthenticated | the `nopass` trap ([ACL-CUTOVER.md](ACL-CUTOVER.md)) | roll back step 1 immediately; the broker is open |
-| valkey-server will not start, `Aborting Redis startup because of ACL errors` (Valkey 7.2 keeps the wording) | a bad rule; Redis refuses the **whole file** | comment out `aclfile`, restart, fix, re-dry-run ([ACL-CUTOVER.md](ACL-CUTOVER.md)) |
+| valkey-server will not start, `Aborting Redis startup because of ACL errors` | a bad rule; Redis refuses the **whole file** | comment out `aclfile`, restart, fix, re-dry-run ([ACL-CUTOVER.md](ACL-CUTOVER.md)) |
 | A service logs `NOPERM ... no permissions to run the '<cmd>' command` | missing command grant | `ACL SETUSER <user> +<cmd>` live, then commit it |
 | A service logs `NOPERM ... no permissions to access one of the keys` | missing `~pattern` - the **quieter** mistake | `ACL SETUSER <user> ~<topic>` live, then commit it |
 | `check_redis_floor.sh` says `could not read redis_version` | missing `+info`; warn-only, so nothing else reports it | `ACL SETUSER <user> +info` |
 | `AuthenticationError` on connect | the service's own credential is wrong | check the URL's username half, not just the password |
 | `ERR DB index is out of range` from a test suite | `databases 1` working as intended | fix the test's URL; do not widen `databases` |
-| `rcli acladmin -n 15 PING` prints that error **and then `PONG`** | the CLI falls back to db0 and carries on (seen with redis-cli 7.0); redis-py raises instead | not a fault - but never verify `databases 1` by selecting the database at connect time, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
+| `rcli acladmin -n 15 PING` prints that error **and then `PONG`** | the CLI falls back to db0 and carries on; redis-py raises instead | not a fault - but never verify `databases 1` by selecting the database at connect time, use `SELECT 15` as a command, or you will read the trailing `PONG` as success |
 | Redis starts but binds only loopback | the tailnet wait did not fire | R1 / observo#473; do not proceed, check `journalctl -u valkey-server` |
 | Streams come back far shorter than they went in | **a historical `FLUSHDB` replayed against db0** - see step 1a-bis | roll back `databases 1`, restart. If 1a-bis was skipped, the AOF still holds the history and replays correctly once the database exists again; if it ran, there is no history to replay - restore the snapshot shipped just before it (`docs/RECOVERY.md`) |
 | `DB index is out of range` in `/var/log/valkey/valkey-server.log` **at startup** | the AOF holds commands for a database `databases 1` removed | every one is a command that just executed against db0 instead. Stop and audit |
@@ -402,10 +401,8 @@ data*).
   - `dir` and `logfile` get rewritten - which the live-config test then reads as
   drift, and it splits the ACL's source of truth across a file this repo only
   partly tracks.
-- **Do not take `+client|setinfo` off, nor grant it on a 7.0 engine.** It
-  arrived with Valkey 7.2 in CannObserv/broker#85's window, for the five
-  clients that send `CLIENT SETINFO`; 7.0 refuses the grant and every user with
-  it. `deploy/redis-acl.conf`, *+client|setinfo FOR EVERY CLIENT THAT SENDS IT*.
+- **Never `+client|setinfo` on a 7.0 engine**: 7.0 refuses it and every user
+  with it (#85; `deploy/redis-acl.conf`).
 - **Do not grant `archiver` `~content.blobs`** to make an error go away. That
   omission is the entire reason this file exists.
 - **Do not do step 4 before steps 2 and 3.** `user default off` with any client
