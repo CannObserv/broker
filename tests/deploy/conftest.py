@@ -9,8 +9,9 @@ Then the two fixtures, and the distinction between them is the whole reason
 they are here:
 
 ``tracked_acl_broker``
-    A throwaway server (the node's engine, ``engine_binary()``) loading the ACL file **this repo tracks**, on a
-    free loopback port with no persistence. It never reads
+    A throwaway server (the node's engine, ``engine_binary()``) loading the
+    ACL file **this repo tracks**, on a free loopback port with no
+    persistence. It never reads
     ``BROKER_REDIS_URL``, so it cannot reach ``co-broker``.
 
 ``live_client``
