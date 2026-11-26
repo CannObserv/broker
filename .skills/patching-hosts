@@ -13,10 +13,6 @@ cadence weekly
 # PDT, 15:00-21:00 PST), set 2026-10-13. Every step's whole span must fit
 # inside it, clear of the quiet ranges below, or apply.sh refuses it.
 window Mon 23:00-05:00
-# One-off for #153's catch-up (owner, 2026-11-24): Wed 15:00-21:00 PST, before
-# #85's window. Opens once; removed in #153's close commit, or it reads as
-# past-window.
-window 2026-11-25 23:00-05:00 broker#153
 
 # broker-backup.timer: OnCalendar=hourly, RandomizedDelaySec=5min,
 # AccuracySec=1min, so a run starts up to 6 min past the hour and takes about
