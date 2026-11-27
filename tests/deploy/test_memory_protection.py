@@ -412,9 +412,9 @@ def test_exe_dev_roots_need_exe_init_and_take_sshd_if_present(
 def test_live_sessions_are_killed_before_the_bus() -> None:
     """The host class this node's memory story rests on since broker#71: exe.dev's
     own ``exe-init`` stays at -1000 (with ``sshd``, where it still runs), and the
-    sessions it starts no longer inherit it. Every ``--prefer`` match - VSCode Server, ``claude``,
-    SocratiCode's ``npx`` - reads 0, so the kernel's own OOM killer reaches dev
-    tooling before the bus. That ordering is why earlyoom stays disabled
+    sessions it starts no longer inherit it. Every ``--prefer`` match - VSCode
+    Server, ``claude``, SocratiCode's ``npx`` - reads 0, so the kernel's own OOM
+    killer reaches dev tooling before the bus. That ordering is why earlyoom stays disabled
     (operator's decision, 2026-10-06).
 
     Until the ``exe-init`` swap of 2026-10-06, sessions inherited -1000 and this
