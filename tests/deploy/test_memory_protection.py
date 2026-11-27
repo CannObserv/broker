@@ -372,9 +372,10 @@ def _live_scores() -> list[tuple[str, int, int]]:
 def exe_dev_root_faults(live: list[tuple[str, int, int]]) -> list[str]:
     """What is wrong with exe.dev's roots in a ``_live_scores`` table: a required
     root not running, or any root off -1000. Empty when nothing is."""
+    names = set(EXE_DEV_ROOTS) | EXE_DEV_REQUIRED
     roots: dict[str, set[int]] = {}
     for comm, adj, _ in live:
-        if comm in EXE_DEV_ROOTS:
+        if comm in names:
             roots.setdefault(comm, set()).add(adj)
     faults = [f"{name} not running" for name in sorted(EXE_DEV_REQUIRED - roots.keys())]
     faults += [
@@ -407,6 +408,16 @@ def test_exe_dev_roots_need_exe_init_and_take_sshd_if_present(
     ``14fd603``) and ``exe-init`` alone, serving SSH itself (``c65bfed``, broker#154).
     A missing ``exe-init``, or a root of either name off -1000, is a fault."""
     assert exe_dev_root_faults(live) == faults
+
+
+def test_a_required_root_is_always_one_the_check_reads(monkeypatch) -> None:
+    """A name added to the required set is read off the table too, so it never
+    reports "not running" while it runs at -1000."""
+    monkeypatch.setattr(
+        f"{__name__}.EXE_DEV_REQUIRED", EXE_DEV_REQUIRED | {"exe-guestd"}, raising=True
+    )
+    live = [("exe-init", EXEMPT, 0), ("exe-guestd", EXEMPT, 0), _SESSION]
+    assert exe_dev_root_faults(live) == []
 
 
 def test_live_sessions_are_killed_before_the_bus() -> None:
