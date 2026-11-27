@@ -71,12 +71,18 @@ AVOID_PENALTY = 300
 EXEMPT = -1000
 
 #: ``comm`` of exe.dev's own processes, the ones every session inherits its
-#: ``oom_score_adj`` from.
+#: ``oom_score_adj`` from. Each that runs must sit at -1000.
 EXE_DEV_ROOTS = ["exe-init", "sshd"]
 
+#: The roots that must run. ``sshd`` ran beside ``exe-init`` through ``14fd603``
+#: (archiver#285); since ``c65bfed`` (installed 2026-11-18, running since the
+#: 2026-11-26 boot) ``exe-init`` serves SSH itself, on vsock ``:22``, and runs no
+#: ``sshd`` (broker#154). So ``sshd`` is checked only where it still runs.
+EXE_DEV_REQUIRED = {"exe-init"}
+
 #: ``comm`` of what carries the bus, and of how anyone reaches the node at all.
-#: ``--avoid`` ranks these last, not exempt - except ``sshd`` and ``exe-init``,
-#: exe.dev's own, which sit at -1000 and are exempt whatever the regex says.
+#: ``--avoid`` ranks these last, not exempt - except ``exe-init`` and, where it
+#: still runs, ``sshd``: exe.dev's own, at -1000 and exempt whatever the regex says.
 PROTECTED = [
     "valkey-server",
     "tailscaled",
@@ -227,7 +233,8 @@ def test_system_slice_protects_at_least_what_its_children_claim() -> None:
 def test_the_bus_is_out_of_earlyooms_reach_but_not_exempt(tracked: Path) -> None:
     """``--avoid`` alone left the bus inside earlyoom's reach.
 
-    exe.dev's ``exe-init`` and ``sshd`` run at ``oom_score_adj`` -1000. Until
+    exe.dev's ``exe-init`` runs at ``oom_score_adj`` -1000, as ``sshd`` did beside
+    it until ``c65bfed`` (broker#154). Until
     broker#71 every session process inherited it - VSCode Server, its
     ``MainThread`` children, ``claude``, SocratiCode's ``npx`` - and the kernel and
     earlyoom 1.7 alike skipped them outright (broker#58). Since 2026-10-06 they
@@ -362,10 +369,50 @@ def _live_scores() -> list[tuple[str, int, int]]:
     return found
 
 
+def exe_dev_root_faults(live: list[tuple[str, int, int]]) -> list[str]:
+    """What is wrong with exe.dev's roots in a ``_live_scores`` table: a required
+    root not running, or any root off -1000. Empty when nothing is."""
+    roots: dict[str, set[int]] = {}
+    for comm, adj, _ in live:
+        if comm in EXE_DEV_ROOTS:
+            roots.setdefault(comm, set()).add(adj)
+    faults = [f"{name} not running" for name in sorted(EXE_DEV_REQUIRED - roots.keys())]
+    faults += [
+        f"{name} left -1000: {sorted(adjs)}"
+        for name, adjs in sorted(roots.items())
+        if adjs != {EXEMPT}
+    ]
+    return faults
+
+
+#: A session's shell, as ``_live_scores`` reads it: what the root checks ignore.
+_SESSION = ("bash", 0, 667)
+
+
+@pytest.mark.parametrize(
+    ("live", "faults"),
+    [
+        ([("exe-init", EXEMPT, 0), _SESSION], []),
+        ([("exe-init", EXEMPT, 0), ("sshd", EXEMPT, 0), _SESSION], []),
+        ([("sshd", EXEMPT, 0), _SESSION], ["exe-init not running"]),
+        ([("exe-init", 0, 667), _SESSION], ["exe-init left -1000: [0]"]),
+        ([("exe-init", EXEMPT, 0), ("sshd", 0, 667)], ["sshd left -1000: [0]"]),
+    ],
+    ids=["c65bfed", "pre-c65bfed", "no-exe-init", "exe-init-killable", "sshd-killable"],
+)
+def test_exe_dev_roots_need_exe_init_and_take_sshd_if_present(
+    live: list[tuple[str, int, int]], faults: list[str]
+) -> None:
+    """Both layouts exe.dev has shipped pass: ``sshd`` beside ``exe-init`` (archiver#285,
+    ``14fd603``) and ``exe-init`` alone, serving SSH itself (``c65bfed``, broker#154).
+    A missing ``exe-init``, or a root of either name off -1000, is a fault."""
+    assert exe_dev_root_faults(live) == faults
+
+
 def test_live_sessions_are_killed_before_the_bus() -> None:
     """The host class this node's memory story rests on since broker#71: exe.dev's
-    own ``exe-init`` and ``sshd`` stay at -1000, and the sessions they start no
-    longer inherit it. Every ``--prefer`` match - VSCode Server, ``claude``,
+    own ``exe-init`` stays at -1000 (with ``sshd``, where it still runs), and the
+    sessions it starts no longer inherit it. Every ``--prefer`` match - VSCode Server, ``claude``,
     SocratiCode's ``npx`` - reads 0, so the kernel's own OOM killer reaches dev
     tooling before the bus. That ordering is why earlyoom stays disabled
     (operator's decision, 2026-10-06).
@@ -377,12 +424,8 @@ def test_live_sessions_are_killed_before_the_bus() -> None:
     """
     read_installed(INSTALLED[EARLYOOM])
     live = _live_scores()
-    roots: dict[str, set[int]] = {}
-    for comm, adj, _ in live:
-        if comm in EXE_DEV_ROOTS:
-            roots.setdefault(comm, set()).add(adj)
-    assert roots.keys() == set(EXE_DEV_ROOTS), f"exe.dev's roots not found: {roots}"
-    assert all(adjs == {EXEMPT} for adjs in roots.values()), f"a root left -1000: {roots}"
+    faults = exe_dev_root_faults(live)
+    assert not faults, f"exe.dev's roots: {faults}"
     prefer = flag(earlyoom_args(), "--prefer")
     tooling = [(comm, adj, score) for comm, adj, score in live if re.search(prefer, comm)]
     assert tooling, "no --prefer match running: this test runs from a session, so one must"

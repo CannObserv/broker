@@ -551,8 +551,10 @@ things about this node shaped them:
   `/sys/fs/cgroup/system.slice/valkey-server.service/memory.low`, not
   `systemctl show`, which reports the configured value either way.
 - **exe.dev's own processes sit at `oom_score_adj` -1000; its sessions no
-  longer do.** `exe-init` and `sshd` run there, and nothing can kill them. Until
-  broker#71 every session process inherited it too - VSCode Server, `claude`,
+  longer do.** `exe-init` runs there, and nothing can kill it. It has served SSH
+  itself since `c65bfed` (running since 2026-11-26); `sshd` ran beside it at
+  -1000 until then, and is checked only where it still runs (broker#154).
+  Until broker#71 every session process inherited it too - VSCode Server, `claude`,
   SocratiCode's `npx` - an `exe-init` bug exe.dev confirmed, so neither killer
   could take the processes that exhausted the node in broker#17. The fixed
   `exe-init` (`14fd603`) went in on 2026-10-06, and sessions read 0. The kernel's
