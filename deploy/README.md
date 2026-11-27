@@ -554,9 +554,9 @@ things about this node shaped them:
   longer do.** `exe-init` runs there, and nothing can kill it. It has served SSH
   itself since `c65bfed` (running since 2026-11-26); `sshd` ran beside it at
   -1000 until then, and is checked only where it still runs (broker#154).
-  Until broker#71 every session process inherited it too - VSCode Server, `claude`,
-  SocratiCode's `npx` - an `exe-init` bug exe.dev confirmed, so neither killer
-  could take the processes that exhausted the node in broker#17. The fixed
+  Until broker#71 every session process inherited it too - VSCode Server,
+  `claude`, SocratiCode's `npx` - an `exe-init` bug exe.dev confirmed, so neither
+  killer could take the processes that exhausted the node in broker#17. The fixed
   `exe-init` (`14fd603`) went in on 2026-10-06, and sessions read 0. The kernel's
   order measured that day: the user `systemd` and `(sd-pam)` (adj 100, ~734, a
   few MiB), then `claude` (690), `MainThread` (683), `node`, `npm exec`, then the
