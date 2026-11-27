@@ -431,7 +431,9 @@ def test_live_sessions_are_killed_before_the_bus() -> None:
     Until the ``exe-init`` swap of 2026-10-06, sessions inherited -1000 and this
     test's predecessor, ``test_live_prefer_reaches_nothing``, pinned the opposite.
     A failure here means sessions are exempt again - an ``exe-init`` rolled back or
-    replaced by a build with the bug - and broker#71 is undone.
+    replaced by a build with the bug - and broker#71 is undone. Or exe.dev's roots
+    changed: ``exe-init`` gone or off -1000, or an ``sshd`` off it. The message
+    names which (broker#154).
     """
     read_installed(INSTALLED[EARLYOOM])
     live = _live_scores()
